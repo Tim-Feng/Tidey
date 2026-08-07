@@ -304,34 +304,53 @@ final class TideyRuntimeTmuxSessionCreationPostcondition: NSObject {
 @objc(TideyRuntimeTmuxPaneListCodec)
 @objcMembers
 final class TideyRuntimeTmuxPaneListCodec: NSObject {
-    let formatString = "#{pane_index}\t#{pane_id}"
+    private static let delimiter = "|"
+
+    let formatString =
+        "#{pane_index}\(TideyRuntimeTmuxPaneListCodec.delimiter)" +
+        "#{pane_id}"
 
     @objc(paneIDsByIndexFromOutput:)
     func paneIDsByIndex(
         from output: String
     ) -> [NSNumber: String]? {
+        var lines = output.components(separatedBy: "\n")
+        if lines.last == "" {
+            lines.removeLast()
+        }
+        guard !lines.isEmpty, !lines.contains("") else {
+            return nil
+        }
+
         var result = [NSNumber: String]()
-        for line in output.components(separatedBy: .newlines) {
-            if line.isEmpty {
-                continue
-            }
-            let fields = line.components(separatedBy: "\t")
+        var paneIDs = Set<String>()
+        for line in lines {
+            let fields = line.components(separatedBy: Self.delimiter)
             guard fields.count == 2 else {
                 return nil
             }
             let indexString = fields[0]
             let paneID = fields[1]
-            guard let index = Int(indexString),
+            let paneNumber = paneID.dropFirst()
+            guard Self.isASCIIUnsignedDecimal(indexString),
+                  let index = Int(indexString),
                   index >= 0,
                   String(index) == indexString,
                   paneID.hasPrefix("%"),
-                  paneID.count >= 2,
-                  result[NSNumber(value: index)] == nil else {
+                  Self.isASCIIUnsignedDecimal(String(paneNumber)),
+                  result[NSNumber(value: index)] == nil,
+                  paneIDs.insert(paneID).inserted else {
                 return nil
             }
             result[NSNumber(value: index)] = paneID
         }
-        return result.isEmpty ? nil : result
+        return result
+    }
+
+    private static func isASCIIUnsignedDecimal(_ value: String) -> Bool {
+        !value.isEmpty && value.unicodeScalars.allSatisfy {
+            (48...57).contains($0.value)
+        }
     }
 }
 

@@ -693,8 +693,130 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             codec.paneIDsByIndex(from: output),
             [NSNumber(value: 0): "%5"]
         )
-        XCTAssertNil(codec.paneIDsByIndex(from: "0\t%5\n0\t%6\n"))
-        XCTAssertNil(codec.paneIDsByIndex(from: "00\t%5\n"))
+        XCTAssertNil(codec.paneIDsByIndex(from: "0|%5\n0|%6\n"))
+        XCTAssertNil(codec.paneIDsByIndex(from: "00|%5\n"))
+    }
+
+    func testTmuxPaneListCodecUsesProcessSafePrintableDelimiter() {
+        let codec = TideyRuntimeTmuxPaneListCodec()
+
+        XCTAssertEqual(codec.formatString, "#{pane_index}|#{pane_id}")
+        XCTAssertEqual(
+            codec.paneIDsByIndex(from: "0|%5\n"),
+            [NSNumber(value: 0): "%5"]
+        )
+        XCTAssertEqual(
+            codec.paneIDsByIndex(from: "0|%5\n1|%6"),
+            [NSNumber(value: 0): "%5", NSNumber(value: 1): "%6"]
+        )
+        for malformedOutput in [
+            "",
+            "0_%5\n",
+            "0\t%5\n",
+            "0|%5|extra\n",
+            "00|%5\n",
+            "0|%5\n0|%6\n",
+            "0|%5\n1|%5\n",
+            "0|pane-5\n",
+            "0|%five\n",
+            "\n0|%5\n",
+            "0|%5\n\n",
+        ] {
+            XCTAssertNil(
+                codec.paneIDsByIndex(from: malformedOutput),
+                "Unexpectedly accepted: \(malformedOutput.debugDescription)"
+            )
+        }
+    }
+
+    func testTmuxPaneListCodecSurvivesFoundationProcessRoundTrip() throws {
+        let tmuxExecutable = [
+            "/opt/homebrew/bin/tmux",
+            "/usr/local/bin/tmux",
+            "/usr/bin/tmux",
+        ].first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+        guard let tmuxExecutable else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixtureDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tidey-pane-codec-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: fixtureDirectory,
+            withIntermediateDirectories: true
+        )
+        let socketIdentifier = UUID().uuidString.prefix(8)
+        let socketPath = "/tmp/tidey-p-" +
+            "\(ProcessInfo.processInfo.processIdentifier)-" +
+            "\(socketIdentifier).sock"
+        let sessionName = "pane-codec-\(UUID().uuidString)"
+        let environment = [
+            "HOME": fixtureDirectory.path,
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "SHELL": "/bin/sh",
+        ]
+        let runner = TideyRuntimeTaskRunner()
+        defer {
+            _ = runner.run(
+                executable: tmuxExecutable,
+                arguments: [
+                    "-f", "/dev/null",
+                    "-S", socketPath,
+                    "kill-server",
+                ],
+                environment: environment,
+                timeout: 2
+            )
+            try? FileManager.default.removeItem(atPath: socketPath)
+            try? FileManager.default.removeItem(at: fixtureDirectory)
+        }
+
+        let creation = runner.run(
+            executable: tmuxExecutable,
+            arguments: [
+                "-f", "/dev/null",
+                "-S", socketPath,
+                "new-session", "-d",
+                "-s", sessionName,
+            ],
+            environment: environment,
+            timeout: 3
+        )
+        guard creation.succeeded else {
+            XCTFail("tmux fixture creation failed: \(creation.standardError)")
+            return
+        }
+
+        let codec = TideyRuntimeTmuxPaneListCodec()
+        let listing = runner.run(
+            executable: tmuxExecutable,
+            arguments: [
+                "-f", "/dev/null",
+                "-S", socketPath,
+                "list-panes",
+                "-t", "=\(sessionName):0",
+                "-F", codec.formatString,
+            ],
+            environment: environment,
+            timeout: 3
+        )
+
+        guard listing.succeeded else {
+            XCTFail("tmux pane listing failed: \(listing.standardError)")
+            return
+        }
+        let paneIDsByIndex = codec.paneIDsByIndex(
+            from: listing.standardOutput
+        )
+        XCTAssertNotNil(
+            paneIDsByIndex?[NSNumber(value: 0)],
+            "Unexpected stdout: \(listing.standardOutput.debugDescription)"
+        )
     }
 
     func testTmuxSessionCreationRequiresExactLiveSessionPostcondition() {
