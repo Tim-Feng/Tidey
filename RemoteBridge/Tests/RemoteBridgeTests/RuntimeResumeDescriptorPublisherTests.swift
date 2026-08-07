@@ -413,6 +413,80 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testCarrierDescriptorPreservesCanonicalTmuxSessionNameVerbatim()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                Self.route(
+                    panelID: "panel-storage",
+                    windowID: "@1",
+                    windowIndex: 0,
+                    paneID: "%7",
+                    cwd: "/tmp/storage",
+                    carrierPanelID: "carrier-storage",
+                    sessionID: "$1",
+                    sessionName: "s"
+                ),
+            ]
+        )
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: [
+                    "$1": RuntimeResumeTmuxSessionState(
+                        sessionID: "$1",
+                        sessionName: " storage ",
+                        windows: [
+                            RuntimeResumeTmuxWindowState(
+                                windowID: "@1",
+                                index: 0,
+                                name: "storage",
+                                isActive: true,
+                                panes: [
+                                    RuntimeResumeTmuxPaneState(
+                                        paneID: "%7",
+                                        index: 0,
+                                        workingDirectory:
+                                            "/tmp/storage",
+                                        isActive: true
+                                    ),
+                                ]
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+        let record = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "panel-storage",
+                tmuxPaneID: "%7"
+            ),
+            vendor: .codex,
+            durableResumeID: "storage-thread",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "codex",
+                arguments: ["resume", "storage-thread"],
+                workingDirectory: "/tmp/storage"
+            )
+        )
+
+        let plan = try XCTUnwrap(
+            planner.publicationPlans(for: [record]).first
+        )
+
+        XCTAssertEqual(
+            plan.target,
+            RuntimeResumeTmuxTarget(
+                socketName: "tidey-agents",
+                tmuxSession: " storage "
+            )
+        )
+    }
+
     func testColdRebootInventoryProducesCompleteDurableDescriptorSet()
         throws {
         let registry = OrdinaryTmuxPanelRegistry()

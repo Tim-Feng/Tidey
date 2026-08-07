@@ -445,9 +445,11 @@ final class OrdinaryTmuxCLIAdapter {
                 maxSplits: 9,
                 omittingEmptySubsequences: false
             ).map(String.init)
+            let parsedSessionName =
+                fields.count > 1 ? fields[1] : ""
             guard fields.count == 10,
                   fields[0] == route.sessionID,
-                  let parsedSessionName = fields[1].nilIfEmpty,
+                  parsedSessionName.isEmpty == false,
                   let windowID = fields[2].nilIfEmpty,
                   let windowIndex = Int(fields[3]),
                   let paneID = fields[6].nilIfEmpty,

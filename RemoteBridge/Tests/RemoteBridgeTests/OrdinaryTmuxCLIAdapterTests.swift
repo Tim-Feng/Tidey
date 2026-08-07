@@ -163,7 +163,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                     sessionID: "$7"
                 )
             ):
-                "$7\tstorage\t@15\t0\tmain\t1\t%7\t0\t1\t/tmp/storage\n",
+                "$7\t storage \t@15\t0\tmain\t1\t%7\t0\t1\t/tmp/storage\n",
         ])
         let adapter = makeAdapter(state: state)
         let route = OrdinaryTmuxPanelRoute(
@@ -185,7 +185,7 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         )
 
         XCTAssertEqual(snapshot.sessionID, "$7")
-        XCTAssertEqual(snapshot.sessionName, "storage")
+        XCTAssertEqual(snapshot.sessionName, " storage ")
         XCTAssertEqual(snapshot.windows.count, 1)
         XCTAssertEqual(snapshot.windows.first?.windowID, "@15")
         XCTAssertEqual(snapshot.windows.first?.panes.first?.paneID, "%7")
