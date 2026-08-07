@@ -597,25 +597,17 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    func persistedRuntimeResumeAgentRecords()
+    func currentRuntimeResumeAgentRecords()
         -> [RuntimeResumeAgentRegistryRecord] {
         queue.sync {
-            let sourceRecords = AgentVendorRegistry.all.flatMap {
-                vendor in
-                loadRecordEntries(
-                    at: paths.agentSessionsDirectory(
-                        for: vendor.registryDirectoryName
-                    ),
-                    vendor: vendor.id
-                ).map(\.record)
-            }
+            let sourceRecords = Array(activeRecords.values)
             var candidatesByBinding =
                 [RuntimeResumeDescriptorBinding:
                     [RuntimeResumeAgentRegistryRecord]]()
             for record in sourceRecords {
                 guard let candidate =
                         runtimeResumeAgentRecord(
-                            fromPersistedRecord: record
+                            fromCurrentRecord: record
                         ) else {
                     continue
                 }
@@ -1316,7 +1308,7 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func runtimeResumeAgentRecord(
-        fromPersistedRecord record: AgentSessionRegistryRecord
+        fromCurrentRecord record: AgentSessionRegistryRecord
     ) -> RuntimeResumeAgentRegistryRecord? {
         guard record.workspaceID.isEmpty == false,
               let panelID = record.panelID,

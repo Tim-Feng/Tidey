@@ -206,7 +206,7 @@ final class AgentSessionRegistryRuntimeResumeReader:
 
     func readAgentRegistryRecords()
         throws -> [RuntimeResumeAgentRegistryRecord] {
-        monitor.persistedRuntimeResumeAgentRecords()
+        monitor.currentRuntimeResumeAgentRecords()
     }
 }
 

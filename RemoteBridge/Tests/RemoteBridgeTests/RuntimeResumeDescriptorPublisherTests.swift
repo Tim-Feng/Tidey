@@ -32,7 +32,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         XCTAssertNil(content.target)
     }
 
-    func testRegistryReaderUsesOnlyPersistedExactBinding()
+    func testRegistryReaderPublishesLiveResolvedBindingWithoutRewritingRegistry()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
@@ -51,9 +51,9 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         let record = AgentSessionRegistryRecord(
             version: 1,
             vendor: "codex",
-            workspaceID: "workspace-1",
+            workspaceID: "workspace-stale",
             sessionID: "wrapper-session",
-            panelID: "panel-1",
+            panelID: "panel-stale",
             pid: getpid(),
             cwd: "/tmp/project",
             createdAt: "2026-07-30T00:00:00Z",
@@ -67,6 +67,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             .agentSessionsDirectory(for: "codex")
             .appendingPathComponent("wrapper-session.json")
         try JSONEncoder().encode(record).write(to: recordURL)
+        let persistedBytes = try Data(contentsOf: recordURL)
         let monitor = AgentSessionRegistryMonitor(
             paths: paths,
             hub: AgentEventHub()
@@ -76,7 +77,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             panels: [
                 AgentPanelProcessSnapshot(
                     workspaceID: "workspace-1",
-                    panelID: "panel-1",
+                    panelID: "panel-current",
                     effectiveShellPID: nil,
                     tmuxPaneID: "%7",
                     tmuxSocketPath:
@@ -88,6 +89,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             AgentSessionRegistryRuntimeResumeReader(
                 monitor: monitor
             )
+        monitor.scanRegistryForTesting()
 
         XCTAssertEqual(
             try reader.readAgentRegistryRecords(),
@@ -95,7 +97,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
                 RuntimeResumeAgentRegistryRecord(
                     binding: RuntimeResumeDescriptorBinding(
                         workspaceID: "workspace-1",
-                        panelID: "panel-1",
+                        panelID: "panel-current",
                         tmuxPaneID: "%7"
                     ),
                     vendor: .codex,
@@ -108,22 +110,9 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
                 )
             ]
         )
-
-        monitor.replaceLivePanels(
-            workspaceID: "workspace-1",
-            panels: [
-                AgentPanelProcessSnapshot(
-                    workspaceID: "workspace-1",
-                    panelID: "ancestry-corrected-panel",
-                    effectiveShellPID: getpid(),
-                    tmuxPaneID: "%7",
-                    tmuxSocketPath:
-                        "/tmp/tmux-501/tidey-agents"
-                )
-            ]
-        )
-        XCTAssertTrue(
-            try reader.readAgentRegistryRecords().isEmpty
+        XCTAssertEqual(
+            try Data(contentsOf: recordURL),
+            persistedBytes
         )
     }
 
@@ -181,6 +170,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         let reader = AgentSessionRegistryRuntimeResumeReader(
             monitor: monitor
         )
+        monitor.scanRegistryForTesting()
         let records = try reader.readAgentRegistryRecords()
         let directRecord = try XCTUnwrap(records.first)
         XCTAssertEqual(records.count, 1)
