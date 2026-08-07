@@ -254,10 +254,226 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
     func publicationPlans(
         for records: [RuntimeResumeAgentRegistryRecord]
     ) throws -> [RuntimeResumeTmuxCarrierPublicationPlan] {
-        _ = registry
-        _ = sessionReader
-        _ = records
-        return []
+        struct Candidate {
+            let route: OrdinaryTmuxPanelRoute
+            let record: RuntimeResumeAgentRegistryRecord
+        }
+
+        var candidatesByCarrier = [String: [Candidate]]()
+        var rejectedCarrierKeys = Set<String>()
+        for record in records {
+            guard let paneID = record.binding.tmuxPaneID,
+                  let route = registry.route(
+                    forPanelID: record.binding.panelID
+                  ) else {
+                continue
+            }
+            let key = Self.carrierKey(for: route)
+            guard route.workspaceID == record.binding.workspaceID,
+                  route.activePaneID == paneID else {
+                rejectedCarrierKeys.insert(key)
+                continue
+            }
+            candidatesByCarrier[key, default: []].append(
+                Candidate(route: route, record: record)
+            )
+        }
+
+        var plans = [RuntimeResumeTmuxCarrierPublicationPlan]()
+        for key in candidatesByCarrier.keys.sorted() {
+            guard rejectedCarrierKeys.contains(key) == false,
+                  let candidates = candidatesByCarrier[key],
+                  let anchor = candidates.first else {
+                continue
+            }
+            let routes = registry.routes(
+                workspaceID: anchor.route.workspaceID,
+                carrierPanelID: anchor.route.carrierPanelID,
+                socket: anchor.route.socket,
+                sessionID: anchor.route.sessionID
+            )
+            guard routes.isEmpty == false,
+                  routes.allSatisfy({
+                      Self.carrierKey(for: $0) == key
+                  }),
+                  let state = try sessionReader
+                    .runtimeResumeSessionState(for: anchor.route),
+                  state.sessionID == anchor.route.sessionID,
+                  let sessionName = Self.nonEmpty(
+                    state.sessionName
+                  ),
+                  let plan = Self.makePlan(
+                    candidates: candidates.map {
+                        ($0.route, $0.record)
+                    },
+                    state: state,
+                    sessionName: sessionName
+                  ) else {
+                continue
+            }
+            plans.append(plan)
+        }
+        return plans.sorted {
+            let lhs = [
+                $0.binding.workspaceID,
+                $0.binding.panelID,
+                $0.binding.tmuxPaneID ?? "",
+            ]
+            let rhs = [
+                $1.binding.workspaceID,
+                $1.binding.panelID,
+                $1.binding.tmuxPaneID ?? "",
+            ]
+            return lhs.lexicographicallyPrecedes(rhs)
+        }
+    }
+
+    private static func makePlan(
+        candidates: [(
+            route: OrdinaryTmuxPanelRoute,
+            record: RuntimeResumeAgentRegistryRecord
+        )],
+        state: RuntimeResumeTmuxSessionState,
+        sessionName: String
+    ) -> RuntimeResumeTmuxCarrierPublicationPlan? {
+        guard let anchor = candidates.first else {
+            return nil
+        }
+        var recordsByPaneID =
+            [String: RuntimeResumeAgentRegistryRecord]()
+        var durableKeys = Set<String>()
+        for candidate in candidates {
+            guard let paneID = candidate.record.binding.tmuxPaneID,
+                  recordsByPaneID[paneID] == nil else {
+                return nil
+            }
+            let durableKey = [
+                candidate.record.vendor.rawValue,
+                candidate.record.durableResumeID,
+            ].joined(separator: "|")
+            guard durableKeys.insert(durableKey).inserted else {
+                return nil
+            }
+            recordsByPaneID[paneID] = candidate.record
+        }
+
+        let sortedWindows = state.windows.sorted {
+            if $0.index != $1.index {
+                return $0.index < $1.index
+            }
+            return $0.windowID < $1.windowID
+        }
+        let activeWindows = sortedWindows.filter(\.isActive)
+        guard sortedWindows.isEmpty == false,
+              Set(sortedWindows.map(\.windowID)).count ==
+                sortedWindows.count,
+              Set(sortedWindows.map(\.index)).count ==
+                sortedWindows.count,
+              activeWindows.count == 1,
+              let activeWindow = activeWindows.first else {
+            return nil
+        }
+
+        var seenPaneIDs = Set<String>()
+        var topologyWindows = [RuntimeResumeTmuxWindow]()
+        var activePaneID: String?
+        var activePaneIndex: Int?
+        for window in sortedWindows {
+            let sortedPanes = window.panes.sorted {
+                if $0.index != $1.index {
+                    return $0.index < $1.index
+                }
+                return $0.paneID < $1.paneID
+            }
+            guard sortedPanes.isEmpty == false,
+                  Set(sortedPanes.map(\.index)).count ==
+                    sortedPanes.count,
+                  sortedPanes.allSatisfy({
+                      seenPaneIDs.insert($0.paneID).inserted
+                  }) else {
+                return nil
+            }
+            if window.windowID == activeWindow.windowID {
+                let activePanes = sortedPanes.filter(\.isActive)
+                guard activePanes.count == 1,
+                      let pane = activePanes.first else {
+                    return nil
+                }
+                activePaneID = pane.paneID
+                activePaneIndex = pane.index
+            }
+            topologyWindows.append(
+                RuntimeResumeTmuxWindow(
+                    index: window.index,
+                    name: window.name,
+                    panes: sortedPanes.map {
+                        RuntimeResumeTmuxPane(
+                            index: $0.index,
+                            workingDirectory:
+                                $0.workingDirectory,
+                            launch:
+                                recordsByPaneID[$0.paneID]?.launch
+                        )
+                    }
+                )
+            )
+        }
+        guard recordsByPaneID.keys.allSatisfy(
+                seenPaneIDs.contains
+              ),
+              let activePaneID,
+              let activePaneIndex else {
+            return nil
+        }
+
+        let target: RuntimeResumeTmuxTarget
+        switch anchor.route.socket {
+        case .defaultSocket:
+            target = RuntimeResumeTmuxTarget(
+                defaultSocketAndTmuxSession: sessionName
+            )
+        case .path(let path):
+            target = RuntimeResumeTmuxTarget(
+                socketPath: path,
+                tmuxSession: sessionName
+            )
+        case .name(let name):
+            target = RuntimeResumeTmuxTarget(
+                socketName: name,
+                tmuxSession: sessionName
+            )
+        }
+        return RuntimeResumeTmuxCarrierPublicationPlan(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: anchor.route.workspaceID,
+                panelID: anchor.route.carrierPanelID,
+                tmuxPaneID: activePaneID
+            ),
+            target: target,
+            topology: RuntimeResumeTmuxTopology(
+                windows: topologyWindows,
+                activeWindowIndex: activeWindow.index,
+                activePaneIndex: activePaneIndex
+            )
+        )
+    }
+
+    private static func carrierKey(
+        for route: OrdinaryTmuxPanelRoute
+    ) -> String {
+        [
+            route.workspaceID,
+            route.carrierPanelID,
+            route.socket.cacheKey,
+            route.sessionID,
+        ].joined(separator: "|")
+    }
+
+    private static func nonEmpty(_ value: String) -> String? {
+        let trimmed = value.trimmingCharacters(
+            in: .whitespacesAndNewlines
+        )
+        return trimmed.isEmpty ? nil : trimmed
     }
 }
 
@@ -599,23 +815,49 @@ final class RuntimeResumeDescriptorPublisher:
         let records =
             try registryReader.readAgentRegistryRecords()
                 .sorted(by: Self.recordPrecedes(_:_:))
-        for record in records {
+        for record in records where record.binding.tmuxPaneID == nil {
             let agent = RuntimeResumeAgentSpecification(
                 vendor: record.vendor,
                 durableResumeID: record.durableResumeID,
                 launch: record.launch
             )
-            let content: RuntimeResumeDescriptorContent
-            if record.binding.tmuxPaneID == nil {
-                content = RuntimeResumeDescriptorContent(
-                    descriptorVersion: 1,
-                    kind: .agent,
-                    restorePolicy: .directResume,
-                    target: nil,
-                    topology: nil,
-                    agent: agent
+            let content = RuntimeResumeDescriptorContent(
+                descriptorVersion: 1,
+                kind: .agent,
+                restorePolicy: .directResume,
+                target: nil,
+                topology: nil,
+                agent: agent
+            )
+            try publish(content: content, binding: record.binding)
+        }
+
+        let tmuxRecords = records.filter {
+            $0.binding.tmuxPaneID != nil
+        }
+        if let carrierPlanner {
+            for plan in try carrierPlanner.publicationPlans(
+                for: tmuxRecords
+            ) {
+                try publish(
+                    content: RuntimeResumeDescriptorContent(
+                        descriptorVersion: 2,
+                        kind: .agent,
+                        restorePolicy: .create,
+                        target: plan.target,
+                        topology: plan.topology,
+                        agent: nil
+                    ),
+                    binding: plan.binding
                 )
-            } else {
+            }
+        } else {
+            for record in tmuxRecords {
+                let agent = RuntimeResumeAgentSpecification(
+                    vendor: record.vendor,
+                    durableResumeID: record.durableResumeID,
+                    launch: record.launch
+                )
                 guard let snapshot =
                         try topologyReader.topologySnapshot(
                             for: record.binding
@@ -623,34 +865,43 @@ final class RuntimeResumeDescriptorPublisher:
                       snapshot.binding == record.binding else {
                     continue
                 }
-                content = RuntimeResumeDescriptorContent(
-                    descriptorVersion: 1,
-                    kind: .agent,
-                    restorePolicy: .create,
-                    target: snapshot.target,
-                    topology: snapshot.topology,
-                    agent: agent
+                try publish(
+                    content: RuntimeResumeDescriptorContent(
+                        descriptorVersion: 1,
+                        kind: .agent,
+                        restorePolicy: .create,
+                        target: snapshot.target,
+                        topology: snapshot.topology,
+                        agent: agent
+                    ),
+                    binding: record.binding
                 )
             }
-            let canonicalContent =
-                try canonicalizer.canonicalize(content)
-            guard reducer.decision(
-                binding: record.binding,
-                canonicalContent: canonicalContent
-            ) == .publish else {
-                continue
-            }
-            try socketSender.send(
-                RuntimeResumeDescriptorSocketUpdate(
-                    binding: record.binding,
-                    content: canonicalContent.content
-                )
-            )
-            reducer.acknowledgePublished(
-                binding: record.binding,
-                canonicalContent: canonicalContent
-            )
         }
+    }
+
+    private func publish(
+        content: RuntimeResumeDescriptorContent,
+        binding: RuntimeResumeDescriptorBinding
+    ) throws {
+        let canonicalContent =
+            try canonicalizer.canonicalize(content)
+        guard reducer.decision(
+            binding: binding,
+            canonicalContent: canonicalContent
+        ) == .publish else {
+            return
+        }
+        try socketSender.send(
+            RuntimeResumeDescriptorSocketUpdate(
+                binding: binding,
+                content: canonicalContent.content
+            )
+        )
+        reducer.acknowledgePublished(
+            binding: binding,
+            canonicalContent: canonicalContent
+        )
     }
 
     private static func recordPrecedes(

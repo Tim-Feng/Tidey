@@ -47,6 +47,10 @@ let runtimeResumeDescriptorPublisher = RuntimeResumeDescriptorPublisher(
     topologyReader: OrdinaryTmuxRuntimeResumeTopologyReader(
         registry: ordinaryTmuxProjectionContext.registry
     ),
+    carrierPlanner: OrdinaryTmuxRuntimeResumeCarrierPlanner(
+        registry: ordinaryTmuxProjectionContext.registry,
+        sessionReader: OrdinaryTmuxCLIAdapter()
+    ),
     socketSender: TideyRuntimeResumeDescriptorSocketSender(
         requestSender: socketClient
     )

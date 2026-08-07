@@ -402,6 +402,108 @@ final class OrdinaryTmuxCLIAdapter {
         }
     }
 
+    func runtimeResumeSessionState(
+        for route: OrdinaryTmuxPanelRoute
+    ) throws -> RuntimeResumeTmuxSessionState? {
+        let output = try commandRunner(
+            route.socket,
+            [
+                "list-panes",
+                "-s",
+                "-t",
+                route.sessionID,
+                "-F",
+                [
+                    "#{session_id}",
+                    "#{session_name}",
+                    "#{window_id}",
+                    "#{window_index}",
+                    "#{window_name}",
+                    "#{window_active}",
+                    "#{pane_id}",
+                    "#{pane_index}",
+                    "#{pane_active}",
+                    "#{pane_current_path}",
+                ].joined(separator: Self.fieldSeparator),
+            ],
+            nil
+        )
+        let lines = output.split(
+            whereSeparator: \.isNewline
+        )
+        var sessionName: String?
+        var windowsByID =
+            [String: (
+                index: Int,
+                name: String?,
+                isActive: Bool,
+                panes: [RuntimeResumeTmuxPaneState]
+            )]()
+        for line in lines {
+            let fields = line.split(
+                separator: "\t",
+                maxSplits: 9,
+                omittingEmptySubsequences: false
+            ).map(String.init)
+            guard fields.count == 10,
+                  fields[0] == route.sessionID,
+                  let parsedSessionName = fields[1].nilIfEmpty,
+                  let windowID = fields[2].nilIfEmpty,
+                  let windowIndex = Int(fields[3]),
+                  let paneID = fields[6].nilIfEmpty,
+                  let paneIndex = Int(fields[7]) else {
+                return nil
+            }
+            if let sessionName,
+               sessionName != parsedSessionName {
+                return nil
+            }
+            sessionName = parsedSessionName
+            let windowName = fields[4].nilIfEmpty
+            let windowIsActive = fields[5] == "1"
+            let pane = RuntimeResumeTmuxPaneState(
+                paneID: paneID,
+                index: paneIndex,
+                workingDirectory: fields[9].nilIfEmpty,
+                isActive: fields[8] == "1"
+            )
+            if var window = windowsByID[windowID] {
+                guard window.index == windowIndex,
+                      window.name == windowName,
+                      window.isActive == windowIsActive else {
+                    return nil
+                }
+                window.panes.append(pane)
+                windowsByID[windowID] = window
+            } else {
+                windowsByID[windowID] = (
+                    index: windowIndex,
+                    name: windowName,
+                    isActive: windowIsActive,
+                    panes: [pane]
+                )
+            }
+        }
+        guard let sessionName,
+              windowsByID.isEmpty == false else {
+            return nil
+        }
+        return RuntimeResumeTmuxSessionState(
+            sessionID: route.sessionID,
+            sessionName: sessionName,
+            windows: windowsByID.map {
+                windowID, value in
+                RuntimeResumeTmuxWindowState(
+                    windowID: windowID,
+                    index: value.index,
+                    name: value.name,
+                    isActive: value.isActive,
+                    panes: value.panes
+                )
+            }
+        )
+    }
+
     private func reconcileWindowSizePolicyBestEffort(
         client: OrdinaryTmuxClient,
         clients: [OrdinaryTmuxClient],
@@ -1487,6 +1589,7 @@ final class OrdinaryTmuxCLIAdapter {
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxWindowProjecting {}
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxRouteRefreshing {}
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxTerminalStreaming {}
+extension OrdinaryTmuxCLIAdapter: RuntimeResumeTmuxSessionReading {}
 
 private extension String {
     var nilIfEmpty: String? {

@@ -418,6 +418,210 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testPublishesOneCarrierDescriptorWithEveryPaneAgentLaunch()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                Self.route(
+                    panelID: "panel-claude",
+                    windowID: "@1",
+                    windowIndex: 1,
+                    paneID: "%7",
+                    cwd: "/tmp/claude",
+                    carrierPanelID: "carrier-1",
+                    sessionID: "$12",
+                    sessionName: "genesis-extraction"
+                ),
+                Self.route(
+                    panelID: "panel-codex",
+                    windowID: "@2",
+                    windowIndex: 2,
+                    paneID: "%8",
+                    cwd: "/tmp/codex",
+                    carrierPanelID: "carrier-1",
+                    sessionID: "$12",
+                    sessionName: "genesis-extraction"
+                ),
+            ]
+        )
+        let claudeLaunch = RuntimeResumeLaunchSpecification(
+            executable: "claude",
+            arguments: ["--resume", "claude-session"],
+            workingDirectory: "/tmp/claude"
+        )
+        let codexLaunch = RuntimeResumeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "codex-thread"],
+            workingDirectory: "/tmp/codex"
+        )
+        let records = [
+            RuntimeResumeAgentRegistryRecord(
+                binding: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-claude",
+                    tmuxPaneID: "%7"
+                ),
+                vendor: .claude,
+                durableResumeID: "claude-session",
+                launch: claudeLaunch
+            ),
+            RuntimeResumeAgentRegistryRecord(
+                binding: RuntimeResumeDescriptorBinding(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-codex",
+                    tmuxPaneID: "%8"
+                ),
+                vendor: .codex,
+                durableResumeID: "codex-thread",
+                launch: codexLaunch
+            ),
+        ]
+        let state = RuntimeResumeTmuxSessionState(
+            sessionID: "$12",
+            sessionName: "genesis-extraction",
+            windows: [
+                RuntimeResumeTmuxWindowState(
+                    windowID: "@1",
+                    index: 1,
+                    name: "claude",
+                    isActive: false,
+                    panes: [
+                        RuntimeResumeTmuxPaneState(
+                            paneID: "%7",
+                            index: 0,
+                            workingDirectory: "/tmp/claude",
+                            isActive: true
+                        ),
+                        RuntimeResumeTmuxPaneState(
+                            paneID: "%70",
+                            index: 1,
+                            workingDirectory: "/tmp/shell",
+                            isActive: false
+                        ),
+                    ]
+                ),
+                RuntimeResumeTmuxWindowState(
+                    windowID: "@2",
+                    index: 2,
+                    name: "codex",
+                    isActive: false,
+                    panes: [
+                        RuntimeResumeTmuxPaneState(
+                            paneID: "%8",
+                            index: 0,
+                            workingDirectory: "/tmp/codex",
+                            isActive: true
+                        ),
+                    ]
+                ),
+                RuntimeResumeTmuxWindowState(
+                    windowID: "@3",
+                    index: 3,
+                    name: "monitor",
+                    isActive: true,
+                    panes: [
+                        RuntimeResumeTmuxPaneState(
+                            paneID: "%9",
+                            index: 0,
+                            workingDirectory: "/tmp/monitor",
+                            isActive: true
+                        ),
+                    ]
+                ),
+            ]
+        )
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: ["$12": state]
+            )
+        )
+        let socketSender = RecordingRuntimeResumeSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: records
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            carrierPlanner: planner,
+            socketSender: socketSender
+        )
+
+        try publisher.publishCurrentDescriptors()
+
+        let update = try XCTUnwrap(socketSender.updates.first)
+        XCTAssertEqual(socketSender.updates.count, 1)
+        XCTAssertEqual(
+            update.binding,
+            RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "carrier-1",
+                tmuxPaneID: "%9"
+            )
+        )
+        XCTAssertEqual(update.content.descriptorVersion, 2)
+        XCTAssertEqual(update.content.kind, .agent)
+        XCTAssertEqual(update.content.restorePolicy, .create)
+        XCTAssertEqual(
+            update.content.target,
+            RuntimeResumeTmuxTarget(
+                socketName: "tidey-agents",
+                tmuxSession: "genesis-extraction"
+            )
+        )
+        XCTAssertNil(update.content.agent)
+        XCTAssertEqual(
+            update.content.topology,
+            RuntimeResumeTmuxTopology(
+                windows: [
+                    RuntimeResumeTmuxWindow(
+                        index: 1,
+                        name: "claude",
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/claude",
+                                launch: claudeLaunch
+                            ),
+                            RuntimeResumeTmuxPane(
+                                index: 1,
+                                workingDirectory: "/tmp/shell",
+                                launch: nil
+                            ),
+                        ]
+                    ),
+                    RuntimeResumeTmuxWindow(
+                        index: 2,
+                        name: "codex",
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/codex",
+                                launch: codexLaunch
+                            ),
+                        ]
+                    ),
+                    RuntimeResumeTmuxWindow(
+                        index: 3,
+                        name: "monitor",
+                        panes: [
+                            RuntimeResumeTmuxPane(
+                                index: 0,
+                                workingDirectory: "/tmp/monitor",
+                                launch: nil
+                            ),
+                        ]
+                    ),
+                ],
+                activeWindowIndex: 3,
+                activePaneIndex: 0
+            )
+        )
+    }
+
     func testSocketSenderUsesNestedDescriptorPayloadWithoutBridgeAuthority()
         throws {
         let requestSender = RecordingTideyRequestSender()
@@ -712,15 +916,18 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         windowID: String,
         windowIndex: Int,
         paneID: String,
-        cwd: String?
+        cwd: String?,
+        carrierPanelID: String = "carrier-1",
+        sessionID: String = "$1",
+        sessionName: String = "work"
     ) -> OrdinaryTmuxPanelRoute {
         OrdinaryTmuxPanelRoute(
             workspaceID: "workspace-1",
             panelID: panelID,
-            carrierPanelID: "carrier-1",
+            carrierPanelID: carrierPanelID,
             socket: .name("tidey-agents"),
-            sessionID: "$1",
-            sessionName: "work",
+            sessionID: sessionID,
+            sessionName: sessionName,
             windowID: windowID,
             windowIndex: windowIndex,
             activePaneID: paneID,
