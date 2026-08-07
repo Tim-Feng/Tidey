@@ -260,19 +260,26 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
         }
 
         var candidatesByCarrier = [String: [Candidate]]()
-        var rejectedCarrierKeys = Set<String>()
+        var durableResumeKeys = Set<String>()
         for record in records {
             guard let paneID = record.binding.tmuxPaneID,
                   let route = registry.route(
                     forPanelID: record.binding.panelID
                   ) else {
-                continue
+                return []
             }
             let key = Self.carrierKey(for: route)
             guard route.workspaceID == record.binding.workspaceID,
                   route.activePaneID == paneID else {
-                rejectedCarrierKeys.insert(key)
-                continue
+                return []
+            }
+            let durableResumeKey = [
+                record.vendor.rawValue,
+                record.durableResumeID,
+            ].joined(separator: "|")
+            guard durableResumeKeys
+                .insert(durableResumeKey).inserted else {
+                return []
             }
             candidatesByCarrier[key, default: []].append(
                 Candidate(route: route, record: record)
@@ -281,10 +288,9 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
 
         var plans = [RuntimeResumeTmuxCarrierPublicationPlan]()
         for key in candidatesByCarrier.keys.sorted() {
-            guard rejectedCarrierKeys.contains(key) == false,
-                  let candidates = candidatesByCarrier[key],
+            guard let candidates = candidatesByCarrier[key],
                   let anchor = candidates.first else {
-                continue
+                return []
             }
             let routes = registry.routes(
                 workspaceID: anchor.route.workspaceID,
@@ -309,7 +315,7 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
                     state: state,
                     sessionName: sessionName
                   ) else {
-                continue
+                return []
             }
             plans.append(plan)
         }

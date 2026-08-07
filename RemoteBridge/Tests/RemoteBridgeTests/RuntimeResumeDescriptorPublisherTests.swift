@@ -307,12 +307,25 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
                 statesBySessionID: statesBySessionID
             )
         )
+        let socketSender = RecordingRuntimeResumeSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: records
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            carrierPlanner: planner,
+            socketSender: socketSender
+        )
 
-        let plans = try planner.publicationPlans(for: records)
-        let launches = plans.flatMap {
-            $0.topology.windows.flatMap {
+        try publisher.publishCurrentDescriptors()
+
+        let updates = socketSender.updates
+        let launches = updates.flatMap {
+            $0.content.topology?.windows.flatMap {
                 $0.panes.compactMap(\.launch)
-            }
+            } ?? []
         }
         let durableIDs = launches.map { $0.arguments[1] }
         let occurrences = Dictionary(
@@ -325,8 +338,15 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
 
         XCTAssertEqual(routesByWorkspace.keys.count, 7)
-        XCTAssertEqual(plans.count, 11)
-        XCTAssertEqual(Set(plans.map(\.binding.panelID)).count, 11)
+        XCTAssertEqual(updates.count, 11)
+        XCTAssertEqual(Set(updates.map(\.binding.panelID)).count, 11)
+        XCTAssertEqual(Set(updates.map(\.binding.workspaceID)).count, 7)
+        XCTAssertTrue(updates.allSatisfy {
+            $0.content.descriptorVersion == 2 &&
+                $0.content.kind == .agent &&
+                $0.content.restorePolicy == .create &&
+                $0.content.agent == nil
+        })
         XCTAssertEqual(launches.filter {
             $0.executable == "claude"
         }.count, 16)
@@ -337,31 +357,172 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         XCTAssertTrue(occurrences.values.allSatisfy { $0 == 1 })
 
         let genesis = try XCTUnwrap(
-            plans.first {
-                $0.target.tmuxSession == "genesis-extraction"
+            updates.first {
+                $0.content.target?.tmuxSession ==
+                    "genesis-extraction"
             }
         )
-        XCTAssertEqual(genesis.topology.windows.count, 12)
+        let genesisTopology = try XCTUnwrap(
+            genesis.content.topology
+        )
+        XCTAssertEqual(genesisTopology.windows.count, 12)
         XCTAssertEqual(
-            genesis.topology.windows.flatMap(\.panes)
+            genesisTopology.windows.flatMap(\.panes)
                 .compactMap(\.launch).count,
             11
         )
         XCTAssertEqual(
-            genesis.topology.windows.flatMap(\.panes)
+            genesisTopology.windows.flatMap(\.panes)
                 .filter { $0.launch == nil }.count,
             1
         )
-        XCTAssertEqual(genesis.topology.activeWindowIndex, 11)
-        XCTAssertEqual(genesis.topology.activePaneIndex, 0)
+        XCTAssertEqual(genesisTopology.activeWindowIndex, 11)
+        XCTAssertEqual(genesisTopology.activePaneIndex, 0)
         XCTAssertEqual(genesis.binding.tmuxPaneID, "%g11")
 
         let storage = try XCTUnwrap(
-            plans.first { $0.target.tmuxSession == "storage" }
+            updates.first {
+                $0.content.target?.tmuxSession == "storage"
+            }
         )
-        XCTAssertEqual(storage.target.tmuxSession, "storage")
+        XCTAssertEqual(
+            storage.content.target?.tmuxSession,
+            "storage"
+        )
         XCTAssertFalse(
-            plans.contains { $0.target.tmuxSession == "s" }
+            updates.contains {
+                $0.content.target?.tmuxSession == "s"
+            }
+        )
+    }
+
+    func testCarrierPlannerRejectsIncompleteOrDuplicateInventory()
+        throws {
+        let routeA = Self.route(
+            panelID: "panel-a",
+            windowID: "@1",
+            windowIndex: 0,
+            paneID: "%1",
+            cwd: "/tmp/a",
+            carrierPanelID: "carrier-a",
+            sessionID: "$1",
+            sessionName: "a"
+        )
+        let routeB = Self.route(
+            panelID: "panel-b",
+            windowID: "@2",
+            windowIndex: 0,
+            paneID: "%2",
+            cwd: "/tmp/b",
+            carrierPanelID: "carrier-b",
+            sessionID: "$2",
+            sessionName: "b"
+        )
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [routeA, routeB]
+        )
+        let states = [
+            "$1": RuntimeResumeTmuxSessionState(
+                sessionID: "$1",
+                sessionName: "a",
+                windows: [
+                    RuntimeResumeTmuxWindowState(
+                        windowID: "@1",
+                        index: 0,
+                        name: "a",
+                        isActive: true,
+                        panes: [
+                            RuntimeResumeTmuxPaneState(
+                                paneID: "%1",
+                                index: 0,
+                                workingDirectory: "/tmp/a",
+                                isActive: true
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+            "$2": RuntimeResumeTmuxSessionState(
+                sessionID: "$2",
+                sessionName: "b",
+                windows: [
+                    RuntimeResumeTmuxWindowState(
+                        windowID: "@2",
+                        index: 0,
+                        name: "b",
+                        isActive: true,
+                        panes: [
+                            RuntimeResumeTmuxPaneState(
+                                paneID: "%2",
+                                index: 0,
+                                workingDirectory: "/tmp/b",
+                                isActive: true
+                            ),
+                        ]
+                    ),
+                ]
+            ),
+        ]
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: states
+            )
+        )
+        let recordA = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "panel-a",
+                tmuxPaneID: "%1"
+            ),
+            vendor: .claude,
+            durableResumeID: "duplicate-id",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "claude",
+                arguments: ["--resume", "duplicate-id"],
+                workingDirectory: "/tmp/a"
+            )
+        )
+        let recordB = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "panel-b",
+                tmuxPaneID: "%2"
+            ),
+            vendor: .claude,
+            durableResumeID: "duplicate-id",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "claude",
+                arguments: ["--resume", "duplicate-id"],
+                workingDirectory: "/tmp/b"
+            )
+        )
+        let missingRouteRecord = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "panel-missing",
+                tmuxPaneID: "%3"
+            ),
+            vendor: .codex,
+            durableResumeID: "missing-thread",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "codex",
+                arguments: ["resume", "missing-thread"],
+                workingDirectory: "/tmp/missing"
+            )
+        )
+
+        XCTAssertTrue(
+            try planner.publicationPlans(
+                for: [recordA, recordB]
+            ).isEmpty
+        )
+        XCTAssertTrue(
+            try planner.publicationPlans(
+                for: [recordA, missingRouteRecord]
+            ).isEmpty
         )
     }
 
