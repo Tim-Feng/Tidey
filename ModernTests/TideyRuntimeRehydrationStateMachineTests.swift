@@ -597,6 +597,10 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNil(result.launchErrorDescription)
     }
 
+    func testRuntimeRestorationLoggerSeamCompiles() {
+        XCTAssertNotNil(TideyRuntimeRestorationLogger() as Any)
+    }
+
     func testTmuxSessionCreationPostconditionSeamCompiles() {
         XCTAssertNotNil(
             TideyRuntimeTmuxSessionCreationPostcondition() as Any

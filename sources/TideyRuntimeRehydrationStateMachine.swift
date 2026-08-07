@@ -1,5 +1,6 @@
 import Foundation
 import Darwin
+import OSLog
 
 @objc(TideyRuntimeTaskEnvironmentBuilder)
 @objcMembers
@@ -73,6 +74,108 @@ final class TideyRuntimeTaskExecutionResult: NSObject {
         self.standardOutput = standardOutput
         self.standardError = standardError
         self.launchErrorDescription = launchErrorDescription
+    }
+}
+
+@objc(TideyRuntimeRestorationLogger)
+@objcMembers
+final class TideyRuntimeRestorationLogger: NSObject {
+    private let logger = Logger(
+        subsystem: "com.tidey.app",
+        category: "runtime-restoration"
+    )
+
+    func logTask(
+        descriptor: TideyRuntimeResumeDescriptor,
+        phase: String,
+        executable: String,
+        result: TideyRuntimeTaskExecutionResult?,
+        outcome: String
+    ) {
+        emit(
+            descriptor: descriptor,
+            phase: phase,
+            panelID: "",
+            executable: executable,
+            result: result,
+            outcome: outcome
+        )
+    }
+
+    func logOutcome(
+        descriptor: TideyRuntimeResumeDescriptor?,
+        phase: String,
+        panelID: String,
+        outcome: String
+    ) {
+        emit(
+            descriptor: descriptor,
+            phase: phase,
+            panelID: panelID,
+            executable: "",
+            result: nil,
+            outcome: outcome
+        )
+    }
+
+    private func emit(
+        descriptor: TideyRuntimeResumeDescriptor?,
+        phase: String,
+        panelID: String,
+        executable: String,
+        result: TideyRuntimeTaskExecutionResult?,
+        outcome: String
+    ) {
+        let descriptorVersion = descriptor?.descriptorVersion ?? 0
+        let revision = descriptor?.revision ?? 0
+        let endpointKind: String
+        let socketSelector: String
+        switch descriptor?.target?.socketEndpointKind {
+        case .path:
+            endpointKind = "path"
+            socketSelector = descriptor?.target?.socketPath ?? ""
+        case .name:
+            endpointKind = "name"
+            socketSelector = descriptor?.target?.socketName ?? ""
+        case .defaultSocket:
+            endpointKind = "default"
+            socketSelector = "default"
+        case nil:
+            endpointKind = "none"
+            socketSelector = ""
+        }
+        let migrationApplied =
+            descriptor?.legacyDefaultSocketMigrationApplied ?? false
+        let launched = result?.launched ?? false
+        let timedOut = result?.timedOut ?? false
+        let terminationReason = result?.terminationReason ?? 0
+        let terminationStatus = result?.terminationStatus ?? 0
+        let session = descriptor?.target?.tmuxSession ?? ""
+        let standardError = boundedSingleLine(
+            result?.standardError ?? ""
+        )
+        let launchError = boundedSingleLine(
+            result?.launchErrorDescription ?? ""
+        )
+        let level: OSLogType = outcome == "succeeded"
+            ? .default
+            : .error
+
+        logger.log(
+            level: level,
+            "phase=\(phase, privacy: .public) descriptor_version=\(descriptorVersion, privacy: .public) revision=\(revision, privacy: .public) endpoint_kind=\(endpointKind, privacy: .public) migration_applied=\(migrationApplied, privacy: .public) launched=\(launched, privacy: .public) timed_out=\(timedOut, privacy: .public) termination_reason=\(terminationReason, privacy: .public) status=\(terminationStatus, privacy: .public) outcome=\(outcome, privacy: .public) panel=\(panelID, privacy: .private(mask: .hash)) session=\(session, privacy: .private(mask: .hash)) socket=\(socketSelector, privacy: .private(mask: .hash)) executable=\(executable, privacy: .private(mask: .hash)) stderr=\(standardError, privacy: .private(mask: .hash)) launch_error=\(launchError, privacy: .private(mask: .hash))"
+        )
+    }
+
+    private func boundedSingleLine(_ value: String) -> String {
+        let singleLine = value.components(
+            separatedBy: .newlines
+        ).joined(separator: " ")
+        let maximumLength = 4_096
+        guard singleLine.count > maximumLength else {
+            return singleLine
+        }
+        return String(singleLine.prefix(maximumLength)) + "…"
     }
 }
 
