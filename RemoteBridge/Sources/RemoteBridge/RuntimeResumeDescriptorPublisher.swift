@@ -706,6 +706,9 @@ struct RuntimeResumeDescriptorPublicationReducer: Sendable {
     private var publishedFingerprintByBinding =
         [RuntimeResumeDescriptorBinding:
             RuntimeResumeDescriptorContentFingerprint]()
+    private var absentDescriptorBySlot =
+        [RuntimeResumeDescriptorSlot:
+            RuntimeResumeStoredDescriptor]()
 
     func decision(
         binding: RuntimeResumeDescriptorBinding,
@@ -726,6 +729,36 @@ struct RuntimeResumeDescriptorPublicationReducer: Sendable {
     ) {
         publishedFingerprintByBinding[binding] =
             canonicalContent.fingerprint
+    }
+
+    mutating func revocationCandidates(
+        observing absentDescriptors:
+            [RuntimeResumeStoredDescriptor]
+    ) -> [RuntimeResumeStoredDescriptor] {
+        let absentSlots = Set(absentDescriptors.map(\.slot))
+        absentDescriptorBySlot =
+            absentDescriptorBySlot.filter {
+                absentSlots.contains($0.key)
+            }
+        var candidates = [RuntimeResumeStoredDescriptor]()
+        for descriptor in absentDescriptors {
+            if absentDescriptorBySlot[descriptor.slot] == descriptor {
+                candidates.append(descriptor)
+            } else {
+                absentDescriptorBySlot[descriptor.slot] = descriptor
+            }
+        }
+        return candidates
+    }
+
+    mutating func acknowledgeRevoked(
+        _ slot: RuntimeResumeDescriptorSlot
+    ) {
+        absentDescriptorBySlot[slot] = nil
+    }
+
+    mutating func resetRevocationObservations() {
+        absentDescriptorBySlot.removeAll()
     }
 }
 
@@ -1019,6 +1052,16 @@ final class RuntimeResumeDescriptorPublisher:
 
     private func publishCurrentDescriptorsOnQueue()
         throws {
+        do {
+            try publishCompleteInventoryOnQueue()
+        } catch {
+            reducer.resetRevocationObservations()
+            throw error
+        }
+    }
+
+    private func publishCompleteInventoryOnQueue()
+        throws {
         let snapshot =
             try registryReader.readAgentRegistrySnapshot()
         guard snapshot.isComplete else {
@@ -1073,9 +1116,12 @@ final class RuntimeResumeDescriptorPublisher:
         }
         let storedDescriptors =
             try inventoryReconciler.currentAgentDescriptors()
-        for stored in storedDescriptors
+        let absentDescriptors = storedDescriptors
             .filter({ desiredSlots.contains($0.slot) == false })
-            .sorted(by: Self.storedDescriptorPrecedes(_:_:)) {
+            .sorted(by: Self.storedDescriptorPrecedes(_:_:))
+        for stored in reducer.revocationCandidates(
+            observing: absentDescriptors
+        ) {
             _ = try inventoryReconciler.remove(
                 RuntimeResumeDescriptorSocketRemoval(
                     slot: stored.slot,
@@ -1083,6 +1129,7 @@ final class RuntimeResumeDescriptorPublisher:
                     expectedContent: stored.content
                 )
             )
+            reducer.acknowledgeRevoked(stored.slot)
         }
     }
 

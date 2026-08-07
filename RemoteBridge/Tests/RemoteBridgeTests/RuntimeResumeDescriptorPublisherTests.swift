@@ -4,6 +4,46 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testRevocationRequiresTwoConsecutiveCompleteAbsenceObservations()
+        throws {
+        let staleSlot = RuntimeResumeDescriptorSlot(
+            workspaceID: "workspace-stale",
+            panelID: "panel-stale"
+        )
+        let socket = ReconcilingRuntimeResumeSocket(
+            descriptors: [
+                RuntimeResumeStoredDescriptor(
+                    slot: staleSlot,
+                    revision: 8,
+                    content: Self.directContent(
+                        durableResumeID: "thread-stale"
+                    )
+                ),
+            ]
+        )
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(
+                records: []
+            ),
+            topologyReader: StubRuntimeResumeTopologyReader(
+                snapshotsByBinding: [:]
+            ),
+            inventoryReconciler: socket,
+            socketSender: socket
+        )
+
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(socket.events, ["list"])
+        XCTAssertEqual(socket.descriptors.map(\.slot), [staleSlot])
+
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(
+            socket.events,
+            ["list", "list", "remove:panel-stale"]
+        )
+        XCTAssertTrue(socket.descriptors.isEmpty)
+    }
+
     func testMalformedRegistryFileMakesSnapshotIncomplete()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory
@@ -82,10 +122,31 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
 
         try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(
+            socket.events,
+            [
+                "update:panel-new",
+                "list",
+            ]
+        )
+        XCTAssertEqual(
+            Set(socket.descriptors.map(\.slot)),
+            Set([
+                oldSlot,
+                RuntimeResumeDescriptorSlot(
+                    workspaceID: "workspace-new",
+                    panelID: "panel-new"
+                ),
+            ])
+        )
+
+        try publisher.publishCurrentDescriptors()
 
         XCTAssertEqual(
             socket.events,
             [
+                "update:panel-new",
+                "list",
                 "update:panel-new",
                 "list",
                 "remove:panel-old",
@@ -113,8 +174,14 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
         try restartedPublisher.publishCurrentDescriptors()
         XCTAssertEqual(
-            Array(socket.events.suffix(2)),
-            ["list", "remove:panel-new"]
+            Array(socket.events.suffix(1)),
+            ["list"]
+        )
+        XCTAssertFalse(socket.descriptors.isEmpty)
+        try restartedPublisher.publishCurrentDescriptors()
+        XCTAssertEqual(
+            Array(socket.events.suffix(3)),
+            ["list", "list", "remove:panel-new"]
         )
         XCTAssertTrue(socket.descriptors.isEmpty)
 
