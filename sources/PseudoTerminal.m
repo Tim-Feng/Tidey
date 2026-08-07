@@ -408,19 +408,6 @@ TideyRuntimeRunTaskWithEnvironment(
                          timeout:timeout];
 }
 
-static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTask(
-    NSString *executable,
-    NSArray<NSString *> *arguments,
-    NSTimeInterval timeout
-) {
-    return TideyRuntimeRunTaskWithEnvironment(
-        executable,
-        arguments,
-        TideyRuntimeTaskEnvironment(),
-        timeout
-    );
-}
-
 static TideyRuntimeTaskExecutionResult *
 TideyRuntimeRunTmuxTaskWithEnvironment(
     TideyRuntimeResumeDescriptor *descriptor,
@@ -481,20 +468,36 @@ static TideyRuntimeTaskExecutionResult *TideyRuntimeRunTmuxTask(
     );
 }
 
-static BOOL TideyRuntimeRunTmux(
+static BOOL TideyRuntimeRunTmuxWithEnvironment(
     TideyRuntimeResumeDescriptor *descriptor,
     NSArray<NSString *> *commandArguments,
+    NSDictionary<NSString *, NSString *> *environment,
     NSString **output
 ) {
-    TideyRuntimeTaskExecutionResult *result = TideyRuntimeRunTmuxTask(
+    TideyRuntimeTaskExecutionResult *result =
+        TideyRuntimeRunTmuxTaskWithEnvironment(
         descriptor,
         commandArguments,
+        environment,
         TideyRuntimeMutationTimeout
     );
     if (output) {
         *output = result.standardOutput;
     }
     return result.succeeded;
+}
+
+static BOOL TideyRuntimeRunTmux(
+    TideyRuntimeResumeDescriptor *descriptor,
+    NSArray<NSString *> *commandArguments,
+    NSString **output
+) {
+    return TideyRuntimeRunTmuxWithEnvironment(
+        descriptor,
+        commandArguments,
+        TideyRuntimeTaskEnvironment(),
+        output
+    );
 }
 
 static NSArray<NSString *> *TideyRuntimeNonemptyLines(NSString *output) {
@@ -773,35 +776,49 @@ static NSString *TideyRuntimeAgentExecutablePath(
             initialDirectory,
         ]];
     }
-    NSString *createdWindowIndexOutput = nil;
-    if (!TideyRuntimeRunTmux(
+    NSDictionary<NSString *, NSString *> *environment =
+        TideyRuntimeTaskEnvironment();
+    TideyRuntimeTaskExecutionResult *creationResult =
+        TideyRuntimeRunTmuxTaskWithEnvironment(
             descriptor,
             newSessionArguments,
-            &createdWindowIndexOutput
-        )) {
-        return NO;
-    }
-    BOOL createdSession = YES;
-    BOOL succeeded = YES;
+            environment,
+            TideyRuntimeMutationTimeout
+        );
+    TideyRuntimeTmuxSessionCreationPostcondition *postcondition =
+        [[[TideyRuntimeTmuxSessionCreationPostcondition alloc] init]
+            autorelease];
+    NSNumber *createdWindowIndex =
+        [postcondition parsedWindowIndexWithOutput:
+            creationResult.standardOutput ?: @""];
+    NSArray<NSString *> *sessionProbeArguments =
+        [postcondition exactProbeArgumentsWithSessionName:
+            descriptor.target.tmuxSession];
+    TideyRuntimeTaskExecutionResult *sessionProbeResult =
+        sessionProbeArguments
+            ? TideyRuntimeRunTmuxTaskWithEnvironment(
+                  descriptor,
+                  sessionProbeArguments,
+                  environment,
+                  TideyRuntimeProbeTimeout
+              )
+            : nil;
+    BOOL createdSession = sessionProbeResult.succeeded;
+    BOOL succeeded =
+        [postcondition isSatisfiedWithCreationResult:creationResult
+                                   parsedWindowIndex:createdWindowIndex
+                                  sessionProbeResult:sessionProbeResult];
 
-    if (firstWindow) {
-        NSString *trimmedIndex =
-            [createdWindowIndexOutput stringByTrimmingCharactersInSet:
-             [NSCharacterSet whitespaceAndNewlineCharacterSet]];
-        NSInteger createdWindowIndex = trimmedIndex.integerValue;
-        if (trimmedIndex.length == 0 ||
-            ![[NSString stringWithFormat:@"%ld",
-               (long)createdWindowIndex] isEqualToString:trimmedIndex]) {
-            succeeded = NO;
-        } else if (createdWindowIndex != firstWindow.index) {
-            succeeded = TideyRuntimeRunTmux(
+    if (firstWindow && succeeded) {
+        if (createdWindowIndex.integerValue != firstWindow.index) {
+            succeeded = TideyRuntimeRunTmuxWithEnvironment(
                 descriptor,
                 @[
                     @"move-window",
                     @"-s",
                     TideyRuntimeWindowTarget(
                         descriptor.target.tmuxSession,
-                        createdWindowIndex
+                        createdWindowIndex.integerValue
                     ),
                     @"-t",
                     TideyRuntimeWindowTarget(
@@ -809,6 +826,7 @@ static NSString *TideyRuntimeAgentExecutablePath(
                         firstWindow.index
                     ),
                 ],
+                environment,
                 nil
             );
         }
@@ -844,9 +862,10 @@ static NSString *TideyRuntimeAgentExecutablePath(
                     pane.workingDirectory,
                 ]];
             }
-            succeeded = TideyRuntimeRunTmux(
+            succeeded = TideyRuntimeRunTmuxWithEnvironment(
                 descriptor,
                 newWindowArguments,
+                environment,
                 nil
             );
         }
@@ -870,16 +889,17 @@ static NSString *TideyRuntimeAgentExecutablePath(
                     pane.workingDirectory,
                 ]];
             }
-            succeeded = TideyRuntimeRunTmux(
+            succeeded = TideyRuntimeRunTmuxWithEnvironment(
                 descriptor,
                 splitArguments,
+                environment,
                 nil
             );
         }
     }
 
     if (!succeeded && createdSession) {
-        TideyRuntimeRunTmux(
+        TideyRuntimeRunTmuxWithEnvironment(
             descriptor,
             @[
                 @"kill-session",
@@ -888,6 +908,7 @@ static NSString *TideyRuntimeAgentExecutablePath(
                     descriptor.target.tmuxSession
                 ),
             ],
+            environment,
             nil
         );
     }

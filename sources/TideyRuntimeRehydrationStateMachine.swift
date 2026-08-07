@@ -106,9 +106,9 @@ final class TideyRuntimeTmuxSessionCreationPostcondition: NSObject {
         parsedWindowIndex: NSNumber?,
         sessionProbeResult: TideyRuntimeTaskExecutionResult?
     ) -> Bool {
-        _ = sessionProbeResult
         return creationResult?.succeeded == true &&
-            parsedWindowIndex != nil
+            parsedWindowIndex != nil &&
+            sessionProbeResult?.succeeded == true
     }
 }
 

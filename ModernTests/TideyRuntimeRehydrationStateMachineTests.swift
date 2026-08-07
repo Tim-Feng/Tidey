@@ -603,6 +603,59 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
     }
 
+    func testTmuxSessionCreationRequiresExactLiveSessionPostcondition() {
+        let postcondition = TideyRuntimeTmuxSessionCreationPostcondition()
+        let creationResult = TideyRuntimeTaskExecutionResult(
+            launched: true,
+            timedOut: false,
+            terminationReason: Process.TerminationReason.exit.rawValue,
+            terminationStatus: 0,
+            standardOutput: "0\n",
+            standardError: "error creating server socket",
+            launchErrorDescription: nil
+        )
+        let missingSessionProbe = TideyRuntimeTaskExecutionResult(
+            launched: true,
+            timedOut: false,
+            terminationReason: Process.TerminationReason.exit.rawValue,
+            terminationStatus: 1,
+            standardOutput: "",
+            standardError: "no server running",
+            launchErrorDescription: nil
+        )
+        let liveSessionProbe = TideyRuntimeTaskExecutionResult(
+            launched: true,
+            timedOut: false,
+            terminationReason: Process.TerminationReason.exit.rawValue,
+            terminationStatus: 0,
+            standardOutput: "",
+            standardError: "",
+            launchErrorDescription: nil
+        )
+        let parsedWindowIndex = postcondition.parsedWindowIndex(
+            output: creationResult.standardOutput
+        )
+
+        XCTAssertEqual(
+            postcondition.exactProbeArguments(sessionName: "carrier-a"),
+            ["has-session", "-t", "=carrier-a"]
+        )
+        XCTAssertFalse(
+            postcondition.isSatisfied(
+                creationResult: creationResult,
+                parsedWindowIndex: parsedWindowIndex,
+                sessionProbeResult: missingSessionProbe
+            )
+        )
+        XCTAssertTrue(
+            postcondition.isSatisfied(
+                creationResult: creationResult,
+                parsedWindowIndex: parsedWindowIndex,
+                sessionProbeResult: liveSessionProbe
+            )
+        )
+    }
+
     func testRuntimeTaskRunnerTimeoutDoesNotBlockNextCommand() {
         let runner = TideyRuntimeTaskRunner()
         let start = Date()
@@ -943,6 +996,37 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         )
 
         XCTAssertEqual(targetProbe.probeCount, 3)
+    }
+
+    func testFailedTopologyCreationDoesNotPreventNextCarrierRestore() {
+        let targetProbe = TideyRuntimeTargetProbeSpy()
+        let topologyCreator = TideyRuntimeTopologyCreatorSpy()
+        let panelLauncher = TideyRuntimePanelLauncherSpy()
+        let stateMachine = TideyRuntimeRehydrationStateMachine(
+            reducer: TideyRuntimeCreateFlowReducer(),
+            targetProbe: targetProbe,
+            topologyCreator: topologyCreator,
+            panelLauncher: panelLauncher
+        )
+
+        stateMachine.handle(
+            panelID: "panel-a",
+            descriptor: descriptor(revision: 1),
+            nativeReattachOutcome: .failed
+        )
+        targetProbe.complete(.missing)
+        topologyCreator.complete(false)
+
+        stateMachine.handle(
+            panelID: "panel-b",
+            descriptor: descriptor(revision: 1),
+            nativeReattachOutcome: .failed
+        )
+        targetProbe.complete(.missing)
+        topologyCreator.complete(true)
+
+        XCTAssertEqual(topologyCreator.createCount, 2)
+        XCTAssertEqual(panelLauncher.resumeCount, 1)
     }
 
     func testPolicyMatrixPreservesGenericAttachOnlyAndRecreatesAgentCreateTargets() {
