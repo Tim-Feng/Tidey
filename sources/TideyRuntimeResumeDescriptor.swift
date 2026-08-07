@@ -159,6 +159,7 @@ final class TideyRuntimeAgentResumeSpecification: NSObject {
 @objcMembers
 final class TideyRuntimeResumeDescriptor: NSObject {
     static let currentDescriptorVersion = 1
+    static let topologyOwnedAgentDescriptorVersion = 2
 
     let descriptorVersion: Int
     let revision: Int64
@@ -167,6 +168,12 @@ final class TideyRuntimeResumeDescriptor: NSObject {
     let target: TideyRuntimeResumeTarget?
     let topology: TideyRuntimeTmuxTopology?
     let agent: TideyRuntimeAgentResumeSpecification?
+
+    var topologyOwnsAgentLaunches: Bool {
+        descriptorVersion == Self.topologyOwnedAgentDescriptorVersion &&
+            kind == .agent &&
+            restorePolicy == .create
+    }
 
     init(
         descriptorVersion: Int,

@@ -79,6 +79,56 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertNil(descriptor.target)
     }
 
+    func testMultiAgentCreateDescriptorSeamsCompile() {
+        let claudeLaunch = TideyRuntimeLaunchSpecification(
+            executable: "claude",
+            arguments: ["--resume", "claude-session"],
+            workingDirectory: "/tmp/claude"
+        )
+        let codexLaunch = TideyRuntimeLaunchSpecification(
+            executable: "codex",
+            arguments: ["resume", "codex-thread"],
+            workingDirectory: "/tmp/codex"
+        )
+        let descriptor = TideyRuntimeResumeDescriptor(
+            descriptorVersion:
+                TideyRuntimeResumeDescriptor
+                    .topologyOwnedAgentDescriptorVersion,
+            revision: 1,
+            kind: .agent,
+            restorePolicy: .create,
+            target: TideyRuntimeResumeTarget(
+                defaultSocketAndTmuxSession: "work"
+            ),
+            topology: TideyRuntimeTmuxTopology(
+                windows: [
+                    TideyRuntimeTmuxWindowTopology(
+                        index: 0,
+                        name: "agents",
+                        panes: [
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 0,
+                                workingDirectory: "/tmp/claude",
+                                launch: claudeLaunch
+                            ),
+                            TideyRuntimeTmuxPaneTopology(
+                                index: 1,
+                                workingDirectory: "/tmp/codex",
+                                launch: codexLaunch
+                            ),
+                        ]
+                    ),
+                ],
+                activeWindowIndex: 0,
+                activePaneIndex: 0
+            ),
+            agent: nil
+        )
+
+        XCTAssertTrue(descriptor.topologyOwnsAgentLaunches)
+        XCTAssertNil(descriptor.agent)
+    }
+
     func testSocketUpdateAcceptsDirectAgentWithoutTmuxCarrier()
         throws {
         let gate = TideyRuntimeResumeDescriptorUpdateGate()
