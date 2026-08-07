@@ -211,6 +211,11 @@ private struct LoadedAgentSessionRegistryRecord {
     let url: URL
 }
 
+private struct LoadedAgentSessionRegistryScan {
+    let records: [LoadedAgentSessionRegistryRecord]
+    let isComplete: Bool
+}
+
 struct AgentProcessDescriptor: Equatable, Sendable {
     let pid: Int32
     let command: String
@@ -392,6 +397,7 @@ final class AgentSessionRegistryMonitor {
     private var lastLoggedPaneIdentityCorrectionKeyBySessionID = [String: String]()
     private var lastLivePanelSnapshotRefreshAt: Date?
     private var scanScheduled = false
+    private var lastRegistrySourceScanWasComplete = false
 
     init(paths: BridgePaths = BridgePaths(),
          fileManager: FileManager = .default,
@@ -652,7 +658,9 @@ final class AgentSessionRegistryMonitor {
                 sourceRecordCount: sourceRecords.count,
                 resolvedCandidateCount:
                     resolvedCandidates.count,
-                records: records
+                records: records,
+                sourceScanIsComplete:
+                    lastRegistrySourceScanWasComplete
             )
         }
     }
@@ -739,10 +747,13 @@ final class AgentSessionRegistryMonitor {
     }
 
     private func scanRegistry() {
-        let loadedRecords = AgentVendorRegistry.all.flatMap { vendor in
+        let loadedScans = AgentVendorRegistry.all.map { vendor in
             loadRecordEntries(at: paths.agentSessionsDirectory(for: vendor.registryDirectoryName),
                               vendor: vendor.id)
         }
+        let loadedRecords = loadedScans.flatMap(\.records)
+        lastRegistrySourceScanWasComplete =
+            loadedScans.allSatisfy(\.isComplete)
         let sourceRecords = loadedRecords.map(\.record)
         refreshLivePanelSnapshotsIfNeeded(for: sourceRecords)
         let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
@@ -1798,20 +1809,40 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func loadRecordEntries(at directory: URL, vendor: String) -> [LoadedAgentSessionRegistryRecord] {
+    private func loadRecordEntries(at directory: URL, vendor: String) -> LoadedAgentSessionRegistryScan {
+        var isComplete = true
         guard let enumerator = fileManager.enumerator(at: directory,
                                                       includingPropertiesForKeys: [.isRegularFileKey],
-                                                      options: [.skipsHiddenFiles]) else {
-            return []
+                                                      options: [.skipsHiddenFiles],
+                                                      errorHandler: { _, _ in
+                                                          isComplete = false
+                                                          return true
+                                                      }) else {
+            return LoadedAgentSessionRegistryScan(
+                records: [],
+                isComplete: false
+            )
         }
 
         var records = [LoadedAgentSessionRegistryRecord]()
         for case let url as URL in enumerator {
-            guard url.pathExtension == "json",
-                  let data = try? Data(contentsOf: url),
-                  let record = try? JSONDecoder().decode(AgentSessionRegistryRecord.self, from: data),
-                  record.version == 1,
+            guard url.pathExtension == "json" else {
+                continue
+            }
+            let record: AgentSessionRegistryRecord
+            do {
+                let data = try Data(contentsOf: url)
+                record = try JSONDecoder().decode(
+                    AgentSessionRegistryRecord.self,
+                    from: data
+                )
+            } catch {
+                isComplete = false
+                continue
+            }
+            guard record.version == 1,
                   record.vendor == vendor else {
+                isComplete = false
                 continue
             }
             if recordProcessExists(record) {
@@ -1820,7 +1851,10 @@ final class AgentSessionRegistryMonitor {
                 try? fileManager.removeItem(at: url)
             }
         }
-        return records
+        return LoadedAgentSessionRegistryScan(
+            records: records,
+            isComplete: isComplete
+        )
     }
 
     private func recordProcessExists(_ record: AgentSessionRegistryRecord) -> Bool {

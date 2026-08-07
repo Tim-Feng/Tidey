@@ -4,6 +4,39 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testMalformedRegistryFileMakesSnapshotIncomplete()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        let malformedURL = paths
+            .agentSessionsDirectory(for: "codex")
+            .appendingPathComponent("malformed.json")
+        try Data("not-json".utf8).write(to: malformedURL)
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+
+        monitor.scanRegistryForTesting()
+
+        let snapshot = monitor.currentRuntimeResumeAgentSnapshot()
+        XCTAssertFalse(snapshot.sourceScanIsComplete)
+        XCTAssertFalse(snapshot.isComplete)
+        XCTAssertTrue(snapshot.records.isEmpty)
+    }
+
     func testCompleteSnapshotRevokesExitedAndMovedBindings()
         throws {
         let oldContent = Self.directContent(

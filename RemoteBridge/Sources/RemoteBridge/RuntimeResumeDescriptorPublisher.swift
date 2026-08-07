@@ -185,12 +185,26 @@ struct RuntimeResumeAgentRegistryRecord:
 struct RuntimeResumeAgentRegistrySnapshot:
     Equatable,
     Sendable {
+    let sourceScanIsComplete: Bool
     let sourceRecordCount: Int
     let resolvedCandidateCount: Int
     let records: [RuntimeResumeAgentRegistryRecord]
 
+    init(
+        sourceRecordCount: Int,
+        resolvedCandidateCount: Int,
+        records: [RuntimeResumeAgentRegistryRecord],
+        sourceScanIsComplete: Bool = true
+    ) {
+        self.sourceScanIsComplete = sourceScanIsComplete
+        self.sourceRecordCount = sourceRecordCount
+        self.resolvedCandidateCount = resolvedCandidateCount
+        self.records = records
+    }
+
     var isComplete: Bool {
-        sourceRecordCount == resolvedCandidateCount &&
+        sourceScanIsComplete &&
+            sourceRecordCount == resolvedCandidateCount &&
             resolvedCandidateCount == records.count
     }
 }
