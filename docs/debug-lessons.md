@@ -487,6 +487,26 @@
 - 正常 ⌘Q／重開不能當成 cold-reboot agent restoration 驗收
   - tmux server 還活著時只是在 reattach，會遮蔽 descriptor 遺漏；部署前要比對 live agent ID 集合與 saved descriptor pane-launch ID 集合，要求每個 ID 恰好一次
   - production-shaped fixture 與實際快照都要檢查 native carrier 數、完整 agent 數、multi-window carrier 的 monitor 空 launch，以及 canonical session target；allowlist 以外的 monitor process 只恢復 window／cwd，不宣稱自動重啟
+- serial restoration queue 上的 subprocess 必須有 timeout 與完整結果紀錄
+  - 一個沒有 timeout 的 `tmux has-session` 就能擋住後續所有 carrier；每個 probe／mutation 都要限制執行時間，timeout 後先 terminate、再於短暫 grace 後強制結束
+  - stdout 與 stderr 必須同時持續 drain 並限制保留大小，否則大量輸出也可能造成 pipe deadlock；每次結果至少記錄 phase、descriptor revision、session、launch 狀態、timeout、termination reason、status 與截短後的 stderr
+  - `tmux has-session` 只有正常 exit 0 可視為 existing、正常 exit 1 可視為 missing；timeout、signal、launch error 與其他 status 都要是 failed，不能誤觸 create
+- managed descriptor 的 native reattach `.notAttempted` 不能在占用 exactly-once key 後直接 return
+  - cold boot 可能先還原 native panel，卻沒有可重接的 native server；此時 `.notAttempted` 要走和 native reattach failed 相同的 probe／durable resume 流程
+  - launch policy 與 runtime state machine 必須共用同一個啟動 owner；valid descriptor 的 `.notAttempted` 要延後 saved program，由 state machine 依 `(panelID, descriptorRevision)` exactly-once gate 啟動
+- cold-boot descriptor 不能在 runtime evidence 尚未重現時被 Bridge 撤銷
+  - Bridge 啟動後的完整空 registry 只代表當下沒有 live record；若直接當成 authoritative absence，兩次輪詢後就會刪掉仍在排隊重建的 descriptor，再由自動儲存永久覆寫
+  - native restore 要先為 exact `(panelID, revision, canonical content)` 建立等待 runtime evidence 的 lease；只有接受同 binding 的有效 Bridge publication 後才允許 absence removal，pending removal 必須回可重試錯誤
+- Finder／login 啟動的 Tidey 必須自行建立 canonical runtime task environment
+  - 不能假設 app parent 已有正確 `TIDEY_SOCKET_PATH`／`TIDEY_BIN_DIR`；先移除 ambient `TIDEY_*` 與 controller identity，再注入當前 Tidey socket 與 app bundle `Resources/bin`
+  - workspace／panel identity 仍由 attach 後的 pane options 提供，不可放入 tmux server global environment
+- 復原工具建立長存 tmux server 前要隔離控制端 agent 的環境
+  - Codex tool runtime 會注入 `NO_COLOR`、`CODEX_CI`、thread ID 與 sandbox metadata；若第一個 `tmux new-session` 原樣繼承，server 與所有後續 agent 都會帶著這些變數，`NO_COLOR` 會讓全部 TUI 失去 ANSI 顏色
+  - 建立 tmux client process 時先移除精確的 controller denylist；agent shell 啟動前再 `unset` 同一組 keys，因為乾淨的 client environment 無法刪除既有 server 已保存的 global environment
+  - native runtime tmux CLI 要移除 ambient `TMUX`／`TMUX_PANE`，並以 descriptor 的 canonical socket arguments 定位；不要用 global `tmux set-environment -gu` 改動使用者其他 session
+- 事故 artifact 要標明時間與資料來源，不能把較早的 SavedState 當成最後 reboot input
+  - 2026-08-07 的較早 native graph 是 2 個 create + 9 個 attach-only descriptor，但最後重開前已發布 11 個 v2 create carrier／21 launches；復原時前者只提供 workspace graph，descriptor inventory 由最後 rollout 的 canonical manifest 取代
+  - 保存 unified log、native DB、collapsed DB、canonical manifest 與雜湊；若舊版未記 command status／stderr，文件必須明說這段證據不存在，不能用後來的推論補成既成事實
 
 ## Testing
 
