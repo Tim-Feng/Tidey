@@ -491,6 +491,9 @@
   - 一個沒有 timeout 的 `tmux has-session` 就能擋住後續所有 carrier；每個 probe／mutation 都要限制執行時間，timeout 後先 terminate、再於短暫 grace 後強制結束
   - stdout 與 stderr 必須同時持續 drain 並限制保留大小，否則大量輸出也可能造成 pipe deadlock；每次結果至少記錄 phase、descriptor revision、session、launch 狀態、timeout、termination reason、status 與截短後的 stderr
   - `tmux has-session` 只有正常 exit 0 可視為 existing、正常 exit 1 可視為 missing；timeout、signal、launch error 與其他 status 都要是 failed，不能誤觸 create
+- 透過 `Foundation.Process` 傳給 tmux `-F` 的格式字串要使用可列印分隔符號
+  - argv 裡的實際 TAB 控制字元可能被 tmux 正規化成 `_`；互動 shell 傳入反斜線加 `t` 的測試會由 tmux 自己展開，無法代表 GUI app 的 argv 路徑
+  - command format 與 parser 要由同一個 codec 管理，並以 isolated tmux socket 跑實際 `Process` round-trip；`list-panes` exit 0 只代表命令成功，不代表 stdout 符合 parser contract
 - managed descriptor 的 native reattach `.notAttempted` 不能在占用 exactly-once key 後直接 return
   - cold boot 可能先還原 native panel，卻沒有可重接的 native server；此時 `.notAttempted` 要走和 native reattach failed 相同的 probe／durable resume 流程
   - launch policy 與 runtime state machine 必須共用同一個啟動 owner；valid descriptor 的 `.notAttempted` 要延後 saved program，由 state machine 依 `(panelID, descriptorRevision)` exactly-once gate 啟動
