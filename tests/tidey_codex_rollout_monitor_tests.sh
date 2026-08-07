@@ -1060,6 +1060,10 @@ FAKE_CODEX
     if grep -q -- "--remote" "$codex_log"; then
         fail "remote TUI was launched after app-server startup exit"
     fi
+    for _ in $(seq 1 100); do
+        [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] && break
+        sleep 0.02
+    done
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "startup exit fallback left registry files"
     [[ ! -s "$stderr_log" ]] || fail "startup exit fallback printed user-facing output"
     grep -q "reason=app-server exited before socket was ready" "$fallback_log" || fail "startup exit fallback reason was not logged"
@@ -1072,6 +1076,121 @@ FAKE_CODEX
 }
 
 run_app_server_runtime_startup_exit_falls_back_to_plain_test
+
+run_app_server_runtime_startup_exit_falls_back_to_tracked_plain_test() {
+    local tmpdir
+    local fake_home
+    local fake_bin
+    local registry_root
+    local socket
+    local socket_pid
+    local codex_log
+    local plain_started_file
+    local plain_release_file
+    local registry_file
+    local wrapper_pid
+    local status
+    local resume_id="019eac34-764c-7893-9599-5b6000037cea"
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-startup-tracked.XXXXXX")"
+    fake_home="$tmpdir/home"
+    fake_bin="$tmpdir/bin"
+    registry_root="$fake_home/Library/Application Support/Tidey Remote Bridge/agent-sessions/codex"
+    socket="$tmpdir/tidey.sock"
+    codex_log="$tmpdir/codex.log"
+    plain_started_file="$tmpdir/plain-started"
+    plain_release_file="$tmpdir/plain-release"
+    mkdir -p "$fake_bin" "$registry_root"
+
+    cat > "$fake_bin/codex" <<'FAKE_CODEX'
+#!/usr/bin/env bash
+set -euo pipefail
+printf 'args:%s\n' "$*" >> "$FAKE_CODEX_LOG"
+if [[ "${1:-}" == "--help" ]]; then
+    printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
+    exit 0
+fi
+if [[ " $* " == *" app-server "* ]]; then
+    exit 23
+fi
+if [[ "$*" == *"--remote"* ]]; then
+    exit 31
+fi
+printf '%s\n' "$$" > "$FAKE_PLAIN_STARTED_FILE"
+for _ in $(seq 1 250); do
+    [[ -f "$FAKE_PLAIN_RELEASE_FILE" ]] && exit 0
+    sleep 0.02
+done
+exit 88
+FAKE_CODEX
+    chmod +x "$fake_bin/codex"
+
+    python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
+    socket_pid="$!"
+    for _ in $(seq 1 50); do
+        [[ -S "$socket" ]] && break
+        sleep 0.02
+    done
+
+    HOME="$fake_home" \
+        CODEX_HOME="$fake_home/.codex" \
+        PATH="$fake_bin:/usr/bin:/bin" \
+        TIDEY_SOCKET_PATH="$socket" \
+        TIDEY_WORKSPACE_ID="workspace-1" \
+        TIDEY_PANEL_ID="panel-1" \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS=3 \
+        TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL=0.01 \
+        FAKE_CODEX_LOG="$codex_log" \
+        FAKE_PLAIN_STARTED_FILE="$plain_started_file" \
+        FAKE_PLAIN_RELEASE_FILE="$plain_release_file" \
+        TMPDIR="$tmpdir" \
+        "$CODEX_UNDER_TEST" resume "$resume_id" >/dev/null 2>&1 &
+    wrapper_pid="$!"
+
+    for _ in $(seq 1 100); do
+        [[ -f "$plain_started_file" ]] && break
+        sleep 0.02
+    done
+    [[ -f "$plain_started_file" ]] || fail "tracked startup fallback did not launch plain Codex"
+
+    registry_file=""
+    for _ in $(seq 1 100); do
+        registry_file="$(find "$registry_root" -name 'codex-*.json' -print -quit)"
+        [[ -n "$registry_file" ]] && break
+        sleep 0.02
+    done
+    [[ -n "$registry_file" ]] || fail "tracked startup fallback did not publish a live registry"
+
+    python3 - "$registry_file" "$wrapper_pid" <<'PY'
+import json
+import sys
+
+record = json.load(open(sys.argv[1]))
+assert record["workspace_id"] == "workspace-1"
+assert record["panel_id"] == "panel-1"
+assert record["pid"] == int(sys.argv[2])
+assert "runtime" not in record
+PY
+
+    touch "$plain_release_file"
+    set +e
+    wait "$wrapper_pid"
+    status=$?
+    set -e
+    [[ "$status" == "0" ]] || fail "tracked startup fallback should return plain Codex status"
+
+    for _ in $(seq 1 100); do
+        [[ -z "$(find "$registry_root" -name 'codex-*.json' -print -quit)" ]] && break
+        sleep 0.02
+    done
+    [[ -z "$(find "$registry_root" -name 'codex-*.json' -print -quit)" ]] || fail "tracked startup fallback registry was not removed after exit"
+
+    kill "$socket_pid" 2>/dev/null || true
+    wait "$socket_pid" 2>/dev/null || true
+    rm -rf "$tmpdir"
+}
+
+run_app_server_runtime_startup_exit_falls_back_to_tracked_plain_test
 
 run_app_server_runtime_socket_timeout_falls_back_to_plain_test() {
     local tmpdir
@@ -1152,6 +1271,10 @@ FAKE_CODEX
     if grep -q -- "--remote" "$codex_log"; then
         fail "remote TUI was launched after app-server socket timeout"
     fi
+    for _ in $(seq 1 100); do
+        [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] && break
+        sleep 0.02
+    done
     [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "socket timeout fallback left registry files"
     [[ ! -s "$stderr_log" ]] || fail "socket timeout fallback printed user-facing output"
     grep -q "reason=socket was not ready before timeout" "$fallback_log" || fail "socket timeout fallback reason was not logged"

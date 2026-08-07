@@ -851,7 +851,7 @@ run_codex_app_server_runtime() {
         } > "$fallback_log" 2>/dev/null || true
         cleanup_codex_app_server_artifacts
         trap - EXIT HUP INT TERM
-        exec env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" "$@"
+        launch_tracked_plain_codex_runtime "$real_codex" "$real_codex_home" "$profile_flag" "$profile_name" "$registry_file" "$session_id" "$created_at" 1 "$@"
     }
 
     trap cleanup_codex_app_server_runtime EXIT HUP INT TERM
