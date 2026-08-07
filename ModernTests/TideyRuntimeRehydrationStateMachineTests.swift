@@ -601,6 +601,82 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertNotNil(TideyRuntimeRestorationLogger() as Any)
     }
 
+    func testRuntimeRestorationLoggerUsesFixedPrivacySchemaAndBoundsDiagnostics() {
+        let descriptor = descriptor(revision: 7)
+        let result = TideyRuntimeTaskExecutionResult(
+            launched: true,
+            timedOut: false,
+            terminationReason: Process.TerminationReason.exit.rawValue,
+            terminationStatus: 1,
+            standardOutput: "transcript /tmp/private-project",
+            standardError: String(repeating: "x", count: 5_000) + "\nend",
+            launchErrorDescription: "launch\nerror"
+        )
+
+        let record = TideyRuntimeRestorationLogger().taskRecord(
+            descriptor: descriptor,
+            phase: "has-session",
+            result: result,
+            postcondition: "not_applicable",
+            outcome: "missing"
+        )
+
+        XCTAssertEqual(
+            Set(record.publicFields.keys),
+            Set([
+                "phase",
+                "descriptor_version",
+                "revision",
+                "endpoint_kind",
+                "migration_applied",
+                "launched",
+                "timed_out",
+                "status",
+                "postcondition",
+                "outcome",
+            ])
+        )
+        XCTAssertEqual(
+            Set(record.privateFields.keys),
+            Set([
+                "panel",
+                "session",
+                "socket",
+                "stderr",
+                "launch_error",
+            ])
+        )
+        XCTAssertEqual(record.publicFields["status"], "1")
+        XCTAssertEqual(record.publicFields["outcome"], "missing")
+        XCTAssertFalse(record.privateFields["stderr", default: ""]
+            .contains("\n"))
+        XCTAssertLessThanOrEqual(
+            record.privateFields["stderr", default: ""].count,
+            4_097
+        )
+        XCTAssertFalse(
+            (Array(record.publicFields.values) +
+                Array(record.privateFields.values))
+                .contains { $0.contains("private-project") }
+        )
+
+        let outcomeRecord = TideyRuntimeRestorationLogger().outcomeRecord(
+            descriptor: descriptor,
+            phase: "admit",
+            panelID: "panel-7",
+            postcondition: "not_applicable",
+            outcome: "admitted"
+        )
+        XCTAssertEqual(
+            outcomeRecord.publicFields["launched"],
+            "not_applicable"
+        )
+        XCTAssertEqual(
+            outcomeRecord.publicFields["status"],
+            "not_applicable"
+        )
+    }
+
     func testTmuxSessionCreationPostconditionSeamCompiles() {
         XCTAssertNotNil(
             TideyRuntimeTmuxSessionCreationPostcondition() as Any

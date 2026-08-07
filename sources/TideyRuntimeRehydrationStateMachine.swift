@@ -77,6 +77,21 @@ final class TideyRuntimeTaskExecutionResult: NSObject {
     }
 }
 
+@objc(TideyRuntimeRestorationLogRecord)
+@objcMembers
+final class TideyRuntimeRestorationLogRecord: NSObject {
+    let publicFields: [String: String]
+    let privateFields: [String: String]
+
+    init(
+        publicFields: [String: String],
+        privateFields: [String: String]
+    ) {
+        self.publicFields = publicFields
+        self.privateFields = privateFields
+    }
+}
+
 @objc(TideyRuntimeRestorationLogger)
 @objcMembers
 final class TideyRuntimeRestorationLogger: NSObject {
@@ -88,16 +103,36 @@ final class TideyRuntimeRestorationLogger: NSObject {
     func logTask(
         descriptor: TideyRuntimeResumeDescriptor,
         phase: String,
-        executable: String,
         result: TideyRuntimeTaskExecutionResult?,
-        outcome: String
+        postcondition: String,
+        outcome: String,
+        isError: Bool
     ) {
         emit(
+            record: taskRecord(
+                descriptor: descriptor,
+                phase: phase,
+                result: result,
+                postcondition: postcondition,
+                outcome: outcome
+            ),
+            isError: isError
+        )
+    }
+
+    func taskRecord(
+        descriptor: TideyRuntimeResumeDescriptor,
+        phase: String,
+        result: TideyRuntimeTaskExecutionResult?,
+        postcondition: String,
+        outcome: String
+    ) -> TideyRuntimeRestorationLogRecord {
+        makeRecord(
             descriptor: descriptor,
             phase: phase,
             panelID: "",
-            executable: executable,
             result: result,
+            postcondition: postcondition,
             outcome: outcome
         )
     }
@@ -106,28 +141,47 @@ final class TideyRuntimeRestorationLogger: NSObject {
         descriptor: TideyRuntimeResumeDescriptor?,
         phase: String,
         panelID: String,
-        outcome: String
+        postcondition: String,
+        outcome: String,
+        isError: Bool
     ) {
         emit(
+            record: outcomeRecord(
+                descriptor: descriptor,
+                phase: phase,
+                panelID: panelID,
+                postcondition: postcondition,
+                outcome: outcome
+            ),
+            isError: isError
+        )
+    }
+
+    func outcomeRecord(
+        descriptor: TideyRuntimeResumeDescriptor?,
+        phase: String,
+        panelID: String,
+        postcondition: String,
+        outcome: String
+    ) -> TideyRuntimeRestorationLogRecord {
+        makeRecord(
             descriptor: descriptor,
             phase: phase,
             panelID: panelID,
-            executable: "",
             result: nil,
+            postcondition: postcondition,
             outcome: outcome
         )
     }
 
-    private func emit(
+    private func makeRecord(
         descriptor: TideyRuntimeResumeDescriptor?,
         phase: String,
         panelID: String,
-        executable: String,
         result: TideyRuntimeTaskExecutionResult?,
+        postcondition: String,
         outcome: String
-    ) {
-        let descriptorVersion = descriptor?.descriptorVersion ?? 0
-        let revision = descriptor?.revision ?? 0
+    ) -> TideyRuntimeRestorationLogRecord {
         let endpointKind: String
         let socketSelector: String
         switch descriptor?.target?.socketEndpointKind {
@@ -146,10 +200,6 @@ final class TideyRuntimeRestorationLogger: NSObject {
         }
         let migrationApplied =
             descriptor?.legacyDefaultSocketMigrationApplied ?? false
-        let launched = result?.launched ?? false
-        let timedOut = result?.timedOut ?? false
-        let terminationReason = result?.terminationReason ?? 0
-        let terminationStatus = result?.terminationStatus ?? 0
         let session = descriptor?.target?.tmuxSession ?? ""
         let standardError = boundedSingleLine(
             result?.standardError ?? ""
@@ -157,13 +207,49 @@ final class TideyRuntimeRestorationLogger: NSObject {
         let launchError = boundedSingleLine(
             result?.launchErrorDescription ?? ""
         )
-        let level: OSLogType = outcome == "succeeded"
-            ? .default
-            : .error
+        let launched = result.map { String($0.launched) }
+            ?? "not_applicable"
+        let timedOut = result.map { String($0.timedOut) }
+            ?? "not_applicable"
+        let status = result.map { String($0.terminationStatus) }
+            ?? "not_applicable"
+
+        return TideyRuntimeRestorationLogRecord(
+            publicFields: [
+                "phase": phase,
+                "descriptor_version": String(
+                    descriptor?.descriptorVersion ?? 0
+                ),
+                "revision": String(descriptor?.revision ?? 0),
+                "endpoint_kind": endpointKind,
+                "migration_applied": String(migrationApplied),
+                "launched": launched,
+                "timed_out": timedOut,
+                "status": status,
+                "postcondition": postcondition,
+                "outcome": outcome,
+            ],
+            privateFields: [
+                "panel": panelID,
+                "session": session,
+                "socket": socketSelector,
+                "stderr": standardError,
+                "launch_error": launchError,
+            ]
+        )
+    }
+
+    private func emit(
+        record: TideyRuntimeRestorationLogRecord,
+        isError: Bool
+    ) {
+        let publicFields = record.publicFields
+        let privateFields = record.privateFields
+        let level: OSLogType = isError ? .error : .default
 
         logger.log(
             level: level,
-            "phase=\(phase, privacy: .public) descriptor_version=\(descriptorVersion, privacy: .public) revision=\(revision, privacy: .public) endpoint_kind=\(endpointKind, privacy: .public) migration_applied=\(migrationApplied, privacy: .public) launched=\(launched, privacy: .public) timed_out=\(timedOut, privacy: .public) termination_reason=\(terminationReason, privacy: .public) status=\(terminationStatus, privacy: .public) outcome=\(outcome, privacy: .public) panel=\(panelID, privacy: .private(mask: .hash)) session=\(session, privacy: .private(mask: .hash)) socket=\(socketSelector, privacy: .private(mask: .hash)) executable=\(executable, privacy: .private(mask: .hash)) stderr=\(standardError, privacy: .private(mask: .hash)) launch_error=\(launchError, privacy: .private(mask: .hash))"
+            "phase=\(publicFields["phase"] ?? "", privacy: .public) descriptor_version=\(publicFields["descriptor_version"] ?? "", privacy: .public) revision=\(publicFields["revision"] ?? "", privacy: .public) endpoint_kind=\(publicFields["endpoint_kind"] ?? "", privacy: .public) migration_applied=\(publicFields["migration_applied"] ?? "", privacy: .public) launched=\(publicFields["launched"] ?? "", privacy: .public) timed_out=\(publicFields["timed_out"] ?? "", privacy: .public) status=\(publicFields["status"] ?? "", privacy: .public) postcondition=\(publicFields["postcondition"] ?? "", privacy: .public) outcome=\(publicFields["outcome"] ?? "", privacy: .public) panel=\(privateFields["panel"] ?? "", privacy: .private) session=\(privateFields["session"] ?? "", privacy: .private) socket=\(privateFields["socket"] ?? "", privacy: .private) stderr=\(privateFields["stderr"] ?? "", privacy: .private) launch_error=\(privateFields["launch_error"] ?? "", privacy: .private)"
         )
     }
 
