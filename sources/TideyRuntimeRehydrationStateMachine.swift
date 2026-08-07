@@ -1,5 +1,19 @@
 import Foundation
 
+@objc(TideyRuntimeTaskEnvironmentBuilder)
+@objcMembers
+final class TideyRuntimeTaskEnvironmentBuilder: NSObject {
+    func environment(
+        parentEnvironment: [String: String],
+        canonicalSocketPath: String,
+        canonicalBinDirectory: String
+    ) -> [String: String] {
+        _ = canonicalSocketPath
+        _ = canonicalBinDirectory
+        return parentEnvironment
+    }
+}
+
 @objc(TideyRuntimeRehydrationPhase)
 enum TideyRuntimeRehydrationPhase: Int {
     case awaitingNativeRestore

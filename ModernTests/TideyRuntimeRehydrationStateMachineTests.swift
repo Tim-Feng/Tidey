@@ -1,6 +1,19 @@
 import XCTest
 @testable import iTerm2SharedARC
 
+final class TideyRuntimeTaskEnvironmentBuilderTests: XCTestCase {
+    func testRuntimeTaskEnvironmentBuilderSeamCompiles() {
+        let environment = TideyRuntimeTaskEnvironmentBuilder().environment(
+            parentEnvironment: ["CUSTOM_VALUE": "preserved"],
+            canonicalSocketPath: "/tmp/tidey-dev.sock",
+            canonicalBinDirectory:
+                "/Applications/Tidey Dev.app/Contents/Resources/bin"
+        )
+
+        XCTAssertEqual(environment["CUSTOM_VALUE"], "preserved")
+    }
+}
+
 final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
     func testDirectAgentLauncherSeamsCompile() {
         let builder = TideyRuntimeDirectAgentCommandBuilder()
