@@ -1359,9 +1359,14 @@ final class AgentSessionRegistryMonitor {
         }
         if tmuxPaneID != nil,
            let persistedSocketPath = record.tmuxSocketPath,
-           persistedSocketPath.isEmpty == false,
-           matchingPanel.tmuxSocketPath != persistedSocketPath {
-            return nil
+           persistedSocketPath.isEmpty == false {
+            guard let liveSocketPath = matchingPanel.tmuxSocketPath,
+                  Self.socketPathsMatch(
+                      liveSocketPath,
+                      persistedSocketPath
+                  ) else {
+                return nil
+            }
         }
         let vendor: RuntimeResumeAgentVendor
         let executable: String

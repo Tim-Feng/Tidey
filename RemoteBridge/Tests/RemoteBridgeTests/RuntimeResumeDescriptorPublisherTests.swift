@@ -1064,6 +1064,138 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testRegistryReaderTreatsMacOSTmpSocketAliasesAsSameEndpoint()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        let record = AgentSessionRegistryRecord(
+            version: 1,
+            vendor: "claude",
+            workspaceID: "workspace-1",
+            sessionID: "session-1",
+            panelID: "panel-1",
+            pid: getpid(),
+            cwd: "/tmp/project",
+            createdAt: "2026-08-07T00:00:00Z",
+            transcriptPath: nil,
+            tmuxPaneID: "%7",
+            tmuxSocketPath: "/tmp/tmux-501/default"
+        )
+        let recordURL = paths
+            .agentSessionsDirectory(for: "claude")
+            .appendingPathComponent("session-1.json")
+        try JSONEncoder().encode(record).write(to: recordURL)
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-1",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: "%7",
+                    tmuxSocketPath:
+                        "/private/tmp/tmux-501/default"
+                )
+            ]
+        )
+        monitor.scanRegistryForTesting()
+
+        let snapshot = try AgentSessionRegistryRuntimeResumeReader(
+            monitor: monitor
+        ).readAgentRegistrySnapshot()
+
+        XCTAssertTrue(snapshot.isComplete)
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 1)
+        XCTAssertEqual(snapshot.records.count, 1)
+        XCTAssertEqual(
+            snapshot.records.first?.binding,
+            RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "panel-1",
+                tmuxPaneID: "%7"
+            )
+        )
+    }
+
+    func testRegistryReaderStillRejectsDifferentTmuxSocketEndpoint()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        let record = AgentSessionRegistryRecord(
+            version: 1,
+            vendor: "claude",
+            workspaceID: "workspace-1",
+            sessionID: "session-1",
+            panelID: "panel-1",
+            pid: getpid(),
+            cwd: "/tmp/project",
+            createdAt: "2026-08-07T00:00:00Z",
+            transcriptPath: nil,
+            tmuxPaneID: "%7",
+            tmuxSocketPath: "/tmp/tmux-501/default"
+        )
+        let recordURL = paths
+            .agentSessionsDirectory(for: "claude")
+            .appendingPathComponent("session-1.json")
+        try JSONEncoder().encode(record).write(to: recordURL)
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-1",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: "%7",
+                    tmuxSocketPath:
+                        "/private/tmp/tmux-501/different"
+                )
+            ]
+        )
+        monitor.scanRegistryForTesting()
+
+        let snapshot = try AgentSessionRegistryRuntimeResumeReader(
+            monitor: monitor
+        ).readAgentRegistrySnapshot()
+
+        XCTAssertFalse(snapshot.isComplete)
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 0)
+        XCTAssertTrue(snapshot.records.isEmpty)
+    }
+
     func testRegistryReaderAndPublisherPreserveDirectNonTmuxAgentBinding()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory
