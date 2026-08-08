@@ -1448,6 +1448,24 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         file: StaticString = #filePath,
         line: UInt = #line
     ) {
+        XCTAssertThrowsError(
+            try strictBootstrapState(
+                pendingCapture: pendingCapture,
+                activeScreen: activeScreen,
+                metadataFields: metadataFields,
+                backgroundScreen: backgroundScreen
+            ),
+            file: file,
+            line: line
+        )
+    }
+
+    private func strictBootstrapState(
+        pendingCapture: Data = Data(),
+        activeScreen: Data = Data("visible".utf8),
+        metadataFields: [String] = OrdinaryTmuxCLIAdapterTests.strictMetadataFields(),
+        backgroundScreen: Data = Data()
+    ) throws -> OrdinaryTmuxTerminalStateV1 {
         let route = makeRoute(socket: .path("/tmp/tmux-501/default"))
         let metadata = metadataFields.joined(separator: "\t")
         let rawState = RawRunnerState { arguments in
@@ -1466,14 +1484,10 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
             }
         )
 
-        XCTAssertThrowsError(
-            try adapter.bootstrapStrictTerminalStream(
-                refreshedRoute: route,
-                outputFilePath: "/tmp/strict.bytes",
-                subscriptionID: "subscription-1"
-            ),
-            file: file,
-            line: line
+        return try adapter.bootstrapStrictTerminalStream(
+            refreshedRoute: route,
+            outputFilePath: "/tmp/strict.bytes",
+            subscriptionID: "subscription-1"
         )
     }
 
