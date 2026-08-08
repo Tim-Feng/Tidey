@@ -184,6 +184,10 @@ if f"sqlite_home = \"{sqlite_home}\"" not in text:
     raise SystemExit("sqlite_home was not written")
 if "hooks = true" not in text:
     raise SystemExit("hooks feature was not enabled")
+if text.count("\n[tui]\n") != 1:
+    raise SystemExit("profile config must contain exactly one tui table")
+if text.count("resume_cwd = \"session\"") != 1:
+    raise SystemExit("profile config must prefer the saved session cwd exactly once")
 if "\n[hooks]\n" in text or "[[hooks." in text:
     raise SystemExit("profile config should not declare hooks")
 if "notify" in text:

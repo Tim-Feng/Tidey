@@ -386,6 +386,9 @@ lines = [
     "[features]",
     "hooks = true",
     "",
+    "[tui]",
+    'resume_cwd = "session"',
+    "",
 ]
 for state_key, trusted_hash in state_entries:
     lines.extend([
