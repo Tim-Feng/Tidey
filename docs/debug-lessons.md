@@ -519,6 +519,10 @@
   - `wait` 取得 status 後立刻清空 PID；否則後續 cleanup 可能對已重用的 PID 發 signal
   - 手動 cleanup／fallback 前先解除 `EXIT`、`HUP`、`INT`、`TERM` traps；cleanup 函式本身也先解除 traps 再執行，避免 `exit` 重新觸發 EXIT trap 而清理兩次
   - 測試直接攔截 signal 嘗試與 socket-directory cleanup 次數，不要靠作業系統真的重用 PID，也不要只驗最後程序已死亡
+- Tidey-managed Codex profile 的使用者選擇不會自然跨 relaunch 保留
+  - wrapper 每次啟動都會完整重建 per-carrier profile；Codex TUI 寫回同一檔案的 `resume_cwd` 會在下一次啟動被覆寫，不能把一次人工選擇當成持久修復
+  - unattended durable resume 應由 profile generator 明確設定 `tui.resume_cwd = "session"`，讓 Codex 使用自己保存的 session cwd；明確 `--cd`／`-C` 仍保留逐次覆寫權
+  - tmux pane／wrapper registry 的 cwd 是 carrier 啟動位置，與 Codex 恢復後的 logical cwd 是不同資料；修互動提示時不要順便擴成 rollout parser 或 registry cwd 重構
 
 ## Testing
 
