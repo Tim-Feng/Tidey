@@ -364,10 +364,6 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         assertStrictBootstrapThrows(metadataFields: fields)
 
         fields = Self.strictMetadataFields()
-        fields[3] = "40"
-        assertStrictBootstrapThrows(metadataFields: fields)
-
-        fields = Self.strictMetadataFields()
         fields[7] = "4294967295"
         fields[8] = "0"
         assertStrictBootstrapThrows(metadataFields: fields)
@@ -391,6 +387,51 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         )
 
         assertStrictBootstrapThrows(backgroundScreen: Data("unexpected".utf8))
+    }
+
+    func testStrictBootstrapAcceptsCursorAtRightMarginRegardlessOfWrapMode() throws {
+        for wrap in ["1", "0"] {
+            var fields = Self.strictMetadataFields()
+            fields[3] = fields[1]
+            fields[15] = wrap
+
+            let state = try strictBootstrapState(metadataFields: fields)
+
+            XCTAssertEqual(state.cursor.column, state.columns, "wrap=\(wrap)")
+        }
+    }
+
+    func testStrictBootstrapRejectsCursorColumnBeyondRightMargin() {
+        var fields = Self.strictMetadataFields()
+        fields[3] = "41"
+
+        assertStrictBootstrapThrows(metadataFields: fields)
+    }
+
+    func testStrictBootstrapAcceptsSavedCursorAtRightMargin() throws {
+        var fields = Self.strictMetadataFields()
+        fields[6] = "1"
+        fields[7] = fields[1]
+        fields[8] = "0"
+
+        let state = try strictBootstrapState(
+            metadataFields: fields,
+            backgroundScreen: Data("primary".utf8)
+        )
+
+        XCTAssertEqual(state.alternateSavedCursor?.column, state.columns)
+    }
+
+    func testStrictBootstrapRejectsSavedCursorColumnBeyondRightMargin() {
+        var fields = Self.strictMetadataFields()
+        fields[6] = "1"
+        fields[7] = "41"
+        fields[8] = "0"
+
+        assertStrictBootstrapThrows(
+            metadataFields: fields,
+            backgroundScreen: Data("primary".utf8)
+        )
     }
 
     func testResolvesClientByTTYAndTargetSessionFromDefaultSocket() throws {

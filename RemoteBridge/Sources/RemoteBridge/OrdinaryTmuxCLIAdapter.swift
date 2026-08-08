@@ -1193,7 +1193,7 @@ final class OrdinaryTmuxCLIAdapter {
               fields[0] == Substring(route.activePaneID),
               let columns = Int(fields[1]), columns > 0,
               let rows = Int(fields[2]), rows > 0,
-              let cursorColumn = Int(fields[3]), cursorColumn >= 0, cursorColumn < columns,
+              let cursorColumn = Int(fields[3]), cursorColumn >= 0, cursorColumn <= columns,
               let cursorRow = Int(fields[4]), cursorRow >= 0, cursorRow < rows,
               let cursorVisible = strictBoolean(fields[5]),
               let alternateOn = strictBoolean(fields[6]),
@@ -1230,7 +1230,7 @@ final class OrdinaryTmuxCLIAdapter {
         } else {
             guard savedColumn != savedCursorSentinel,
                   savedRow != savedCursorSentinel,
-                  savedColumn < UInt64(columns),
+                  savedColumn <= UInt64(columns),
                   savedRow < UInt64(rows) else {
                 throw BridgeInternalError.invalidResponse
             }
