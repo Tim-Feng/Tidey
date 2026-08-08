@@ -588,6 +588,11 @@
   - tracked-plain wrapper 會先用每次啟動的隨機 instance ID 建立 registry；rollout 尚未出現前，這筆資料仍可供 active-session 與 pane matching 使用，但不能更新 runtime-resume descriptor
   - tracked plain 只有在 rollout 檔名可解析出合法 UUID，且該 UUID 精確等於 registry session ID 時才算 durable；completed app-server 則必須已有非空的 `thread_id` 或 `resume_thread_id`
   - provisional／starting record 要讓整份 runtime-resume snapshot 保持 incomplete，凍結 publisher 的 update、list 與 remove；若直接把它當成不存在，兩輪 absence observation 反而可能撤銷原本正確的 descriptor
+- tmux 的游標欄位等於 pane 寬度是合法的延遲換行狀態，不是越界資料
+  - active `cursor_x == columns` 在 DECAWM 開或關時都可能存在；下一個 printable 才依當下 wrap mode 換行或覆寫末格，不能用 `wrap_flag` 決定是否接受這個 sentinel
+  - alternate saved cursor 也可等於 `columns`；tmux 離開 alternate screen 時會自行把 restored cursor 夾回末格，因此 wire contract 應接受原值，renderer 不需另造 saved-cursor pending flag
+  - strict Bridge 與 client validator 都要接受 `0...columns`、拒絕 `> columns`；只修一端仍會落回 legacy renderer，表面症狀可能只是 ANSI 顏色消失
+  - ANSI CUP 會把 active cursor 夾到 `columns - 1`；bootstrap 全部 feed 完後，renderer 才用 terminal buffer 的公開 seam 恢復 `x == columns`，保留下一字的真正 wrap／overwrite 行為
 
 ## Testing
 
