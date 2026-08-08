@@ -1254,6 +1254,141 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testRegistryReaderRejectsProvisionalTrackedPlainCodexUntilRolloutIdentityExists()
+        throws {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "RuntimeResumeDescriptorPublisherTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        defer {
+            try? FileManager.default.removeItem(
+                at: supportDirectory
+            )
+        }
+        let paths = BridgePaths(
+            supportDirectory: supportDirectory
+        )
+        try paths.ensureSupportDirectoriesExist()
+        let wrapperSessionID =
+            "11111111-1111-4111-8111-111111111111"
+        let durableSessionID =
+            "22222222-2222-4222-8222-222222222222"
+        let rolloutURL = supportDirectory.appendingPathComponent(
+            "rollout-2026-08-08T00-00-00-\(durableSessionID).jsonl"
+        )
+        try Data("{}\n".utf8).write(to: rolloutURL)
+        let recordURL = paths
+            .agentSessionsDirectory(for: "codex")
+            .appendingPathComponent("tracked-plain.json")
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            hub: AgentEventHub()
+        )
+        monitor.replaceLivePanels(
+            workspaceID: "workspace-1",
+            panels: [
+                AgentPanelProcessSnapshot(
+                    workspaceID: "workspace-1",
+                    panelID: "panel-1",
+                    effectiveShellPID: getpid(),
+                    tmuxPaneID: "%7",
+                    tmuxSocketPath:
+                        "/tmp/tmux-501/default"
+                )
+            ]
+        )
+        let reader = AgentSessionRegistryRuntimeResumeReader(
+            monitor: monitor
+        )
+
+        func writeRecord(
+            sessionID: String,
+            transcriptPath: String?,
+            runtime: String? = nil,
+            threadID: String? = nil
+        ) throws {
+            let record = AgentSessionRegistryRecord(
+                version: 1,
+                vendor: "codex",
+                workspaceID: "workspace-1",
+                sessionID: sessionID,
+                panelID: "panel-1",
+                pid: getpid(),
+                cwd: "/tmp/project",
+                createdAt: "2026-08-08T00:00:00Z",
+                transcriptPath: transcriptPath,
+                tmuxPaneID: "%7",
+                tmuxSocketPath: "/tmp/tmux-501/default",
+                runtime: runtime,
+                threadID: threadID
+            )
+            try JSONEncoder().encode(record).write(
+                to: recordURL,
+                options: .atomic
+            )
+            monitor.scanRegistryForTesting()
+        }
+
+        try writeRecord(
+            sessionID: wrapperSessionID,
+            transcriptPath: nil
+        )
+        var snapshot = try reader.readAgentRegistrySnapshot()
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 0)
+        XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertFalse(snapshot.isComplete)
+        XCTAssertNotNil(
+            monitor.activeRecord(sessionID: wrapperSessionID)
+        )
+
+        try writeRecord(
+            sessionID: wrapperSessionID,
+            transcriptPath: rolloutURL.path
+        )
+        snapshot = try reader.readAgentRegistrySnapshot()
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 0)
+        XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertFalse(snapshot.isComplete)
+
+        try writeRecord(
+            sessionID: wrapperSessionID,
+            transcriptPath: nil,
+            runtime: "codex_app_server_starting"
+        )
+        snapshot = try reader.readAgentRegistrySnapshot()
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 0)
+        XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertFalse(snapshot.isComplete)
+
+        try writeRecord(
+            sessionID: wrapperSessionID,
+            transcriptPath: nil,
+            runtime: "codex_app_server"
+        )
+        snapshot = try reader.readAgentRegistrySnapshot()
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 0)
+        XCTAssertTrue(snapshot.records.isEmpty)
+        XCTAssertFalse(snapshot.isComplete)
+
+        try writeRecord(
+            sessionID: durableSessionID,
+            transcriptPath: rolloutURL.path
+        )
+        snapshot = try reader.readAgentRegistrySnapshot()
+        XCTAssertTrue(snapshot.isComplete)
+        XCTAssertEqual(snapshot.sourceRecordCount, 1)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 1)
+        XCTAssertEqual(
+            snapshot.records.first?.durableResumeID,
+            durableSessionID
+        )
+    }
+
     func testRegistryReaderTreatsMacOSTmpSocketAliasesAsSameEndpoint()
         throws {
         let supportDirectory = FileManager.default.temporaryDirectory

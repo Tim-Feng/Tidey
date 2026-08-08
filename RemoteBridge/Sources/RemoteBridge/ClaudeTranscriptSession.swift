@@ -1333,6 +1333,33 @@ final class AgentSessionRegistryMonitor {
         return record.sessionID
     }
 
+    private static func codexRecordHasDurableIdentity(
+        _ record: AgentSessionRegistryRecord
+    ) -> Bool {
+        guard record.vendor == "codex" else {
+            return false
+        }
+        if isCodexAppServerRuntimeRecord(record) {
+            return [record.threadID, record.resumeThreadID]
+                .compactMap { $0 }
+                .contains {
+                    $0.trimmingCharacters(
+                        in: .whitespacesAndNewlines
+                    ).isEmpty == false
+                }
+        }
+        guard record.runtime == nil,
+              let transcriptPath = record.transcriptPath,
+              transcriptPath.isEmpty == false,
+              let rolloutSessionID = codexSessionID(
+                  fromRolloutPath: transcriptPath
+              ),
+              isCodexSessionID(rolloutSessionID) else {
+            return false
+        }
+        return rolloutSessionID == record.sessionID
+    }
+
     private func runtimeResumeAgentRecord(
         fromCurrentRecord record: AgentSessionRegistryRecord
     ) -> RuntimeResumeAgentRegistryRecord? {
@@ -1377,6 +1404,9 @@ final class AgentSessionRegistryMonitor {
             executable = "claude"
             argumentsPrefix = ["--resume"]
         case "codex":
+            guard Self.codexRecordHasDurableIdentity(record) else {
+                return nil
+            }
             vendor = .codex
             executable = "codex"
             argumentsPrefix = ["resume"]
