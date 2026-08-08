@@ -523,6 +523,10 @@
   - wrapper 每次啟動都會完整重建 per-carrier profile；Codex TUI 寫回同一檔案的 `resume_cwd` 會在下一次啟動被覆寫，不能把一次人工選擇當成持久修復
   - unattended durable resume 應由 profile generator 明確設定 `tui.resume_cwd = "session"`，讓 Codex 使用自己保存的 session cwd；明確 `--cd`／`-C` 仍保留逐次覆寫權
   - tmux pane／wrapper registry 的 cwd 是 carrier 啟動位置，與 Codex 恢復後的 logical cwd 是不同資料；修互動提示時不要順便擴成 rollout parser 或 registry cwd 重構
+- Codex runtime instance ID 不能當成 durable resume ID 發布
+  - tracked-plain wrapper 會先用每次啟動的隨機 instance ID 建立 registry；rollout 尚未出現前，這筆資料仍可供 active-session 與 pane matching 使用，但不能更新 runtime-resume descriptor
+  - tracked plain 只有在 rollout 檔名可解析出合法 UUID，且該 UUID 精確等於 registry session ID 時才算 durable；completed app-server 則必須已有非空的 `thread_id` 或 `resume_thread_id`
+  - provisional／starting record 要讓整份 runtime-resume snapshot 保持 incomplete，凍結 publisher 的 update、list 與 remove；若直接把它當成不存在，兩輪 absence observation 反而可能撤銷原本正確的 descriptor
 
 ## Testing
 
