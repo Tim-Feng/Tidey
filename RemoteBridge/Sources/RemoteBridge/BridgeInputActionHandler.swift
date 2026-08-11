@@ -153,10 +153,11 @@ struct BridgeInputActionHandler {
 
         BridgeLogger.input.info("dispatch action=tui_command_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) session_id=\(activeSession?.sessionID ?? requestedSessionID ?? "-", privacy: .public) vendor=\(vendor.id, privacy: .public) length=\(command.count) tail=\(summarizedTail(command), privacy: .public)")
 
-        if let failure = try deliverTUICommand(command,
-                                               vendor: vendor,
-                                               panelID: panelID,
-                                               request: request) {
+        if let failure = try deliverTerminalSubmission(command,
+                                                       vendor: vendor,
+                                                       panelID: panelID,
+                                                       request: request,
+                                                       action: "tui_command_submit") {
             return failure
         }
         return Self.submittedResponse(for: request,
@@ -395,40 +396,6 @@ struct BridgeInputActionHandler {
                 stepDidDispatch()
                 previousStepUsedOrdinaryTmux = false
             }
-        }
-        return nil
-    }
-
-    private func deliverTUICommand(_ command: String,
-                                   vendor: any AgentVendor,
-                                   panelID: String,
-                                   request: BridgeRequest) throws -> BridgeResponse? {
-        let input = command + "\r"
-        BridgeLogger.input.info("step action=tui_command_submit request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=0 delay_ns=0 length=\(input.count) has_cr=true has_lf=false tail=\(summarizedTail(input), privacy: .public)")
-        let routeDecision = try routeOrdinaryTmuxInputIfAvailable(input,
-                                                                  panelID: panelID,
-                                                                  requestID: request.id,
-                                                                  action: "tui_command_submit",
-                                                                  stepIndex: 0,
-                                                                  mode: .rawTerminalInput,
-                                                                  allowAmbiguousPasteTimeout: true)
-        if routeDecision == .routed {
-            BridgeLogger.input.info("route action=tui_command_submit request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=0")
-            return nil
-        }
-
-        let forwardedRequest = BridgeRequest(id: UUID().uuidString,
-                                             action: "send_input",
-                                             params: [
-                                                "panel_id": .string(panelID),
-                                                "input": .string(input),
-                                             ])
-        let response = try socketSender.send(forwardedRequest)
-        guard response.ok else {
-            return BridgeResponse(id: request.id,
-                                  ok: false,
-                                  result: nil,
-                                  error: response.error)
         }
         return nil
     }
