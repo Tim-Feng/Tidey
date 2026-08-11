@@ -3719,11 +3719,8 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
-- (NSDictionary *)tideyRecentOutputSnapshotForSession:(PTYSession *)session {
-    if (!session || session.isBrowserSession) {
-        return nil;
-    }
-    id<VT100GridReading> grid = [session.screen currentGrid];
++ (NSDictionary *)tideySnapshotForGrid:(id<VT100GridReading>)grid
+                          cursorVisible:(BOOL)cursorVisible {
     if (!grid) {
         return nil;
     }
@@ -3741,7 +3738,19 @@ ITERM_WEAKLY_REFERENCEABLE
                                                          height:height
                                                         cursorX:cursor.x
                                                         cursorY:cursor.y
-                                                  cursorVisible:session.screen.immutableState.cursorVisible];
+                                                  cursorVisible:cursorVisible];
+}
+
+- (NSDictionary *)tideyRecentOutputSnapshotForSession:(PTYSession *)session {
+    if (!session || session.isBrowserSession) {
+        return nil;
+    }
+    id<VT100GridReading> grid = [session.screen currentGrid];
+    if (!grid) {
+        return nil;
+    }
+    return [PseudoTerminal tideySnapshotForGrid:grid
+                                  cursorVisible:session.screen.immutableState.cursorVisible];
 }
 
 - (NSString *)tideyRecentOutputForSession:(PTYSession *)session {

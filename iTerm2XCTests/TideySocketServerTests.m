@@ -3,6 +3,7 @@
 #import "PseudoTerminal.h"
 #import "ScreenChar.h"
 #import "TideySocketServer.h"
+#import "VT100Grid.h"
 
 #include <sys/socket.h>
 #include <sys/un.h>
@@ -25,6 +26,8 @@
 @end
 
 @interface PseudoTerminal (TideyANSIGridTesting)
++ (NSDictionary *)tideySnapshotForGrid:(id<VT100GridReading>)grid
+                          cursorVisible:(BOOL)cursorVisible;
 + (NSDictionary *)tideySnapshotForScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
                                                  width:(NSInteger)width
                                                 height:(NSInteger)height
@@ -37,6 +40,26 @@
 @end
 
 @implementation PseudoTerminalTests
+
+- (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
+    VT100Grid *grid = [[[VT100Grid alloc] initWithSize:VT100GridSizeMake(2, 1)
+                                               delegate:nil] autorelease];
+    screen_char_t *cells = [grid screenCharsAtLineNumber:0];
+    cells[0].code = 'O';
+    cells[1].code = 'K';
+    grid.cursor = VT100GridCoordMake(1, 0);
+
+    NSDictionary *fromGrid = [PseudoTerminal tideySnapshotForGrid:grid cursorVisible:NO];
+    NSData *row = [NSData dataWithBytes:cells length:sizeof(screen_char_t) * 2];
+    NSDictionary *fromRows = [PseudoTerminal tideySnapshotForScreenCharacterRows:@[ row ]
+                                                                             width:2
+                                                                            height:1
+                                                                           cursorX:1
+                                                                           cursorY:0
+                                                                     cursorVisible:NO];
+
+    XCTAssertEqualObjects(fromGrid, fromRows);
+}
 
 - (void)testTideyANSIGridSnapshotPreservesForegroundAndTextStyles {
     screen_char_t cells[3] = { 0 };
