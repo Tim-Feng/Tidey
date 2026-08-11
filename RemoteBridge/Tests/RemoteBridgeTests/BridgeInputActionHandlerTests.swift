@@ -123,7 +123,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                       "a TUI command must execute in the terminal even for an app-server-backed Codex session")
     }
 
-    func testTUICommandSubmitRoutesOrdinaryTmuxEnterAfterSettleDelay() throws {
+    func testTUICommandSubmitRoutesOrdinaryTmuxEnterAfterCommandDelay() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
                                                                               workspaceID: "workspace-1",
@@ -151,7 +151,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(router.sentInputs.map(\.input), ["/status", "\r"])
         XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput])
         XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
-        XCTAssertEqual(delayRecorder.recordedDelays, [ordinaryTmuxChatSubmitEnterDelayNanoseconds])
+        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
     func testTUICommandSubmitFailsWhenEnterDispatchFails() throws {

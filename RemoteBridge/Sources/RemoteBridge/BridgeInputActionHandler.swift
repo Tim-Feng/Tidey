@@ -340,7 +340,8 @@ struct BridgeInputActionHandler {
         var forceMacSocketForRemainingSteps = false
         for (index, step) in vendor.submitMessagePlan(text: text).enumerated() {
             let effectiveDelay = Self.effectiveDelay(for: step,
-                                                     previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux)
+                                                     previousStepUsedOrdinaryTmux: previousStepUsedOrdinaryTmux,
+                                                     action: action)
             if index > 0 {
                 try sleep(effectiveDelay)
             }
@@ -434,8 +435,11 @@ struct BridgeInputActionHandler {
             .replacingOccurrences(of: "\n", with: "\\n")
     }
 
-    private static func effectiveDelay(for step: ChatSubmitStep, previousStepUsedOrdinaryTmux: Bool) -> UInt64 {
+    private static func effectiveDelay(for step: ChatSubmitStep,
+                                       previousStepUsedOrdinaryTmux: Bool,
+                                       action: String) -> UInt64 {
         guard previousStepUsedOrdinaryTmux,
+              action == "chat_submit",
               step.role == .submitEnter else {
             return step.delayNanoseconds
         }
