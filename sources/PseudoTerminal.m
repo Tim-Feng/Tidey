@@ -3598,26 +3598,32 @@ ITERM_WEAKLY_REFERENCEABLE
     return YES;
 }
 
-- (NSDictionary *)tideyRecentOutputSnapshotForSession:(PTYSession *)session {
-    if (!session || session.isBrowserSession) {
++ (NSDictionary *)tideySnapshotForScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
+                                                 width:(NSInteger)width
+                                                height:(NSInteger)height
+                                               cursorX:(NSInteger)cursorX
+                                               cursorY:(NSInteger)cursorY
+                                         cursorVisible:(BOOL)cursorVisible {
+    if (width <= 0 || height <= 0 || screenCharacterRows.count != height) {
         return nil;
     }
-    id<VT100GridReading> grid = [session.screen currentGrid];
-    if (!grid) {
-        return nil;
-    }
-    const VT100GridSize size = [grid size];
-    const int width = size.width;
-    const int height = size.height;
-    const VT100GridCoord cursor = [grid cursor];
-    const int cursorX = MAX(0, cursor.x);
-    const int cursorY = MAX(0, MIN(height - 1, cursor.y));
 
-    NSMutableArray<NSString *> *rows = [NSMutableArray arrayWithCapacity:height];
-    for (int y = 0; y < height; y++) {
-        const screen_char_t *line = [grid immutableScreenCharsAtLineNumber:y];
-        NSMutableString *row = [NSMutableString stringWithCapacity:width];
-        for (int x = 0; x < width; x++) {
+    const NSInteger boundedCursorX = MAX(0, cursorX);
+    const NSInteger boundedCursorY = MAX(0, MIN(height - 1, cursorY));
+    NSMutableArray<NSString *> *plainRows = [NSMutableArray arrayWithCapacity:height];
+    NSMutableArray<NSString *> *ansiRows = [NSMutableArray arrayWithCapacity:height];
+
+    for (NSInteger y = 0; y < height; y++) {
+        NSData *lineData = screenCharacterRows[y];
+        if (![lineData isKindOfClass:[NSData class]] || lineData.length < sizeof(screen_char_t) * width) {
+            return nil;
+        }
+        const screen_char_t *line = lineData.bytes;
+        NSMutableString *plainRow = [NSMutableString stringWithCapacity:width];
+        NSMutableArray<NSString *> *cellStrings = [NSMutableArray arrayWithCapacity:width];
+        NSMutableArray<NSString *> *cellSGRCodes = [NSMutableArray arrayWithCapacity:width];
+
+        for (NSInteger x = 0; x < width; x++) {
             const screen_char_t cell = line[x];
             if (ScreenCharIsDWC_RIGHT(cell) || ScreenCharIsDWC_SKIP(cell)) {
                 continue;
@@ -3648,32 +3654,94 @@ ITERM_WEAKLY_REFERENCEABLE
                 }
             }
 
-            if (cellString.length > 0) {
-                [row appendString:cellString];
+            if (cellString.length == 0) {
+                continue;
             }
+            [plainRow appendString:cellString];
+            [cellStrings addObject:cellString];
+            NSOrderedSet<NSString *> *codes = [VT100Terminal sgrCodesForCharacter:cell externalAttributes:nil];
+            [cellSGRCodes addObject:[codes.array componentsJoinedByString:@";"]];
         }
 
-        NSInteger trimmedLength = row.length;
-        const NSInteger minimumLength = (y == cursorY ? MIN((NSInteger)cursorX, row.length) : 0);
-        while (trimmedLength > minimumLength && [row characterAtIndex:trimmedLength - 1] == ' ') {
+        NSInteger trimmedLength = plainRow.length;
+        const NSInteger minimumLength = (y == boundedCursorY ? MIN(boundedCursorX, (NSInteger)plainRow.length) : 0);
+        while (trimmedLength > minimumLength && [plainRow characterAtIndex:trimmedLength - 1] == ' ') {
             trimmedLength--;
         }
-        if (trimmedLength < row.length) {
-            [row deleteCharactersInRange:NSMakeRange(trimmedLength, row.length - trimmedLength)];
+        if (trimmedLength < plainRow.length) {
+            [plainRow deleteCharactersInRange:NSMakeRange(trimmedLength, plainRow.length - trimmedLength)];
         }
-        [rows addObject:row];
+        [plainRows addObject:plainRow];
+
+        NSMutableString *ansiRow = [NSMutableString string];
+        NSString *activeSGRCodes = nil;
+        NSInteger emittedLength = 0;
+        for (NSInteger index = 0; index < (NSInteger)cellStrings.count && emittedLength < trimmedLength; index++) {
+            NSString *cellString = cellStrings[index];
+            const NSInteger remainingLength = trimmedLength - emittedLength;
+            NSString *renderedString = cellString;
+            if ((NSInteger)renderedString.length > remainingLength) {
+                renderedString = [renderedString substringToIndex:remainingLength];
+            }
+
+            NSString *sgrCodes = cellSGRCodes[index];
+            if (![activeSGRCodes isEqualToString:sgrCodes]) {
+                if (activeSGRCodes != nil || ![sgrCodes isEqualToString:@"0"]) {
+                    [ansiRow appendFormat:@"\033[%@m", sgrCodes];
+                }
+                activeSGRCodes = sgrCodes;
+            }
+            [ansiRow appendString:renderedString];
+            emittedLength += renderedString.length;
+        }
+        if (activeSGRCodes != nil && ![activeSGRCodes isEqualToString:@"0"]) {
+            [ansiRow appendString:@"\033[0m"];
+        }
+        [ansiRows addObject:ansiRow];
     }
 
-    while (rows.count > cursorY + 1 && rows.lastObject.length == 0) {
-        [rows removeLastObject];
+    while (plainRows.count > boundedCursorY + 1 && plainRows.lastObject.length == 0) {
+        [plainRows removeLastObject];
     }
 
+    NSString *ansiCapture = [ansiRows componentsJoinedByString:@"\r\n"];
+    NSString *base64Capture = [[ansiCapture dataUsingEncoding:NSUTF8StringEncoding]
+        base64EncodedStringWithOptions:0];
     return @{
-        @"output": [rows componentsJoinedByString:@"\n"],
-        @"cursor_row": @(cursorY),
-        @"cursor_col": @(cursorX),
-        @"cursor_visible": @(session.screen.immutableState.cursorVisible),
+        @"output": [plainRows componentsJoinedByString:@"\n"],
+        @"cursor_row": @(boundedCursorY),
+        @"cursor_col": @(boundedCursorX),
+        @"cursor_visible": @(cursorVisible),
+        @"terminal_grid_version": @1,
+        @"ansi_active_capture_base64": base64Capture,
+        @"cols": @(width),
+        @"rows": @(height),
     };
+}
+
+- (NSDictionary *)tideyRecentOutputSnapshotForSession:(PTYSession *)session {
+    if (!session || session.isBrowserSession) {
+        return nil;
+    }
+    id<VT100GridReading> grid = [session.screen currentGrid];
+    if (!grid) {
+        return nil;
+    }
+    const VT100GridSize size = [grid size];
+    const int width = size.width;
+    const int height = size.height;
+    const VT100GridCoord cursor = [grid cursor];
+    NSMutableArray<NSData *> *screenCharacterRows = [NSMutableArray arrayWithCapacity:height];
+    for (int y = 0; y < height; y++) {
+        const screen_char_t *line = [grid immutableScreenCharsAtLineNumber:y];
+        [screenCharacterRows addObject:[NSData dataWithBytes:line length:sizeof(screen_char_t) * width]];
+    }
+    return [PseudoTerminal tideySnapshotForScreenCharacterRows:screenCharacterRows
+                                                          width:width
+                                                         height:height
+                                                        cursorX:cursor.x
+                                                        cursorY:cursor.y
+                                                  cursorVisible:session.screen.immutableState.cursorVisible];
 }
 
 - (NSString *)tideyRecentOutputForSession:(PTYSession *)session {

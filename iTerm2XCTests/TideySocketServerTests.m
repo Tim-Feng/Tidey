@@ -1,5 +1,7 @@
 #import <XCTest/XCTest.h>
 
+#import "PseudoTerminal.h"
+#import "ScreenChar.h"
 #import "TideySocketServer.h"
 
 #include <sys/socket.h>
@@ -20,6 +22,71 @@
 - (NSDictionary *)trimmedRecentOutputSnapshot:(NSDictionary *)snapshot
                                      maxLines:(NSInteger)maxLines
                                      maxChars:(NSInteger)maxChars;
+@end
+
+@interface PseudoTerminal (TideyANSIGridTesting)
++ (NSDictionary *)tideySnapshotForScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
+                                                 width:(NSInteger)width
+                                                height:(NSInteger)height
+                                               cursorX:(NSInteger)cursorX
+                                               cursorY:(NSInteger)cursorY
+                                         cursorVisible:(BOOL)cursorVisible;
+@end
+
+@interface PseudoTerminalTests : XCTestCase
+@end
+
+@implementation PseudoTerminalTests
+
+- (void)testTideyANSIGridSnapshotPreservesForegroundAndTextStyles {
+    screen_char_t cells[3] = { 0 };
+    cells[0].code = 'A';
+    cells[0].foregroundColorMode = ColorModeNormal;
+    cells[0].foregroundColor = kiTermScreenCharAnsiColorCyan;
+    cells[0].bold = 1;
+
+    cells[1].code = 'B';
+    cells[1].foregroundColorMode = ColorModeAlternate;
+    cells[1].foregroundColor = ALTSEM_DEFAULT;
+    cells[1].backgroundColorMode = ColorModeAlternate;
+    cells[1].backgroundColor = ALTSEM_DEFAULT;
+    cells[1].faint = 1;
+    cells[1].italic = 1;
+    cells[1].underline = 1;
+    cells[1].inverse = 1;
+
+    cells[2].code = 'C';
+    cells[2].foregroundColorMode = ColorModeAlternate;
+    cells[2].foregroundColor = ALTSEM_DEFAULT;
+    cells[2].backgroundColorMode = ColorModeNormal;
+    cells[2].backgroundColor = kiTermScreenCharAnsiColorGreen;
+    cells[2].blink = 1;
+    cells[2].invisible = 1;
+    cells[2].strikethrough = 1;
+
+    NSData *row = [NSData dataWithBytes:cells length:sizeof(cells)];
+    NSDictionary *snapshot = [PseudoTerminal tideySnapshotForScreenCharacterRows:@[ row ]
+                                                                             width:3
+                                                                            height:1
+                                                                           cursorX:2
+                                                                           cursorY:0
+                                                                     cursorVisible:NO];
+
+    XCTAssertEqualObjects(snapshot[@"output"], @"ABC");
+    XCTAssertEqualObjects(snapshot[@"terminal_grid_version"], @1);
+    XCTAssertEqualObjects(snapshot[@"cols"], @3);
+    XCTAssertEqualObjects(snapshot[@"rows"], @1);
+    XCTAssertEqualObjects(snapshot[@"cursor_row"], @0);
+    XCTAssertEqualObjects(snapshot[@"cursor_col"], @2);
+    XCTAssertEqualObjects(snapshot[@"cursor_visible"], @NO);
+
+    NSData *captureData = [[NSData alloc] initWithBase64EncodedString:snapshot[@"ansi_active_capture_base64"]
+                                                              options:0];
+    NSString *capture = [[NSString alloc] initWithData:captureData encoding:NSUTF8StringEncoding];
+    XCTAssertEqualObjects(capture,
+                          @"\033[0;36;1mA\033[0;2;3;4;7mB\033[0;42;5;8;9mC\033[0m");
+}
+
 @end
 
 @interface TideySocketServerTests : XCTestCase
