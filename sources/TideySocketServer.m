@@ -766,13 +766,19 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                 return;
             }
             NSDictionary *trimmed = [self trimmedRecentOutputSnapshot:snapshot maxLines:maxLines maxChars:maxChars];
+            NSMutableDictionary *result = [@{ @"output": trimmed[@"output"] ?: @"",
+                                               @"cursor_row": trimmed[@"cursor_row"] ?: @0,
+                                               @"cursor_col": trimmed[@"cursor_col"] ?: @0,
+                                               @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
+                                               @"panel_id": panelID,
+                                               @"workspace_id": panelSummary[@"workspace_id"] ?: @"" } mutableCopy];
+            for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ]) {
+                if (trimmed[key]) {
+                    result[key] = trimmed[key];
+                }
+            }
             [self sendSuccessResponseForRequestID:requestID
-                                           result:@{ @"output": trimmed[@"output"] ?: @"",
-                                                     @"cursor_row": trimmed[@"cursor_row"] ?: @0,
-                                                     @"cursor_col": trimmed[@"cursor_col"] ?: @0,
-                                                     @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
-                                                     @"panel_id": panelID,
-                                                     @"workspace_id": panelSummary[@"workspace_id"] ?: @"" }
+                                           result:result
                                       onConnection:connection];
             return;
         }
@@ -1116,12 +1122,18 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
             continue;
         }
         NSDictionary *trimmed = [self trimmedRecentOutputSnapshot:snapshot maxLines:maxLines maxChars:maxChars];
+        NSMutableDictionary *result = [@{ @"output": trimmed[@"output"] ?: @"",
+                                           @"cursor_row": trimmed[@"cursor_row"] ?: @0,
+                                           @"cursor_col": trimmed[@"cursor_col"] ?: @0,
+                                           @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
+                                           @"workspace_id": workspaceID } mutableCopy];
+        for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ]) {
+            if (trimmed[key]) {
+                result[key] = trimmed[key];
+            }
+        }
         [self sendSuccessResponseForRequestID:requestID
-                                       result:@{ @"output": trimmed[@"output"] ?: @"",
-                                                 @"cursor_row": trimmed[@"cursor_row"] ?: @0,
-                                                 @"cursor_col": trimmed[@"cursor_col"] ?: @0,
-                                                 @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
-                                                 @"workspace_id": workspaceID }
+                                       result:result
                                   onConnection:connection];
         return;
     }
@@ -1153,6 +1165,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
     NSString *output = snapshot[@"output"] ?: @"";
     NSInteger cursorRow = [snapshot[@"cursor_row"] integerValue];
     NSInteger cursorCol = [snapshot[@"cursor_col"] integerValue];
+    BOOL didTrim = NO;
 
     NSArray<NSString *> *lineArray = [output componentsSeparatedByString:@"\n"];
     NSMutableArray<NSString *> *lines = [lineArray mutableCopy];
@@ -1160,6 +1173,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         NSInteger droppedLines = lines.count - maxLines;
         [lines removeObjectsInRange:NSMakeRange(0, droppedLines)];
         cursorRow = MAX(0, cursorRow - droppedLines);
+        didTrim = YES;
     }
 
     cursorRow = MIN(cursorRow, MAX((NSInteger)lines.count - 1, 0));
@@ -1177,6 +1191,7 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         NSInteger droppedChars = trimmed.length - maxChars;
         trimmed = [trimmed substringFromIndex:droppedChars];
         cursorOffset = MAX(0, cursorOffset - droppedChars);
+        didTrim = YES;
     }
 
     NSInteger derivedRow = 0;
@@ -1191,12 +1206,23 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         }
     }
 
-    return @{
+    NSMutableDictionary *result = [@{
         @"output": trimmed ?: @"",
         @"cursor_row": @(derivedRow),
         @"cursor_col": @(derivedCol),
         @"cursor_visible": snapshot[@"cursor_visible"] ?: @YES,
-    };
+    } mutableCopy];
+    NSArray<NSString *> *gridKeys = @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ];
+    BOOL hasCompleteGrid = !didTrim;
+    for (NSString *key in gridKeys) {
+        hasCompleteGrid = hasCompleteGrid && snapshot[key] != nil;
+    }
+    if (hasCompleteGrid) {
+        for (NSString *key in gridKeys) {
+            result[key] = snapshot[key];
+        }
+    }
+    return result;
 }
 
 + (NSString *)tideyTrimmedRecentOutput:(NSString *)output maxLines:(NSInteger)maxLines maxChars:(NSInteger)maxChars {
