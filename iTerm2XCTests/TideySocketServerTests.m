@@ -1,6 +1,7 @@
 #import <XCTest/XCTest.h>
 
 #import "PseudoTerminal.h"
+#import "PTYTextViewDataSource.h"
 #import "ScreenChar.h"
 #import "TideySocketServer.h"
 #import "VT100Grid.h"
@@ -28,6 +29,9 @@
 @interface PseudoTerminal (TideyANSIGridTesting)
 + (NSDictionary *)tideySnapshotForGrid:(id<VT100GridReading>)grid
                           cursorVisible:(BOOL)cursorVisible;
++ (NSDictionary *)tideyPresentedSnapshotForCurrentGrid:(id<VT100GridReading>)currentGrid
+                                          cursorVisible:(BOOL)cursorVisible
+                                      synchronizedState:(id<PTYTextViewSynchronousUpdateStateReading>)synchronizedState;
 + (NSDictionary *)tideySnapshotForScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
                                                  width:(NSInteger)width
                                                 height:(NSInteger)height
@@ -59,6 +63,38 @@
                                                                      cursorVisible:NO];
 
     XCTAssertEqualObjects(fromGrid, fromRows);
+}
+
+- (void)testTideySnapshotUsesSynchronizedVisibleGrid {
+    VT100Grid *currentGrid = [[[VT100Grid alloc] initWithSize:VT100GridSizeMake(1, 1)
+                                                      delegate:nil] autorelease];
+    [currentGrid screenCharsAtLineNumber:0][0].code = 'N';
+    currentGrid.cursor = VT100GridCoordMake(1, 0);
+
+    VT100Grid *visibleGrid = [[[VT100Grid alloc] initWithSize:VT100GridSizeMake(1, 1)
+                                                      delegate:nil] autorelease];
+    [visibleGrid screenCharsAtLineNumber:0][0].code = 'S';
+    visibleGrid.cursor = VT100GridCoordMake(0, 0);
+    PTYTextViewSynchronousUpdateState *synchronizedState =
+        [[[PTYTextViewSynchronousUpdateState alloc] init] autorelease];
+    synchronizedState.grid = visibleGrid;
+    synchronizedState.cursorVisible = NO;
+
+    NSDictionary *duringUpdate = [PseudoTerminal
+        tideyPresentedSnapshotForCurrentGrid:currentGrid
+                               cursorVisible:YES
+                           synchronizedState:synchronizedState];
+    XCTAssertEqualObjects(duringUpdate[@"output"], @"S");
+    XCTAssertEqualObjects(duringUpdate[@"cursor_col"], @0);
+    XCTAssertEqualObjects(duringUpdate[@"cursor_visible"], @NO);
+
+    NSDictionary *afterUpdate = [PseudoTerminal
+        tideyPresentedSnapshotForCurrentGrid:currentGrid
+                               cursorVisible:YES
+                           synchronizedState:nil];
+    XCTAssertEqualObjects(afterUpdate[@"output"], @"N");
+    XCTAssertEqualObjects(afterUpdate[@"cursor_col"], @1);
+    XCTAssertEqualObjects(afterUpdate[@"cursor_visible"], @YES);
 }
 
 - (void)testTideyANSIGridSnapshotPreservesForegroundAndTextStyles {

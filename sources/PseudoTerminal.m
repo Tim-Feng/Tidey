@@ -3741,6 +3741,17 @@ ITERM_WEAKLY_REFERENCEABLE
                                                   cursorVisible:cursorVisible];
 }
 
++ (NSDictionary *)tideyPresentedSnapshotForCurrentGrid:(id<VT100GridReading>)currentGrid
+                                          cursorVisible:(BOOL)cursorVisible
+                                      synchronizedState:(id<PTYTextViewSynchronousUpdateStateReading>)synchronizedState {
+    id<VT100GridReading> presentedGrid = synchronizedState.grid ?: currentGrid;
+    const BOOL presentedCursorVisible = synchronizedState
+        ? synchronizedState.cursorVisible
+        : cursorVisible;
+    return [PseudoTerminal tideySnapshotForGrid:presentedGrid
+                                  cursorVisible:presentedCursorVisible];
+}
+
 - (NSDictionary *)tideyRecentOutputSnapshotForSession:(PTYSession *)session {
     if (!session || session.isBrowserSession) {
         return nil;
@@ -3749,8 +3760,10 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!grid) {
         return nil;
     }
-    return [PseudoTerminal tideySnapshotForGrid:grid
-                                  cursorVisible:session.screen.immutableState.cursorVisible];
+    return [PseudoTerminal
+        tideyPresentedSnapshotForCurrentGrid:grid
+                               cursorVisible:session.screen.immutableState.cursorVisible
+                           synchronizedState:session.screen.temporaryDoubleBuffer.savedState];
 }
 
 - (NSString *)tideyRecentOutputForSession:(PTYSession *)session {
