@@ -88,7 +88,7 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertTrue(sender.sentRequests.isEmpty)
     }
 
-    func testTUICommandSubmitForCodexSplitsCommandAndEnterWithDelay() throws {
+    func testTUICommandSubmitForCodexUsesOneSocketInputContainingCommandAndEnter() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(
             session: ActiveAgentSessionSnapshot(vendor: "codex",
@@ -115,15 +115,14 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                                                         ]))
 
         XCTAssertEqual(response?.ok, true)
-        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
-        XCTAssertEqual(sender.sentRequests.first?.params?["input"]?.stringValue, "/status")
-        XCTAssertEqual(sender.sentRequests.last?.params?["key"]?.stringValue, "enter")
-        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input"])
+        XCTAssertEqual(sender.sentRequests.first?.params?["input"]?.stringValue, "/status\r")
+        XCTAssertTrue(delayRecorder.recordedDelays.isEmpty)
         XCTAssertTrue(appServerSubmitter.submissions.isEmpty,
                       "a TUI command must execute in the terminal even for an app-server-backed Codex session")
     }
 
-    func testTUICommandSubmitRoutesOrdinaryTmuxEnterAfterCommandDelay() throws {
+    func testTUICommandSubmitUsesOneTerminalInputContainingCommandAndEnter() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
                                                                               workspaceID: "workspace-1",
@@ -148,15 +147,15 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
-        XCTAssertEqual(router.sentInputs.map(\.input), ["/status", "\r"])
-        XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput])
-        XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
-        XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["/status\r"])
+        XCTAssertEqual(router.sentInputs.map(\.mode), [.rawTerminalInput])
+        XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true])
+        XCTAssertTrue(delayRecorder.recordedDelays.isEmpty)
     }
 
-    func testTUICommandSubmitFailsWhenEnterDispatchFails() throws {
+    func testTUICommandSubmitFailsWhenAtomicDispatchFails() throws {
         let sender = MockTideyRequestSender()
-        sender.failFromCallIndex = 1
+        sender.failFromCallIndex = 0
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "claude",
                                                                               workspaceID: "workspace-1",
                                                                               sessionID: "session-1",
@@ -177,7 +176,8 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, false)
         XCTAssertEqual(response?.error?.code, "SEND_FAILED")
-        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input"])
+        XCTAssertEqual(sender.sentRequests.first?.params?["input"]?.stringValue, "/context\r")
     }
 
     func testChatSubmitForClaudeSplitsMultilineTextAndEnterWithDelay() throws {
