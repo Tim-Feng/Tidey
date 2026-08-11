@@ -152,6 +152,10 @@
   - 要讓 selection 半透明需要改渲染管線，讓 selected path 保留 color 自身的 alpha
 - 非 live resize 不要切回 legacy renderer
   - sidebar toggle / panel switch flicker 很常是多切了一次 fallback renderer
+- Remote terminal 顏色的 authority 在 native grid，不在手機 palette
+  - `screen_char_t` 的 foreground/background、bold、faint 等屬性若先被 `get_recent_output` 壓成 `NSString`，client 端換 xterm palette 也不可能重建已丟失的 SGR
+  - 保留既有純文字欄位供舊 client 使用，彩色畫面另以版本化、完整 active-grid capture 傳送；只要欄位缺漏、row/cursor geometry 不符或 plain output 被 line/char limit 裁切，就整組省略並 fail closed 回純文字
+  - producer 應重用 terminal 自己的 SGR projector，不另寫顏色對照表；client theme 只決定 default foreground/background，明確 ANSI 色碼仍由 capture 決定
 - `MTKView.paused` 不會阻止外部明確送進來的 CALayer invalidation
   - `paused` 只控制 MTKView 自己的 draw loop；`setNeedsDisplay:YES` 仍會把 Metal view 與 scroll view 標成需要重畫，所以縮小視窗後仍可能持續消耗 CPU
   - 高頻 `requestRedraw` 在視窗縮小期間要保留 screen model 與 legacy-view 更新，只把 Metal／scroll-view invalidation 合併成 session-view 自己的一個 pending bit；視窗恢復可見後補畫一次
