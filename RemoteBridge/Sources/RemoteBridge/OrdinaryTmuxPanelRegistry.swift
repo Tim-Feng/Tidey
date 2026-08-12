@@ -449,6 +449,36 @@ struct OrdinaryTmuxPastePresentationGate {
     }
 }
 
+final class OrdinaryTmuxInputSubmissionStore: @unchecked Sendable {
+    private let queue = DispatchQueue(
+        label: "com.tidey.remote-bridge.ordinary-tmux-input-submission-store"
+    )
+    private var submissionIDByRouteKey = [String: String]()
+
+    func reserve(submissionID: String, routeKey: String) -> Bool {
+        queue.sync {
+            guard let currentSubmissionID = submissionIDByRouteKey[routeKey] else {
+                submissionIDByRouteKey[routeKey] = submissionID
+                return true
+            }
+            return currentSubmissionID == submissionID
+        }
+    }
+
+    func isCurrent(submissionID: String, routeKey: String) -> Bool {
+        queue.sync {
+            submissionIDByRouteKey[routeKey] == submissionID
+        }
+    }
+
+    func release(submissionID: String, routeKey: String) {
+        queue.sync {
+            guard submissionIDByRouteKey[routeKey] == submissionID else { return }
+            submissionIDByRouteKey.removeValue(forKey: routeKey)
+        }
+    }
+}
+
 struct OrdinaryTmuxCursorPosition: Equatable, Sendable {
     let row: Int
     let column: Int
@@ -518,12 +548,42 @@ protocol OrdinaryTmuxInputRouting: Sendable {
                    mode: OrdinaryTmuxInputMode,
                    allowAmbiguousPasteTimeout: Bool) throws -> Bool
     func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
+                   allowAmbiguousPasteTimeout: Bool,
+                   submissionID: String?) throws -> Bool
+    func waitForLastPastePresentation(toPanelID panelID: String,
+                                      submissionID: String) throws -> Bool
+    func cancelInputSubmission(toPanelID panelID: String,
+                               submissionID: String)
 }
 
 extension OrdinaryTmuxInputRouting {
     func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool {
         false
     }
+
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
+                   allowAmbiguousPasteTimeout: Bool,
+                   submissionID: String?) throws -> Bool {
+        try sendInput(
+            input,
+            toPanelID: panelID,
+            mode: mode,
+            allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout
+        )
+    }
+
+    func waitForLastPastePresentation(toPanelID panelID: String,
+                                      submissionID: String) throws -> Bool {
+        try waitForLastPastePresentation(toPanelID: panelID)
+    }
+
+    func cancelInputSubmission(toPanelID panelID: String,
+                               submissionID: String) {}
 
     func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool {
         try sendInput(input,
@@ -555,22 +615,27 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
     private let routeResolver: OrdinaryTmuxRouteResolving
     private let adapter: OrdinaryTmuxCLIAdapter
     private let pastePresentationGate: OrdinaryTmuxPastePresentationGate
+    private let inputSubmissionStore: OrdinaryTmuxInputSubmissionStore
     private let lastPastePaneStore = OrdinaryTmuxLastPastePaneStore()
 
     init(registry: OrdinaryTmuxPanelRegistry,
          adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter(),
-         pastePresentationGate: OrdinaryTmuxPastePresentationGate = .live) {
+         pastePresentationGate: OrdinaryTmuxPastePresentationGate = .live,
+         inputSubmissionStore: OrdinaryTmuxInputSubmissionStore = OrdinaryTmuxInputSubmissionStore()) {
         self.routeResolver = OrdinaryTmuxRouteResolver(registry: registry, adapter: adapter)
         self.adapter = adapter
         self.pastePresentationGate = pastePresentationGate
+        self.inputSubmissionStore = inputSubmissionStore
     }
 
     init(routeResolver: OrdinaryTmuxRouteResolving,
          adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter(),
-         pastePresentationGate: OrdinaryTmuxPastePresentationGate = .live) {
+         pastePresentationGate: OrdinaryTmuxPastePresentationGate = .live,
+         inputSubmissionStore: OrdinaryTmuxInputSubmissionStore = OrdinaryTmuxInputSubmissionStore()) {
         self.routeResolver = routeResolver
         self.adapter = adapter
         self.pastePresentationGate = pastePresentationGate
+        self.inputSubmissionStore = inputSubmissionStore
     }
 
     func sendInput(_ input: String,

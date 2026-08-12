@@ -78,10 +78,15 @@ private final class OrdinaryTmuxPaneIdentityReconciliationBatch: @unchecked Send
 final class OrdinaryTmuxProjectionContext: @unchecked Sendable {
     let registry: OrdinaryTmuxPanelRegistry
     let projector: OrdinaryTmuxPanelProjector
+    let inputSubmissionStore: OrdinaryTmuxInputSubmissionStore
 
-    init(registry: OrdinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry()) {
+    init(
+        registry: OrdinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry(),
+        inputSubmissionStore: OrdinaryTmuxInputSubmissionStore = OrdinaryTmuxInputSubmissionStore()
+    ) {
         self.registry = registry
         self.projector = OrdinaryTmuxPanelProjector(registry: registry)
+        self.inputSubmissionStore = inputSubmissionStore
     }
 }
 

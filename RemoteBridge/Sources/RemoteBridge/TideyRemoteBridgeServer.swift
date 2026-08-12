@@ -768,7 +768,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.inputActionHandler = BridgeInputActionHandler(socketSender: socketClient,
                                                            sessionResolver: registryMonitor,
                                                            codexAppServerChatSubmitter: codexApprovalSubmitter as? CodexAppServerChatSubmitting,
-                                                           ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(routeResolver: routeResolver),
+                                                           ordinaryTmuxInputRouter: OrdinaryTmuxInputRouter(
+                                                            routeResolver: routeResolver,
+                                                            inputSubmissionStore: ordinaryTmuxProjectionContext.inputSubmissionStore
+                                                           ),
                                                            chatSubmitEchoRegistry: registryMonitor.chatSubmitEchoRegistry)
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))

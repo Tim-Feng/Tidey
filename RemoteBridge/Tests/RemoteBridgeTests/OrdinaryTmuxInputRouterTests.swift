@@ -55,6 +55,20 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
     }
 
+    func testInputSubmissionStoreReservesOneOwnerPerRoute() {
+        let store = OrdinaryTmuxInputSubmissionStore()
+
+        XCTAssertTrue(store.reserve(submissionID: "submission-a", routeKey: "route-1"))
+        XCTAssertTrue(store.isCurrent(submissionID: "submission-a", routeKey: "route-1"))
+        XCTAssertFalse(store.reserve(submissionID: "submission-b", routeKey: "route-1"))
+        XCTAssertTrue(store.reserve(submissionID: "submission-b", routeKey: "route-2"))
+
+        store.release(submissionID: "submission-a", routeKey: "route-1")
+
+        XCTAssertFalse(store.isCurrent(submissionID: "submission-a", routeKey: "route-1"))
+        XCTAssertTrue(store.reserve(submissionID: "submission-b", routeKey: "route-1"))
+    }
+
     func testPastePresentationDecisionRequiresExpectedTextOnCurrentCursorRow() {
         XCTAssertFalse(
             OrdinaryTmuxPastePresentationDecision.isReady(
