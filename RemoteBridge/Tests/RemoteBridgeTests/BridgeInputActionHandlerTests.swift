@@ -123,13 +123,16 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                       "a TUI command must execute in the terminal even for an app-server-backed Codex session")
     }
 
-    func testTUICommandSubmitRoutesOrdinaryTmuxStandaloneEnterAfterDelay() throws {
+    func testTUICommandSubmitWaitsForOrdinaryTmuxPastePresentationBeforeEnter() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
                                                                               workspaceID: "workspace-1",
                                                                               sessionID: "session-1",
                                                                               panelID: "ordinary-panel"))
-        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: ["ordinary-panel"])
+        let router = MockOrdinaryTmuxInputRouter(
+            routedPanelIDs: ["ordinary-panel"],
+            pastePresentationResults: [true]
+        )
         let delayRecorder = DelayRecorder()
         let handler = BridgeInputActionHandler(socketSender: sender,
                                                sessionResolver: resolver,
@@ -148,10 +151,52 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 
         XCTAssertEqual(response?.ok, true)
         XCTAssertTrue(sender.sentRequests.isEmpty)
+        XCTAssertEqual(router.presentationWaitPanelIDs, ["ordinary-panel"])
         XCTAssertEqual(router.sentInputs.map(\.input), ["/status", "\r"])
         XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput])
         XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
+    }
+
+    func testTUICommandSubmitWithoutPastePresentationProofSendsNoEnter() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(
+            session: ActiveAgentSessionSnapshot(
+                vendor: "claude",
+                workspaceID: "workspace-1",
+                sessionID: "session-1",
+                panelID: "ordinary-panel"
+            )
+        )
+        let router = MockOrdinaryTmuxInputRouter(
+            routedPanelIDs: ["ordinary-panel"],
+            pastePresentationResults: [false]
+        )
+        let handler = BridgeInputActionHandler(
+            socketSender: sender,
+            sessionResolver: resolver,
+            ordinaryTmuxInputRouter: router,
+            sleep: { _ in }
+        )
+
+        XCTAssertThrowsError(
+            try handler.handle(
+                BridgeRequest(
+                    id: "request-1",
+                    action: "tui_command_submit",
+                    params: [
+                        "workspace_id": .string("workspace-1"),
+                        "panel_id": .string("ordinary-panel"),
+                        "command": .string("/model"),
+                        "session_id": .string("session-1"),
+                        "vendor": .string("claude"),
+                    ]
+                )
+            )
+        )
+        XCTAssertEqual(router.presentationWaitPanelIDs, ["ordinary-panel"])
+        XCTAssertEqual(router.sentInputs.map(\.input), ["/model"])
+        XCTAssertTrue(sender.sentRequests.isEmpty)
     }
 
     func testTUICommandSubmitFailsWhenStandaloneEnterDispatchFails() throws {
@@ -955,11 +1000,16 @@ private func chatSubmitParams(message: String,
 private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unchecked Sendable {
     private let routedPanelIDs: Set<String>
     private let errorsByPanelID: [String: Error]
+    private var pastePresentationResults: [Bool]
     private(set) var sentInputs = [(panelID: String, input: String, mode: OrdinaryTmuxInputMode, allowAmbiguousPasteTimeout: Bool)]()
+    private(set) var presentationWaitPanelIDs = [String]()
 
-    init(routedPanelIDs: Set<String>, errorsByPanelID: [String: Error] = [:]) {
+    init(routedPanelIDs: Set<String>,
+         errorsByPanelID: [String: Error] = [:],
+         pastePresentationResults: [Bool] = []) {
         self.routedPanelIDs = routedPanelIDs
         self.errorsByPanelID = errorsByPanelID
+        self.pastePresentationResults = pastePresentationResults
     }
 
     func sendInput(_ input: String,
@@ -974,6 +1024,12 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
             throw error
         }
         return true
+    }
+
+    func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool {
+        presentationWaitPanelIDs.append(panelID)
+        guard pastePresentationResults.isEmpty == false else { return false }
+        return pastePresentationResults.removeFirst()
     }
 }
 

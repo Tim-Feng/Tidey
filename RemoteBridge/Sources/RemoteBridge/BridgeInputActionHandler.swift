@@ -345,6 +345,18 @@ struct BridgeInputActionHandler {
             if index > 0 {
                 try sleep(effectiveDelay)
             }
+            if action == "tui_command_submit",
+               step.role == .submitEnter,
+               previousStepUsedOrdinaryTmux {
+                guard let ordinaryTmuxInputRouter,
+                      try ordinaryTmuxInputRouter.waitForLastPastePresentation(
+                        toPanelID: panelID
+                      ) else {
+                    throw BridgeInternalError.panelContextUnavailable(
+                        "The pasted terminal command was not presented at the active pane cursor; Enter was not sent."
+                    )
+                }
+            }
             BridgeLogger.input.info("step action=\(action, privacy: .public) request_id=\(request.id, privacy: .public) vendor=\(vendor.id, privacy: .public) step_index=\(index) delay_ns=\(effectiveDelay) length=\(step.input.count) has_cr=\(step.input.contains("\r")) has_lf=\(step.input.contains("\n")) tail=\(summarizedTail(step.input), privacy: .public)")
             let routeDecision: OrdinaryTmuxRouteDecision
             if forceMacSocketForRemainingSteps {
