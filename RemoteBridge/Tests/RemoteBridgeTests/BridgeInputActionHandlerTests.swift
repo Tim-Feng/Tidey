@@ -153,6 +153,12 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertTrue(sender.sentRequests.isEmpty)
         XCTAssertEqual(router.presentationWaitPanelIDs, ["ordinary-panel"])
         XCTAssertEqual(router.sentInputs.map(\.input), ["/status", "\r"])
+        XCTAssertEqual(Set(router.sentInputs.compactMap(\.submissionID)).count, 1)
+        XCTAssertNotNil(router.sentInputs.first?.submissionID)
+        XCTAssertEqual(
+            router.presentationWaitSubmissionIDs,
+            [router.sentInputs.first?.submissionID]
+        )
         XCTAssertEqual(router.sentInputs.map(\.mode), [.literalChatText, .rawTerminalInput])
         XCTAssertEqual(router.sentInputs.map(\.allowAmbiguousPasteTimeout), [true, true])
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
@@ -1001,8 +1007,9 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
     private let routedPanelIDs: Set<String>
     private let errorsByPanelID: [String: Error]
     private var pastePresentationResults: [Bool]
-    private(set) var sentInputs = [(panelID: String, input: String, mode: OrdinaryTmuxInputMode, allowAmbiguousPasteTimeout: Bool)]()
+    private(set) var sentInputs = [(panelID: String, input: String, mode: OrdinaryTmuxInputMode, allowAmbiguousPasteTimeout: Bool, submissionID: String?)]()
     private(set) var presentationWaitPanelIDs = [String]()
+    private(set) var presentationWaitSubmissionIDs = [String?]()
 
     init(routedPanelIDs: Set<String>,
          errorsByPanelID: [String: Error] = [:],
@@ -1016,10 +1023,24 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
                    toPanelID panelID: String,
                    mode: OrdinaryTmuxInputMode,
                    allowAmbiguousPasteTimeout: Bool) throws -> Bool {
+        try sendInput(
+            input,
+            toPanelID: panelID,
+            mode: mode,
+            allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout,
+            submissionID: nil
+        )
+    }
+
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
+                   allowAmbiguousPasteTimeout: Bool,
+                   submissionID: String?) throws -> Bool {
         guard routedPanelIDs.contains(panelID) else {
             return false
         }
-        sentInputs.append((panelID, input, mode, allowAmbiguousPasteTimeout))
+        sentInputs.append((panelID, input, mode, allowAmbiguousPasteTimeout, submissionID))
         if let error = errorsByPanelID[panelID] {
             throw error
         }
@@ -1028,6 +1049,15 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
 
     func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool {
         presentationWaitPanelIDs.append(panelID)
+        presentationWaitSubmissionIDs.append(nil)
+        guard pastePresentationResults.isEmpty == false else { return false }
+        return pastePresentationResults.removeFirst()
+    }
+
+    func waitForLastPastePresentation(toPanelID panelID: String,
+                                      submissionID: String) throws -> Bool {
+        presentationWaitPanelIDs.append(panelID)
+        presentationWaitSubmissionIDs.append(submissionID)
         guard pastePresentationResults.isEmpty == false else { return false }
         return pastePresentationResults.removeFirst()
     }

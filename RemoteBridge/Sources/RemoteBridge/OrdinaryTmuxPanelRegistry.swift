@@ -471,10 +471,24 @@ final class OrdinaryTmuxInputSubmissionStore: @unchecked Sendable {
         }
     }
 
+    func isReserved(routeKey: String) -> Bool {
+        queue.sync {
+            submissionIDByRouteKey[routeKey] != nil
+        }
+    }
+
     func release(submissionID: String, routeKey: String) {
         queue.sync {
             guard submissionIDByRouteKey[routeKey] == submissionID else { return }
             submissionIDByRouteKey.removeValue(forKey: routeKey)
+        }
+    }
+
+    func release(submissionID: String) {
+        queue.sync {
+            submissionIDByRouteKey = submissionIDByRouteKey.filter {
+                $0.value != submissionID
+            }
         }
     }
 }
@@ -642,22 +656,96 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
                    toPanelID panelID: String,
                    mode: OrdinaryTmuxInputMode = .rawTerminalInput,
                    allowAmbiguousPasteTimeout: Bool = false) throws -> Bool {
+        try sendInputImpl(
+            input,
+            toPanelID: panelID,
+            mode: mode,
+            allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout,
+            submissionID: nil
+        )
+    }
+
+    func sendInput(_ input: String,
+                   toPanelID panelID: String,
+                   mode: OrdinaryTmuxInputMode,
+                   allowAmbiguousPasteTimeout: Bool,
+                   submissionID: String?) throws -> Bool {
+        try sendInputImpl(
+            input,
+            toPanelID: panelID,
+            mode: mode,
+            allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout,
+            submissionID: submissionID
+        )
+    }
+
+    private func sendInputImpl(
+        _ input: String,
+        toPanelID panelID: String,
+        mode: OrdinaryTmuxInputMode,
+        allowAmbiguousPasteTimeout: Bool,
+        submissionID: String?
+    ) throws -> Bool {
         guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil) else {
             return false
         }
         let routeKey = Self.lastPastePaneKey(for: route)
+        var didReserveSubmission = false
+        if let submissionID {
+            if mode == .literalChatText {
+                guard inputSubmissionStore.reserve(
+                    submissionID: submissionID,
+                    routeKey: routeKey
+                ) else {
+                    throw BridgeInternalError.conflict(
+                        "Another terminal submission is already pending for this panel."
+                    )
+                }
+                didReserveSubmission = true
+            } else if inputSubmissionStore.isCurrent(
+                submissionID: submissionID,
+                routeKey: routeKey
+            ) == false {
+                throw BridgeInternalError.conflict(
+                    "The terminal submission no longer owns this panel."
+                )
+            }
+        } else if inputSubmissionStore.isReserved(routeKey: routeKey) {
+            throw BridgeInternalError.conflict(
+                "Another terminal submission is already pending for this panel."
+            )
+        }
         let fallbackEnterPaneID = lastPastePaneStore.paneID(for: routeKey)
-        let delivery = try adapter.sendInput(input,
-                                             route: route,
-                                             mode: mode,
-                                             fallbackEnterPaneID: fallbackEnterPaneID,
-                                             allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout)
+        let delivery: OrdinaryTmuxInputDelivery
+        do {
+            delivery = try adapter.sendInput(
+                input,
+                route: route,
+                mode: mode,
+                fallbackEnterPaneID: fallbackEnterPaneID,
+                allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout
+            )
+        } catch {
+            if didReserveSubmission, let submissionID {
+                inputSubmissionStore.release(
+                    submissionID: submissionID,
+                    routeKey: routeKey
+                )
+            }
+            throw error
+        }
         lastPastePaneStore.record(
             delivery: delivery,
             route: route,
             routeKey: routeKey,
             pastedText: input
         )
+        if delivery.sentEnter, let submissionID {
+            inputSubmissionStore.release(
+                submissionID: submissionID,
+                routeKey: routeKey
+            )
+        }
         return true
     }
 
@@ -675,6 +763,59 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
                 paneID: pending.paneID
             )
         }
+    }
+
+    func waitForLastPastePresentation(toPanelID panelID: String,
+                                      submissionID: String) throws -> Bool {
+        guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil) else {
+            inputSubmissionStore.release(submissionID: submissionID)
+            return false
+        }
+        let routeKey = Self.lastPastePaneKey(for: route)
+        guard inputSubmissionStore.isCurrent(
+            submissionID: submissionID,
+            routeKey: routeKey
+        ), let pending = lastPastePaneStore.pending(for: routeKey) else {
+            inputSubmissionStore.release(submissionID: submissionID)
+            return false
+        }
+        do {
+            let isReady = try pastePresentationGate.waitUntilReady {
+                guard inputSubmissionStore.isCurrent(
+                    submissionID: submissionID,
+                    routeKey: routeKey
+                ) else {
+                    return false
+                }
+                let didPresent = try adapter.isPastedTextPresented(
+                    pending.text,
+                    exactRoute: pending.route,
+                    paneID: pending.paneID
+                )
+                return didPresent && inputSubmissionStore.isCurrent(
+                    submissionID: submissionID,
+                    routeKey: routeKey
+                )
+            }
+            if isReady == false {
+                inputSubmissionStore.release(
+                    submissionID: submissionID,
+                    routeKey: routeKey
+                )
+            }
+            return isReady
+        } catch {
+            inputSubmissionStore.release(
+                submissionID: submissionID,
+                routeKey: routeKey
+            )
+            throw error
+        }
+    }
+
+    func cancelInputSubmission(toPanelID panelID: String,
+                               submissionID: String) {
+        inputSubmissionStore.release(submissionID: submissionID)
     }
 
     private static func lastPastePaneKey(for route: OrdinaryTmuxPanelRoute) -> String {

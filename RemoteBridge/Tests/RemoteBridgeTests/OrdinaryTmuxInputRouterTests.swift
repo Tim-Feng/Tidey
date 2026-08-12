@@ -69,6 +69,93 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertTrue(store.reserve(submissionID: "submission-b", routeKey: "route-1"))
     }
 
+    func testSharedSubmissionStoreRejectsSecondRouterBeforeItPastesToTheSameRoute() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: route.workspaceID, routes: [route])
+        let paneInventory = "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n"
+        let state = RunnerState(scriptedResponses: [
+            RunnerState.key(
+                socket: route.socket,
+                arguments: listPanesArguments(windowID: route.windowID)
+            ): [.success(paneInventory), .success(paneInventory)],
+            RunnerState.key(
+                socket: route.socket,
+                arguments: ["load-buffer", "-b", "ignored", "-"],
+                stdin: "/model"
+            ): [.success(""), .success("")],
+            RunnerState.key(
+                socket: route.socket,
+                arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]
+            ): [.success(""), .success("")],
+            RunnerState.key(
+                socket: route.socket,
+                arguments: ["send-keys", "-t", "%21", "Enter"]
+            ): [.success("")],
+        ])
+        state.failOnUnscripted = ["load-buffer", "paste-buffer", "send-keys"]
+        let sharedStore = OrdinaryTmuxInputSubmissionStore()
+        let sharedAdapter = adapter(state: state)
+        let firstRouter = OrdinaryTmuxInputRouter(
+            registry: registry,
+            adapter: sharedAdapter,
+            inputSubmissionStore: sharedStore
+        )
+        let secondRouter = OrdinaryTmuxInputRouter(
+            registry: registry,
+            adapter: sharedAdapter,
+            inputSubmissionStore: sharedStore
+        )
+
+        XCTAssertTrue(
+            try firstRouter.sendInput(
+                "/model",
+                toPanelID: route.panelID,
+                mode: .literalChatText,
+                allowAmbiguousPasteTimeout: true,
+                submissionID: "submission-a"
+            )
+        )
+        XCTAssertThrowsError(
+            try secondRouter.sendInput(
+                "/model",
+                toPanelID: route.panelID,
+                mode: .literalChatText,
+                allowAmbiguousPasteTimeout: true,
+                submissionID: "submission-b"
+            )
+        ) { error in
+            guard case BridgeInternalError.conflict = error else {
+                return XCTFail("expected conflict, got \(error)")
+            }
+        }
+        XCTAssertThrowsError(
+            try secondRouter.sendInput(
+                "\u{1b}",
+                toPanelID: route.panelID,
+                mode: .rawTerminalInput,
+                allowAmbiguousPasteTimeout: false
+            )
+        ) { error in
+            guard case BridgeInternalError.conflict = error else {
+                return XCTFail("expected tokenless input conflict, got \(error)")
+            }
+        }
+
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "load-buffer" }.count, 1)
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "paste-buffer" }.count, 1)
+        XCTAssertTrue(
+            try firstRouter.sendInput(
+                "\r",
+                toPanelID: route.panelID,
+                mode: .rawTerminalInput,
+                allowAmbiguousPasteTimeout: true,
+                submissionID: "submission-a"
+            )
+        )
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 1)
+    }
+
     func testPastePresentationDecisionRequiresExpectedTextOnCurrentCursorRow() {
         XCTAssertFalse(
             OrdinaryTmuxPastePresentationDecision.isReady(

@@ -336,6 +336,13 @@ struct BridgeInputActionHandler {
                                            request: BridgeRequest,
                                            action: String,
                                            stepDidDispatch: () -> Void = {}) throws -> BridgeResponse? {
+        let inputSubmissionID = UUID().uuidString
+        defer {
+            ordinaryTmuxInputRouter?.cancelInputSubmission(
+                toPanelID: panelID,
+                submissionID: inputSubmissionID
+            )
+        }
         var previousStepUsedOrdinaryTmux = false
         var forceMacSocketForRemainingSteps = false
         for (index, step) in vendor.submitMessagePlan(text: text).enumerated() {
@@ -350,7 +357,8 @@ struct BridgeInputActionHandler {
                previousStepUsedOrdinaryTmux {
                 guard let ordinaryTmuxInputRouter,
                       try ordinaryTmuxInputRouter.waitForLastPastePresentation(
-                        toPanelID: panelID
+                        toPanelID: panelID,
+                        submissionID: inputSubmissionID
                       ) else {
                     throw BridgeInternalError.panelContextUnavailable(
                         "The pasted terminal command was not presented at the active pane cursor; Enter was not sent."
@@ -372,7 +380,8 @@ struct BridgeInputActionHandler {
                                                                       action: action,
                                                                       stepIndex: index,
                                                                       mode: step.role == .submitEnter ? .rawTerminalInput : .literalChatText,
-                                                                      allowAmbiguousPasteTimeout: true)
+                                                                      allowAmbiguousPasteTimeout: true,
+                                                                      submissionID: inputSubmissionID)
             }
             if routeDecision == .routed {
                 stepDidDispatch()
@@ -464,7 +473,8 @@ struct BridgeInputActionHandler {
                                                    action: String,
                                                    stepIndex: Int?,
                                                    mode: OrdinaryTmuxInputMode,
-                                                   allowAmbiguousPasteTimeout: Bool) throws -> OrdinaryTmuxRouteDecision {
+                                                   allowAmbiguousPasteTimeout: Bool,
+                                                   submissionID: String? = nil) throws -> OrdinaryTmuxRouteDecision {
         guard let ordinaryTmuxInputRouter else {
             return .unavailable
         }
@@ -472,7 +482,8 @@ struct BridgeInputActionHandler {
             return try ordinaryTmuxInputRouter.sendInput(input,
                                                         toPanelID: panelID,
                                                         mode: mode,
-                                                        allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout) ? .routed : .unavailable
+                                                        allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout,
+                                                        submissionID: submissionID) ? .routed : .unavailable
         } catch {
             guard Self.shouldFallbackToMacSocket(panelID: panelID, error: error) else {
                 throw error
