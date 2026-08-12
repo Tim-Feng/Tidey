@@ -170,6 +170,10 @@
 
 ## Shell Integration / tmux
 
+- tmux paste 指令成功，不代表 TUI 已經處理並顯示貼上的文字
+  - 固定等待一段時間再送 Enter，仍可能讓 Enter 落到剛開啟的 picker，直接修改使用者設定
+  - slash command 的 Enter 必須等同一個精確 pane 的 active screen 游標列顯示完整 command；舊 scrollback 裡的相同文字不能算
+  - 在期限內沒有取得游標列證據時，保留已輸入的 command 並停止，不送 Enter
 - PATH 問題先看 shell startup 全部跑完之後的最終值
   - `.zshenv` 先注入不夠，`.zshrc` 很可能再蓋一次
 - tmux 不是同一條 startup path
