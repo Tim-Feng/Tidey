@@ -1116,6 +1116,56 @@ final class CodexTranscriptSessionTests: XCTestCase {
                       "the virtual cursor must conservatively replay its adjacent raw line")
     }
 
+    func testCodexItemCompletedLifecycleKeepsOlderHistoryAvailableWithoutDuplicateMessage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout-session.jsonl", isDirectory: false)
+        let fileRowCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<fileRowCount).map {
+            makeCodexMessageLine(role: "assistant", content: "file-\($0)")
+        }
+        let wrappedText = "wrapped-authoritative-message"
+        lines[fileRowCount - 2] = #"{"type":"event_msg","timestamp":"2026-08-12T00:39:13.854Z","payload":{"type":"item_completed","thread_id":"session","turn_id":"turn-1","item":{"type":"AgentMessage","id":"message-1","content":[{"type":"Text","text":"wrapped-authoritative-message"}],"phase":"commentary"},"started_at_ms":1786495151904,"completed_at_ms":1786495153854}}"#
+        lines[fileRowCount - 1] = #"{"type":"response_item","timestamp":"2026-08-12T00:39:13.858Z","payload":{"type":"message","id":"message-1","role":"assistant","content":[{"type":"output_text","text":"wrapped-authoritative-message"}],"phase":"commentary"}}"#
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub(maxBufferedEvents: 3)
+        let session = CodexTranscriptSession(record: makeRecord(transcriptPath: transcriptURL.path),
+                                             fileManager: .default,
+                                             hub: hub,
+                                             historicalReplayWindowCapacity: 1)
+        session.start()
+        defer { session.stop() }
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events.contains { $0.text == wrappedText }
+        })
+
+        let retained = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10).events
+        XCTAssertEqual(retained.filter { $0.text == wrappedText }.count, 1,
+                       "item_completed is eventless; the paired response_item remains authoritative")
+        let beforeSeq = try XCTUnwrap(retained.map(\.seq).filter { $0 > 0 }.min())
+        let page = BridgeAgentEventFetchFlow.run(
+            eventHub: hub,
+            workspaceID: "workspace",
+            sessionID: "session",
+            limit: 1,
+            beforeSeq: beforeSeq,
+            afterSeq: nil,
+            beforeCursorBackfill: { _, beforeSeq, limit in
+                session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: limit)
+            }
+        )
+
+        XCTAssertFalse(page.beforeCursorUnavailable,
+                       "a known lifecycle wrapper must not disable older-history paging")
+        XCTAssertEqual(page.fetchResult.events.count, 1)
+        XCTAssertTrue(page.fetchResult.events.first?.text?.hasPrefix("file-") == true)
+    }
+
     func testCodexBeforeCursorVirtualCursorAtOffsetZeroReplaysAnchorLine() throws {
         let directory = FileManager.default.temporaryDirectory
             .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)

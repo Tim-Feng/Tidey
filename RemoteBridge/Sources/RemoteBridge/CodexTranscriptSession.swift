@@ -1311,6 +1311,7 @@ final class CodexTranscriptSession: AgentTranscriptSession {
         "thread_name_updated",
         "thread_settings_applied",
         "view_image_tool_call",
+        "item_completed",
     ]
 
     private func consumeSessionMeta(payload: [String: Any], timestamp: String, lineOffset: Int) {
