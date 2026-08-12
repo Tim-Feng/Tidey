@@ -55,6 +55,56 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
     }
 
+    func testPastePresentationDecisionRequiresExpectedTextOnCurrentCursorRow() {
+        XCTAssertFalse(
+            OrdinaryTmuxPastePresentationDecision.isReady(
+                capture: OrdinaryTmuxCapturedOutput(
+                    output: "❯ /model\n  Kept model as Fable 5\n❯ ",
+                    cursorRow: 2,
+                    cursorColumn: 2,
+                    cursorVisible: true
+                ),
+                expectedText: "/model"
+            ),
+            "an old visible /model row must not authorize Enter"
+        )
+        XCTAssertTrue(
+            OrdinaryTmuxPastePresentationDecision.isReady(
+                capture: OrdinaryTmuxCapturedOutput(
+                    output: "❯ old command\n\n❯ /model",
+                    cursorRow: 2,
+                    cursorColumn: 8,
+                    cursorVisible: true
+                ),
+                expectedText: "/model"
+            )
+        )
+        XCTAssertFalse(
+            OrdinaryTmuxPastePresentationDecision.isReady(
+                capture: OrdinaryTmuxCapturedOutput(
+                    output: "❯ /help",
+                    cursorRow: 0,
+                    cursorColumn: 7,
+                    cursorVisible: true
+                ),
+                expectedText: "/model"
+            )
+        )
+
+        var probeResults = [false, true]
+        var waitCount = 0
+        let gate = OrdinaryTmuxPastePresentationGate(
+            maximumAttempts: 3,
+            waitBetweenAttempts: { waitCount += 1 }
+        )
+        XCTAssertTrue(
+            gate.waitUntilReady {
+                probeResults.removeFirst()
+            }
+        )
+        XCTAssertEqual(waitCount, 1)
+    }
+
     func testSetPaneIdentityAlsoProjectsSessionRuntimeIntoPaneOptions() throws {
         let route = ordinaryRoute()
         let state = RunnerState(responses: [:])

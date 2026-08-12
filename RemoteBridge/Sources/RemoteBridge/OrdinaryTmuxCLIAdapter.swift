@@ -838,6 +838,23 @@ final class OrdinaryTmuxCLIAdapter {
                                  includeEscapeSequences: true)
     }
 
+    func isPastedTextPresented(
+        _ text: String,
+        exactRoute: OrdinaryTmuxPanelRoute,
+        paneID: String
+    ) throws -> Bool {
+        guard exactRoute.activePaneID == paneID else { return false }
+        let capture = try captureOutput(
+            refreshedRoute: exactRoute,
+            maxLines: 0,
+            includeEscapeSequences: false
+        )
+        return OrdinaryTmuxPastePresentationDecision.isReady(
+            capture: capture,
+            expectedText: text
+        )
+    }
+
     private func captureOutput(refreshedRoute: OrdinaryTmuxPanelRoute,
                                maxLines: Int,
                                includeEscapeSequences: Bool) throws -> OrdinaryTmuxCapturedOutput {

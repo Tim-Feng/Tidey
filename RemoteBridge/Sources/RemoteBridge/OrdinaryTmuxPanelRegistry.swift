@@ -399,6 +399,56 @@ struct OrdinaryTmuxCapturedOutput: Equatable, Sendable {
     }
 }
 
+enum OrdinaryTmuxPastePresentationDecision {
+    static func isReady(
+        capture: OrdinaryTmuxCapturedOutput,
+        expectedText: String
+    ) -> Bool {
+        let expectedKey = ChatSubmitEchoRegistry.normalizedKey(expectedText)
+        guard expectedKey.isEmpty == false,
+              capture.cursorVisible == true,
+              let cursorRow = capture.cursorRow,
+              let cursorColumn = capture.cursorColumn,
+              cursorColumn >= expectedText.count else {
+            return false
+        }
+        let lines = capture.output.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        )
+        guard lines.indices.contains(cursorRow) else {
+            return false
+        }
+        let cursorLineKey = ChatSubmitEchoRegistry.normalizedKey(
+            String(lines[cursorRow])
+        )
+        return cursorLineKey.hasSuffix(expectedKey)
+    }
+}
+
+struct OrdinaryTmuxPastePresentationGate {
+    let maximumAttempts: Int
+    let waitBetweenAttempts: () -> Void
+
+    static let live = OrdinaryTmuxPastePresentationGate(
+        maximumAttempts: 20,
+        waitBetweenAttempts: { usleep(25_000) }
+    )
+
+    func waitUntilReady(_ probe: () throws -> Bool) rethrows -> Bool {
+        guard maximumAttempts > 0 else { return false }
+        for attempt in 0..<maximumAttempts {
+            if try probe() {
+                return true
+            }
+            if attempt + 1 < maximumAttempts {
+                waitBetweenAttempts()
+            }
+        }
+        return false
+    }
+}
+
 struct OrdinaryTmuxCursorPosition: Equatable, Sendable {
     let row: Int
     let column: Int
@@ -467,9 +517,14 @@ protocol OrdinaryTmuxInputRouting: Sendable {
                    toPanelID panelID: String,
                    mode: OrdinaryTmuxInputMode,
                    allowAmbiguousPasteTimeout: Bool) throws -> Bool
+    func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool
 }
 
 extension OrdinaryTmuxInputRouting {
+    func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool {
+        false
+    }
+
     func sendInput(_ input: String, toPanelID panelID: String) throws -> Bool {
         try sendInput(input,
                       toPanelID: panelID,
@@ -499,18 +554,23 @@ extension OrdinaryTmuxInputRouting {
 final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
     private let routeResolver: OrdinaryTmuxRouteResolving
     private let adapter: OrdinaryTmuxCLIAdapter
+    private let pastePresentationGate: OrdinaryTmuxPastePresentationGate
     private let lastPastePaneStore = OrdinaryTmuxLastPastePaneStore()
 
     init(registry: OrdinaryTmuxPanelRegistry,
-         adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter()) {
+         adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter(),
+         pastePresentationGate: OrdinaryTmuxPastePresentationGate = .live) {
         self.routeResolver = OrdinaryTmuxRouteResolver(registry: registry, adapter: adapter)
         self.adapter = adapter
+        self.pastePresentationGate = pastePresentationGate
     }
 
     init(routeResolver: OrdinaryTmuxRouteResolving,
-         adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter()) {
+         adapter: OrdinaryTmuxCLIAdapter = OrdinaryTmuxCLIAdapter(),
+         pastePresentationGate: OrdinaryTmuxPastePresentationGate = .live) {
         self.routeResolver = routeResolver
         self.adapter = adapter
+        self.pastePresentationGate = pastePresentationGate
     }
 
     func sendInput(_ input: String,
@@ -527,8 +587,29 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
                                              mode: mode,
                                              fallbackEnterPaneID: fallbackEnterPaneID,
                                              allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout)
-        lastPastePaneStore.record(delivery: delivery, routeKey: routeKey)
+        lastPastePaneStore.record(
+            delivery: delivery,
+            route: route,
+            routeKey: routeKey,
+            pastedText: input
+        )
         return true
+    }
+
+    func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool {
+        guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil),
+              let pending = lastPastePaneStore.pending(
+                for: Self.lastPastePaneKey(for: route)
+              ) else {
+            return false
+        }
+        return try pastePresentationGate.waitUntilReady {
+            try adapter.isPastedTextPresented(
+                pending.text,
+                exactRoute: pending.route,
+                paneID: pending.paneID
+            )
+        }
     }
 
     private static func lastPastePaneKey(for route: OrdinaryTmuxPanelRoute) -> String {
@@ -542,21 +623,40 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
 }
 
 private final class OrdinaryTmuxLastPastePaneStore: @unchecked Sendable {
+    struct PendingPaste {
+        let paneID: String
+        let route: OrdinaryTmuxPanelRoute
+        let text: String
+    }
+
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.ordinary-tmux-input-router.last-paste-pane")
-    private var paneByRouteKey = [String: String]()
+    private var pendingByRouteKey = [String: PendingPaste]()
 
     func paneID(for routeKey: String) -> String? {
         queue.sync {
-            paneByRouteKey[routeKey]
+            pendingByRouteKey[routeKey]?.paneID
         }
     }
 
-    func record(delivery: OrdinaryTmuxInputDelivery, routeKey: String) {
+    func pending(for routeKey: String) -> PendingPaste? {
+        queue.sync {
+            pendingByRouteKey[routeKey]
+        }
+    }
+
+    func record(delivery: OrdinaryTmuxInputDelivery,
+                route: OrdinaryTmuxPanelRoute,
+                routeKey: String,
+                pastedText: String) {
         queue.sync {
             if delivery.pastedText && !delivery.sentEnter {
-                paneByRouteKey[routeKey] = delivery.paneID
+                pendingByRouteKey[routeKey] = PendingPaste(
+                    paneID: delivery.paneID,
+                    route: route,
+                    text: pastedText
+                )
             } else if delivery.sentEnter {
-                paneByRouteKey.removeValue(forKey: routeKey)
+                pendingByRouteKey.removeValue(forKey: routeKey)
             }
         }
     }
