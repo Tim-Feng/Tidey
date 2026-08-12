@@ -351,6 +351,10 @@
   - 實測 252MB（8 天累積）
   - bootstrap 一定要有 line limit（目前是 500），別一開始就 full-scan
   - `isBootstrappingSidebarState` 旗標：bootstrap 期間吃 event 但不發 socket，避免回放歷史事件重送通知
+- Bridge 重啟會重新驗證 Codex bootstrap，新的合法 lifecycle record 可能只在此時讓舊訊息分頁失效
+  - 症狀是最近訊息仍持續出現，但往前載入回 `agent_history_unavailable`；先驗證 registry 指向的 rollout 還在、每行 JSON 都合法，再統計 bootstrap 內未支援的 top-level／payload type，不要先判定訊息檔損毀
+  - Codex 0.147 的 `event_msg.item_completed` 是 `response_item` 旁的 lifecycle wrapper；由後者繼續當聊天內容權威，前者列為精確的 known-ignored event，避免同一則訊息發布兩次
+  - 只能加入已由真實 rollout 證明為合法且 eventless 的精確 type；任意未知 type 仍須撤銷 semantic trust，避免把不完整解析誤報成完整歷史
 - Bridge 改 code 要重 build、重 deploy、重啟 launchd
   - `tools/build.sh` 只 build Tidey Mac app，不動 Bridge
   - Bridge 獨立：`RemoteBridge/tools/deploy-bridge.sh` 會 build release binary + install + sign + `launchctl kickstart`
