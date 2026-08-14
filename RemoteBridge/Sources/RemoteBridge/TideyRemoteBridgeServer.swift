@@ -779,7 +779,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             closeSession: @escaping @Sendable () -> Void
         ) {
             eventLoop.execute { [weak self] in
-                guard let self, let handler = self.handler else {
+                guard let self,
+                      let handler = self.handler,
+                      let context = self.context else {
                     closeSession()
                     return
                 }
@@ -787,6 +789,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     binding: binding,
                     session: session,
                     error: error,
+                    context: context,
                     closeSession: closeSession
                 )
             }
@@ -2319,6 +2322,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         binding: TmuxInteractiveSubscriptionBinding,
         session: TmuxInteractivePTYConnectionSession,
         error: Error?,
+        context: ChannelHandlerContext,
         closeSession: @escaping @Sendable () -> Void
     ) {
         guard let removedSession = interactivePTYConnectionState.remove(
@@ -2339,9 +2343,18 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         pumpsToStop?.outputPump.stop()
         pumpsToStop?.inputPump.stop()
         pumpsToStop?.resizePump.stop()
-        if error != nil {
-            closeSession()
-        }
+        guard error != nil else { return }
+        send(
+            interactivePTYEvent: .terminal(
+                TmuxInteractiveStateChange(
+                    binding: binding,
+                    state: .failed,
+                    message: "Interactive PTY session failed."
+                )
+            ),
+            to: context,
+            afterWrite: { _ in closeSession() }
+        )
     }
 
     private func unsubscribeFromAgentEvents() {

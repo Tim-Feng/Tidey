@@ -13,6 +13,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
     {
         private let lock = NSLock()
         private var readResults: [TmuxInteractivePTYReadResult]
+        private var readErrorAfterResults: Error?
         private var writeResults: [TmuxInteractivePTYWriteResult]
         private(set) var closeCount = 0
         private(set) var reapCount = 0
@@ -21,9 +22,11 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
 
         init(
             readResults: [TmuxInteractivePTYReadResult],
+            readErrorAfterResults: Error? = nil,
             writeResults: [TmuxInteractivePTYWriteResult] = []
         ) {
             self.readResults = readResults
+            self.readErrorAfterResults = readErrorAfterResults
             self.writeResults = writeResults
         }
 
@@ -65,6 +68,10 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             lock.lock()
             defer { lock.unlock() }
             guard readResults.isEmpty == false else {
+                if let readErrorAfterResults {
+                    self.readErrorAfterResults = nil
+                    throw readErrorAfterResults
+                }
                 return .wouldBlock
             }
             return readResults.removeFirst()
@@ -93,6 +100,8 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             verifiedAttach
         }
     }
+
+    private struct ReadFailure: Error {}
 
     private struct RouteResolverStub: OrdinaryTmuxRouteResolving {
         let route: OrdinaryTmuxPanelRoute
@@ -976,6 +985,145 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         XCTAssertEqual(owner.lifecycleState, .closed)
         XCTAssertEqual(controller.closeCount, 1)
         XCTAssertEqual(controller.reapCount, 1)
+    }
+
+    func testPumpFailureEmitsOneFailedStateBeforeFinalCleanup() throws {
+        let route = makeRoute()
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let startBytes = Data([0x1b, 0x5b, 0x48])
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let controller = ControllerProbe(
+            readResults: [
+                .wouldBlock,
+                .bytes(startBytes),
+                .wouldBlock,
+                .wouldBlock,
+            ],
+            readErrorAfterResults: ReadFailure()
+        )
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: ProverStub(verifiedAttach: verifiedAttach)
+        )
+        let subscribe = TmuxInteractiveSubscribe(
+            workspaceID: route.workspaceID,
+            panelID: route.panelID,
+            binding: binding,
+            viewport: viewport
+        )
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: subscribe,
+                route: route,
+                tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+            )
+        )
+        let session = TmuxInteractivePTYConnectionSession(
+            binding: binding,
+            owner: owner
+        )
+        let candidateBuilder = TmuxInteractivePTYSessionCandidateBuilder(
+            routeResolver: RouteResolverStub(route: route),
+            migrateWindow: { _, _ in
+                .notEligible(.currentPolicyNotOwned("latest"))
+            },
+            sessionFactory: { _ in session },
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        let fixture = try makeFixture(candidateBuilder: candidateBuilder)
+        defer { fixture.cleanup() }
+
+        try writeRequest(
+            BridgeRequest(
+                id: "subscribe-before-read-failure",
+                action: TmuxInteractiveProtocolV1.subscribeAction,
+                params: [
+                    "workspace_id": .string(route.workspaceID),
+                    "panel_id": .string(route.panelID),
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                    "cols": .number(Double(viewport.columns)),
+                    "rows": .number(Double(viewport.rows)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertNil(try fixture.channel.readOutbound(as: WebSocketFrame.self))
+
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        let start = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: TmuxInteractiveAuthoritativeStartEnvelope.self
+        )
+        XCTAssertEqual(start.type, TmuxInteractiveProtocolV1.startEventType)
+        XCTAssertEqual(start.subscriptionID, binding.subscriptionID)
+        XCTAssertEqual(start.generation, binding.generation)
+
+        let failed = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: TmuxInteractiveStateEnvelope.self
+        )
+        XCTAssertEqual(failed.type, TmuxInteractiveProtocolV1.stateEventType)
+        XCTAssertEqual(failed.subscriptionID, binding.subscriptionID)
+        XCTAssertEqual(failed.generation, binding.generation)
+        XCTAssertEqual(failed.state, TmuxInteractiveTerminalState.failed.rawValue)
+        XCTAssertEqual(failed.message, "Interactive PTY session failed.")
+        XCTAssertNil(try fixture.channel.readOutbound(as: WebSocketFrame.self))
+
+        fixture.channel.embeddedEventLoop.run()
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(30))
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertNil(try fixture.channel.readOutbound(as: WebSocketFrame.self))
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closeCount, 1)
+        XCTAssertEqual(controller.reapCount, 1)
+
+        let sessionKey = OrdinaryTmuxSessionKey(
+            socket: route.socket,
+            sessionID: route.sessionID
+        )
+        let afterFailureToken = OrdinaryTmuxInteractiveLeaseToken(
+            rawValue: "after-failure"
+        )
+        XCTAssertTrue(
+            store.acquireInteractiveLease(
+                token: afterFailureToken,
+                sessionKey: sessionKey
+            )
+        )
+        store.releaseInteractiveLease(
+            token: afterFailureToken,
+            sessionKey: sessionKey
+        )
     }
 
     private func writeRequest(
