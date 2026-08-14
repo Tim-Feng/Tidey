@@ -9,6 +9,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         private(set) var closedFileDescriptors = [Int32]()
         private(set) var reapCalls = [(processID: Int32, blocking: Bool)]()
         private(set) var writtenBytes = [Data]()
+        private(set) var resizedSizes = [TmuxInteractivePTYSize]()
         var spawnError: Error?
         var onSpawn: (() -> Void)?
         var reapResult: TmuxInteractivePTYChildExit? = TmuxInteractivePTYChildExit(
@@ -25,7 +26,10 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             return TmuxInteractivePTYHandle(masterFileDescriptor: 17, childProcessID: 23)
         }
 
-        func resize(masterFileDescriptor: Int32, to size: TmuxInteractivePTYSize) throws {}
+        func resize(masterFileDescriptor: Int32, to size: TmuxInteractivePTYSize) throws {
+            XCTAssertEqual(masterFileDescriptor, 17)
+            resizedSizes.append(size)
+        }
 
         func close(masterFileDescriptor: Int32) throws {
             closedFileDescriptors.append(masterFileDescriptor)
@@ -317,6 +321,133 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let token = OrdinaryTmuxInteractiveLeaseToken(rawValue: "after-overflow")
         XCTAssertTrue(store.acquireInteractiveLease(token: token, sessionKey: sessionKey))
         store.releaseInteractiveLease(token: token, sessionKey: sessionKey)
+    }
+
+    func testOwnerPublishesOnlyPostSizeQuietFrameBeforeEnablingInput() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        let preProofBytes = Data([0x70, 0x72, 0x65])
+        let redrawBytes = Data([0x1b, 0x5b, 0x32, 0x4a])
+        controller.readResults = [
+            .bytes(preProofBytes),
+            .wouldBlock,
+            .bytes(redrawBytes),
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover
+        )
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        let input = TmuxInteractiveInput(
+            binding: request.subscribe.binding,
+            bytes: Data([0x02, 0x63])
+        )
+
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
+        XCTAssertThrowsError(try owner.sendInput(input)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .inputNotEnabled(.redrawing)
+            )
+        }
+
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(
+            start,
+            TmuxInteractiveAuthoritativeStart(
+                binding: request.subscribe.binding,
+                attachProof: verifiedAttach.attachProof,
+                viewport: request.subscribe.viewport,
+                initialBytes: redrawBytes
+            )
+        )
+        XCTAssertEqual(owner.lifecycleState, .live)
+        XCTAssertEqual(try owner.sendInput(input), .written(2))
+        XCTAssertEqual(controller.writtenBytes, [input.bytes])
+
+        let staleInput = TmuxInteractiveInput(
+            binding: TmuxInteractiveSubscriptionBinding(
+                subscriptionID: input.binding.subscriptionID,
+                generation: input.binding.generation - 1
+            ),
+            bytes: Data([0x04])
+        )
+        XCTAssertThrowsError(try owner.sendInput(staleInput)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .bindingMismatch
+            )
+        }
+        XCTAssertEqual(controller.writtenBytes, [input.bytes])
+        try owner.close()
+    }
+
+    func testOwnerClosesWhenAuthoritativeStartFrameOverflows() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let controller = ControllerProbe()
+        controller.readResults = [
+            .wouldBlock,
+            .bytes(Data([0x01, 0x02, 0x03])),
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover,
+            maximumAuthoritativeStartBytes: 2
+        )
+        try owner.begin(makeRequest(route: route))
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+
+        XCTAssertThrowsError(try owner.pollAuthoritativeStart()) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .authoritativeStartBufferOverflow(limit: 2)
+            )
+        }
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
+        XCTAssertEqual(controller.closedFileDescriptors, [17])
+        XCTAssertEqual(controller.reapCalls.count, 1)
     }
 
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {

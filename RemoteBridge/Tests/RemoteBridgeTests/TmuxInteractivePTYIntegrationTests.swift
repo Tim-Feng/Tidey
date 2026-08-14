@@ -341,6 +341,25 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 .inputNotEnabled(.redrawing)
             )
         }
+        let authoritativeStart = try XCTUnwrap(
+            waitForSessionOwnerStart(owner: owner, timeout: 3)
+        )
+        XCTAssertEqual(authoritativeStart.binding, binding)
+        XCTAssertEqual(authoritativeStart.attachProof, verifiedAttach.attachProof)
+        XCTAssertEqual(
+            authoritativeStart.viewport,
+            TmuxInteractiveViewport(columns: 80, rows: 24)
+        )
+        XCTAssertFalse(authoritativeStart.initialBytes.isEmpty)
+        XCTAssertEqual(owner.lifecycleState, .live)
+        XCTAssertEqual(try owner.sendInput(input), .written(input.bytes.count))
+        XCTAssertTrue(
+            fixture.waitForWindowCount(
+                sessionID: target.sessionID,
+                expected: 3,
+                timeout: 2
+            )
+        )
         let sessionKey = OrdinaryTmuxSessionKey(
             socket: route.socket,
             sessionID: route.sessionID
@@ -357,7 +376,7 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         didClose = true
         XCTAssertEqual(owner.lifecycleState, .closed)
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
-        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 2)
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 3)
         XCTAssertTrue(
             store.reserve(
                 submissionID: "admitted-after-reap",
@@ -568,6 +587,20 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             usleep(20_000)
         } while Date() < deadline
         return try owner.pollAttachProof()
+    }
+
+    private func waitForSessionOwnerStart(
+        owner: TmuxInteractivePTYSessionOwner,
+        timeout: TimeInterval
+    ) throws -> TmuxInteractiveAuthoritativeStart? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let start = try owner.pollAuthoritativeStart() {
+                return start
+            }
+            usleep(20_000)
+        } while Date() < deadline
+        return try owner.pollAuthoritativeStart()
     }
 
     private func reapForCleanup(

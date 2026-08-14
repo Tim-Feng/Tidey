@@ -26,6 +26,8 @@ enum TmuxInteractivePTYSessionOwnerError: Error, Equatable {
     case unexpectedEndBeforeProof
     case preProofBufferOverflow(limit: Int)
     case attachProofMismatch
+    case unexpectedEndBeforeAuthoritativeStart
+    case authoritativeStartBufferOverflow(limit: Int)
     case childDidNotExit
 }
 
@@ -38,6 +40,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
+        var didRequestRedraw = false
+        var authoritativeStartBytes = Data()
+        var resizeGate: TmuxInteractivePTYResizeGate?
         var didCloseMaster = false
 
         init(
@@ -62,6 +67,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let controller: TmuxInteractivePTYControlling
     private let attachProver: TmuxInteractiveAttachProving
     private let maximumPreProofBytes: Int
+    private let maximumAuthoritativeStartBytes: Int
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
 
@@ -69,12 +75,14 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         admissionStore: OrdinaryTmuxInputSubmissionStore,
         controller: TmuxInteractivePTYControlling,
         attachProver: TmuxInteractiveAttachProving = TmuxInteractiveAttachProver(),
-        maximumPreProofBytes: Int = 1_024 * 1_024
+        maximumPreProofBytes: Int = 1_024 * 1_024,
+        maximumAuthoritativeStartBytes: Int = 1_024 * 1_024
     ) {
         self.admissionStore = admissionStore
         self.controller = controller
         self.attachProver = attachProver
         self.maximumPreProofBytes = max(1, maximumPreProofBytes)
+        self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
     }
 
     var lifecycleState: TmuxInteractivePTYSessionLifecycleState {
@@ -194,6 +202,75 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         }
     }
 
+    func pollAuthoritativeStart() throws -> TmuxInteractiveAuthoritativeStart? {
+        try queue.sync {
+            guard state == .redrawing,
+                  let resources = activeResources,
+                  let verifiedAttach = resources.verifiedAttach else {
+                throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
+            }
+            do {
+                if resources.didRequestRedraw == false {
+                    try controller.resize(
+                        masterFileDescriptor: resources.handle.masterFileDescriptor,
+                        to: resources.initialSize
+                    )
+                    resources.didRequestRedraw = true
+                }
+
+                var receivedBytesThisPoll = false
+                while true {
+                    switch try controller.read(
+                        masterFileDescriptor: resources.handle.masterFileDescriptor,
+                        maximumBytes: 64 * 1_024
+                    ) {
+                    case .bytes(let bytes):
+                        guard bytes.isEmpty == false else {
+                            throw TmuxInteractivePTYSessionOwnerError
+                                .unexpectedEndBeforeAuthoritativeStart
+                        }
+                        guard bytes.count <= maximumAuthoritativeStartBytes -
+                                resources.authoritativeStartBytes.count else {
+                            throw TmuxInteractivePTYSessionOwnerError
+                                .authoritativeStartBufferOverflow(
+                                    limit: maximumAuthoritativeStartBytes
+                                )
+                        }
+                        resources.authoritativeStartBytes.append(bytes)
+                        receivedBytesThisPoll = true
+                    case .wouldBlock:
+                        guard receivedBytesThisPoll == false,
+                              resources.authoritativeStartBytes.isEmpty == false else {
+                            return nil
+                        }
+                        let subscribe = resources.request.subscribe
+                        let start = TmuxInteractiveAuthoritativeStart(
+                            binding: subscribe.binding,
+                            attachProof: verifiedAttach.attachProof,
+                            viewport: subscribe.viewport,
+                            initialBytes: resources.authoritativeStartBytes
+                        )
+                        resources.authoritativeStartBytes.removeAll(keepingCapacity: false)
+                        resources.resizeGate = TmuxInteractivePTYResizeGate(
+                            binding: subscribe.binding,
+                            masterFileDescriptor: resources.handle.masterFileDescriptor,
+                            initialSize: resources.initialSize,
+                            controller: controller
+                        )
+                        state = .live
+                        return start
+                    case .endOfFile:
+                        throw TmuxInteractivePTYSessionOwnerError
+                            .unexpectedEndBeforeAuthoritativeStart
+                    }
+                }
+            } catch {
+                try closeActiveResources(resources)
+                throw error
+            }
+        }
+    }
+
     func close() throws {
         try queue.sync {
             if state == .closed {
@@ -237,6 +314,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
 
     private func closeActiveResources(_ resources: ActiveResources) throws {
         state = .closing
+        resources.resizeGate?.retire()
         if resources.didCloseMaster == false {
             try controller.close(
                 masterFileDescriptor: resources.handle.masterFileDescriptor
