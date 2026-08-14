@@ -261,6 +261,96 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testLazyWindowSizeMigrationRestoresOnlyExactTargetOnIsolatedSocket() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let socket = OrdinaryTmuxSocketSelector.path(fixture.socketPath)
+        let commandRunner = OrdinaryTmuxCLIAdapter.processCommandRunner(
+            executablePath: tmuxPath,
+            timeoutSeconds: 3
+        )
+        let windowIDs = try commandRunner(
+            socket,
+            ["list-windows", "-t", target.sessionID, "-F", "#{window_id}"],
+            nil
+        ).split(whereSeparator: \.isNewline).map(String.init)
+        let otherWindowID = try XCTUnwrap(windowIDs.first { $0 != target.windowID })
+        _ = try commandRunner(
+            socket,
+            [
+                "set-option", "-w", "-t", target.windowID,
+                "@tidey_window_size_before_multi_client", "latest",
+            ],
+            nil
+        )
+        _ = try commandRunner(
+            socket,
+            ["set-option", "-w", "-t", target.windowID, "window-size", "largest"],
+            nil
+        )
+        _ = try commandRunner(
+            socket,
+            [
+                "set-option", "-w", "-t", otherWindowID,
+                "@tidey_window_size_before_multi_client", "untouched",
+            ],
+            nil
+        )
+        let migrator = TmuxInteractiveWindowSizeMigrator(commandRunner: commandRunner)
+
+        XCTAssertEqual(
+            try migrator.migrateIfEligible(
+                socket: socket,
+                windowID: target.windowID,
+                hasLaterPolicyChangeEvidence: false
+            ),
+            .migrated(
+                TmuxInteractiveWindowSizeMigration(
+                    windowID: target.windowID,
+                    expectedCurrentPolicy: "largest",
+                    restoredPolicy: "latest",
+                    markerOption: "@tidey_window_size_before_multi_client",
+                    expectedMarkerValue: "latest"
+                )
+            )
+        )
+        XCTAssertEqual(
+            try commandRunner(
+                socket,
+                [
+                    "display-message", "-p", "-t", target.windowID,
+                    "TIDEYv1|#{window-size}|#{@tidey_window_size_before_multi_client}|END",
+                ],
+                nil
+            ),
+            "TIDEYv1|latest||END"
+        )
+        XCTAssertEqual(
+            try commandRunner(
+                socket,
+                [
+                    "display-message", "-p", "-t", otherWindowID,
+                    "TIDEYv1|#{window-size}|#{@tidey_window_size_before_multi_client}|END",
+                ],
+                nil
+            ),
+            "TIDEYv1|latest|untouched|END"
+        )
+        XCTAssertEqual(
+            try migrator.migrateIfEligible(
+                socket: socket,
+                windowID: target.windowID,
+                hasLaterPolicyChangeEvidence: false
+            ),
+            .notEligible(.currentPolicyNotOwned("latest"))
+        )
+    }
+
     func testSessionOwnerHoldsRealPTYLeaseUntilCloseAndReapComplete() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
