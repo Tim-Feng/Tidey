@@ -17,11 +17,17 @@ let package = Package(
         .executableTarget(
             name: "RemoteBridge",
             dependencies: [
+                "RemoteBridgePTYShim",
                 .product(name: "NIOCore", package: "swift-nio"),
                 .product(name: "NIOPosix", package: "swift-nio"),
                 .product(name: "NIOHTTP1", package: "swift-nio"),
                 .product(name: "NIOWebSocket", package: "swift-nio"),
             ]
+        ),
+        .target(
+            name: "RemoteBridgePTYShim",
+            dependencies: [],
+            publicHeadersPath: "include"
         ),
         .target(
             name: "HeadlessCodexTerminalSupport",
