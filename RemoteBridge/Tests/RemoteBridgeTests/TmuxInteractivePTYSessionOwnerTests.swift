@@ -450,6 +450,95 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(controller.reapCalls.count, 1)
     }
 
+    func testOwnerEmitsOrderedLiveOutputAndTreatsEOFAsNormalDetach() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        let firstOutput = Data([0x66, 0x69, 0x72, 0x73, 0x74])
+        let secondOutput = Data([0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64])
+        controller.readResults = [
+            .wouldBlock,
+            .bytes(Data([0x1b, 0x5b, 0x48])),
+            .wouldBlock,
+            .wouldBlock,
+            .bytes(firstOutput),
+            .bytes(secondOutput),
+            .endOfFile,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover
+        )
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        _ = try XCTUnwrap(owner.pollAuthoritativeStart())
+
+        XCTAssertEqual(
+            try owner.pollLiveOutput(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 1,
+                    bytes: firstOutput
+                )
+            )
+        )
+        XCTAssertEqual(
+            try owner.pollLiveOutput(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 2,
+                    bytes: secondOutput
+                )
+            )
+        )
+        XCTAssertEqual(
+            try owner.pollLiveOutput(),
+            .terminal(
+                TmuxInteractiveStateChange(
+                    binding: request.subscribe.binding,
+                    state: .detached,
+                    message: nil
+                )
+            )
+        )
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closedFileDescriptors, [17])
+        XCTAssertEqual(controller.reapCalls.count, 1)
+        XCTAssertEqual(controller.spawnCommands.count, 1)
+        XCTAssertThrowsError(try owner.pollLiveOutput()) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .invalidState(.closed)
+            )
+        }
+
+        let sessionKey = OrdinaryTmuxSessionKey(
+            socket: route.socket,
+            sessionID: route.sessionID
+        )
+        let token = OrdinaryTmuxInteractiveLeaseToken(rawValue: "after-detach")
+        XCTAssertTrue(store.acquireInteractiveLease(token: token, sessionKey: sessionKey))
+        store.releaseInteractiveLease(token: token, sessionKey: sessionKey)
+    }
+
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()

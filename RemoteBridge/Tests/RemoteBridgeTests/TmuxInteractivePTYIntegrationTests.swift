@@ -372,11 +372,36 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             )
         )
 
-        try owner.close()
+        let detachInput = TmuxInteractiveInput(
+            binding: binding,
+            bytes: Data([0x02, 0x64])
+        )
+        XCTAssertEqual(
+            try owner.sendInput(detachInput),
+            .written(detachInput.bytes.count)
+        )
+        let terminal = try XCTUnwrap(
+            waitForSessionOwnerTerminal(owner: owner, timeout: 3)
+        )
+        XCTAssertEqual(
+            terminal.chunks.map(\.sequence),
+            terminal.chunks.indices.map { UInt64($0 + 1) }
+        )
+        XCTAssertTrue(terminal.chunks.allSatisfy { $0.binding == binding })
+        XCTAssertEqual(
+            terminal.state,
+            TmuxInteractiveStateChange(
+                binding: binding,
+                state: .detached,
+                message: nil
+            )
+        )
         didClose = true
         XCTAssertEqual(owner.lifecycleState, .closed)
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
         XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 3)
+        usleep(100_000)
+        XCTAssertEqual(try fixture.clientCount(), 0)
         XCTAssertTrue(
             store.reserve(
                 submissionID: "admitted-after-reap",
@@ -601,6 +626,25 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             usleep(20_000)
         } while Date() < deadline
         return try owner.pollAuthoritativeStart()
+    }
+
+    private func waitForSessionOwnerTerminal(
+        owner: TmuxInteractivePTYSessionOwner,
+        timeout: TimeInterval
+    ) throws -> (chunks: [TmuxInteractiveOutputChunk], state: TmuxInteractiveStateChange)? {
+        var chunks: [TmuxInteractiveOutputChunk] = []
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            switch try owner.pollLiveOutput() {
+            case .output(let chunk):
+                chunks.append(chunk)
+            case .wouldBlock:
+                usleep(20_000)
+            case .terminal(let state):
+                return (chunks, state)
+            }
+        } while Date() < deadline
+        return nil
     }
 
     private func reapForCleanup(

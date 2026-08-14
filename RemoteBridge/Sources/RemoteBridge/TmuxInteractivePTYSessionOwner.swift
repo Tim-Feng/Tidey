@@ -28,7 +28,14 @@ enum TmuxInteractivePTYSessionOwnerError: Error, Equatable {
     case attachProofMismatch
     case unexpectedEndBeforeAuthoritativeStart
     case authoritativeStartBufferOverflow(limit: Int)
+    case outputSequenceExhausted
     case childDidNotExit
+}
+
+enum TmuxInteractivePTYSessionLivePollResult: Equatable, Sendable {
+    case output(TmuxInteractiveOutputChunk)
+    case wouldBlock
+    case terminal(TmuxInteractiveStateChange)
 }
 
 final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
@@ -43,6 +50,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var didRequestRedraw = false
         var authoritativeStartBytes = Data()
         var resizeGate: TmuxInteractivePTYResizeGate?
+        var nextOutputSequence: UInt64 = 1
         var didCloseMaster = false
 
         init(
@@ -267,6 +275,55 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             } catch {
                 try closeActiveResources(resources)
                 throw error
+            }
+        }
+    }
+
+    func pollLiveOutput() throws -> TmuxInteractivePTYSessionLivePollResult {
+        try queue.sync {
+            guard state == .live,
+                  let resources = activeResources else {
+                throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
+            }
+            let readResult: TmuxInteractivePTYReadResult
+            do {
+                readResult = try controller.read(
+                    masterFileDescriptor: resources.handle.masterFileDescriptor,
+                    maximumBytes: 64 * 1_024
+                )
+            } catch {
+                try closeActiveResources(resources)
+                throw error
+            }
+
+            switch readResult {
+            case .bytes(let bytes):
+                guard bytes.isEmpty == false else {
+                    return .wouldBlock
+                }
+                guard resources.nextOutputSequence < UInt64.max else {
+                    try closeActiveResources(resources)
+                    throw TmuxInteractivePTYSessionOwnerError.outputSequenceExhausted
+                }
+                let chunk = TmuxInteractiveOutputChunk(
+                    binding: resources.request.subscribe.binding,
+                    sequence: resources.nextOutputSequence,
+                    bytes: bytes
+                )
+                resources.nextOutputSequence += 1
+                return .output(chunk)
+            case .wouldBlock:
+                return .wouldBlock
+            case .endOfFile:
+                let binding = resources.request.subscribe.binding
+                try closeActiveResources(resources)
+                return .terminal(
+                    TmuxInteractiveStateChange(
+                        binding: binding,
+                        state: .detached,
+                        message: nil
+                    )
+                )
             }
         }
     }
