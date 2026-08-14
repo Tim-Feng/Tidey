@@ -233,6 +233,103 @@ final class OrdinaryTmuxWindowSizeIntegrationTests: XCTestCase {
         XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
         XCTAssertEqual(try harness.paneGeometry(sessionName: sessionName), macGeometry)
     }
+
+    func testLatestPolicyRestoresMacWindowSizeAndPaneTopologyAfterPhoneDetach() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        let version = try IsolatedTmuxHarness.version(at: tmuxPath)
+        guard version == "tmux 3.6a" else {
+            throw XCTSkip("isolated sizing regression requires tmux 3.6a; found \(version)")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/script") else {
+            throw XCTSkip("macOS script is unavailable")
+        }
+
+        func assertHorizontalSplit(
+            _ geometry: [IsolatedTmuxPaneGeometry],
+            columns: Int,
+            rows: Int,
+            paneIDs: [String]
+        ) {
+            guard geometry.count == 2 else {
+                XCTFail("expected exactly two horizontal panes; found \(geometry.count)")
+                return
+            }
+            XCTAssertEqual(geometry.map(\.paneID), paneIDs)
+            XCTAssertEqual(geometry.map(\.paneIndex), [0, 1])
+            XCTAssertEqual(geometry.map(\.windowWidth), [columns, columns])
+            XCTAssertEqual(geometry.map(\.windowHeight), [rows, rows])
+            XCTAssertEqual(geometry.map(\.left), [0, geometry[0].width + 1])
+            XCTAssertEqual(geometry.map(\.top), [0, 0])
+            XCTAssertEqual(geometry.map(\.height), [rows, rows])
+            XCTAssertTrue(
+                geometry.allSatisfy { $0.width > 0 },
+                "expected tmux to keep every pane structurally valid: \(geometry)"
+            )
+            XCTAssertEqual(geometry.reduce(1) { $0 + $1.width }, columns)
+        }
+
+        let harness = try IsolatedTmuxHarness(tmuxPath: tmuxPath)
+        defer { harness.shutdown() }
+        let sessionName = "latest-topology"
+        try harness.startDetachedSession(name: sessionName, columns: 132, rows: 37)
+        _ = try harness.attachControlModeSizingClient(
+            sessionName: sessionName,
+            columns: 132,
+            rows: 37,
+            allocatingTTY: true
+        )
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        XCTAssertEqual(try harness.windowSizeOwnership(sessionName: sessionName), "latest|")
+
+        try harness.splitWindowHorizontally(sessionName: sessionName, percentage: 30)
+        let macGeometry = try harness.paneGeometry(sessionName: sessionName)
+        XCTAssertEqual(macGeometry.count, 2)
+        let paneIDs = macGeometry.map(\.paneID)
+        assertHorizontalSplit(macGeometry, columns: 132, rows: 37, paneIDs: paneIDs)
+
+        let phoneClient = try harness.attachControlModeSizingClient(
+            sessionName: sessionName,
+            columns: 60,
+            rows: 20
+        )
+        XCTAssertTrue(harness.waitForClientCount(2, timeout: 2))
+
+        for size in [(60, 20), (80, 25), (50, 18)] {
+            try phoneClient.writeLine("refresh-client -C \(size.0),\(size.1)")
+            XCTAssertTrue(
+                harness.waitForWindowGeometry(
+                    sessionName: sessionName,
+                    expected: "\(sessionName)|\(size.0)|\(size.1)|latest",
+                    timeout: 2
+                )
+            )
+            let phoneGeometry = try harness.paneGeometry(sessionName: sessionName)
+            XCTAssertEqual(phoneGeometry.count, 2)
+            assertHorizontalSplit(
+                phoneGeometry,
+                columns: size.0,
+                rows: size.1,
+                paneIDs: paneIDs
+            )
+            XCTAssertEqual(try harness.windowSizeOwnership(sessionName: sessionName), "latest|")
+        }
+
+        XCTAssertEqual(try phoneClient.detachAndWait(timeout: 2), 0)
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        XCTAssertTrue(
+            harness.waitForWindowGeometry(
+                sessionName: sessionName,
+                expected: "\(sessionName)|132|37|latest",
+                timeout: 2
+            )
+        )
+        let restoredMacGeometry = try harness.paneGeometry(sessionName: sessionName)
+        XCTAssertEqual(restoredMacGeometry.count, 2)
+        assertHorizontalSplit(restoredMacGeometry, columns: 132, rows: 37, paneIDs: paneIDs)
+        XCTAssertEqual(try harness.windowSizeOwnership(sessionName: sessionName), "latest|")
+    }
 }
 
 private struct IsolatedTmuxPaneGeometry: Equatable {
