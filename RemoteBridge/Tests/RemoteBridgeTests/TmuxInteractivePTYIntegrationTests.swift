@@ -73,6 +73,79 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testAttachProofRequiresExactSpawnedClientTTYSessionWindowAndReportsActivePane() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let handle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: TmuxInteractivePTYSize(columns: 80, rows: 24)
+            )
+        )
+        var didCloseMaster = false
+        var didReapChild = false
+        defer {
+            if didCloseMaster == false {
+                try? controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+            }
+            if didReapChild == false {
+                reapForCleanup(controller: controller, childProcessID: handle.childProcessID)
+            }
+        }
+
+        let expectedProof = TmuxInteractiveAttachProof(
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            sessionID: target.sessionID,
+            windowID: target.windowID,
+            paneID: target.paneID
+        )
+        let prover = TmuxInteractiveAttachProver(
+            commandRunner: OrdinaryTmuxCLIAdapter.processCommandRunner(
+                executablePath: tmuxPath,
+                timeoutSeconds: 3
+            )
+        )
+        let claim = TmuxInteractiveAttachClaim(
+            socket: .path(fixture.socketPath),
+            childProcessID: handle.childProcessID,
+            workspaceID: expectedProof.workspaceID,
+            panelID: expectedProof.panelID,
+            sessionID: expectedProof.sessionID,
+            windowID: expectedProof.windowID
+        )
+        let verified = try XCTUnwrap(
+            waitForAttachProof(prover: prover, claim: claim, timeout: 3)
+        )
+        XCTAssertEqual(verified.attachProof, expectedProof)
+        XCTAssertEqual(verified.childProcessID, handle.childProcessID)
+        XCTAssertTrue(verified.clientTTY.hasPrefix("/dev/ttys"))
+
+        XCTAssertNil(try prover.prove(claim.replacing(childProcessID: handle.childProcessID + 1)))
+        XCTAssertNil(try prover.prove(claim.replacing(sessionID: "$999999")))
+        XCTAssertNil(try prover.prove(claim.replacing(windowID: "@999999")))
+
+        try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+        didCloseMaster = true
+        let childExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: handle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(childExit)
+        didReapChild = childExit != nil
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -247,6 +320,21 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         return try controller.reap(childProcessID: childProcessID, blocking: false)
     }
 
+    private func waitForAttachProof(
+        prover: TmuxInteractiveAttachProving,
+        claim: TmuxInteractiveAttachClaim,
+        timeout: TimeInterval
+    ) throws -> TmuxInteractiveVerifiedAttach? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let proof = try prover.prove(claim) {
+                return proof
+            }
+            usleep(20_000)
+        } while Date() < deadline
+        return try prover.prove(claim)
+    }
+
     private func reapForCleanup(
         controller: TmuxInteractivePTYControlling,
         childProcessID: Int32
@@ -276,6 +364,42 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
 private struct InteractivePTYTmuxTarget {
     let sessionID: String
     let windowID: String
+    let paneID: String
+}
+
+private extension TmuxInteractiveAttachClaim {
+    func replacing(childProcessID: Int32) -> Self {
+        Self(
+            socket: socket,
+            childProcessID: childProcessID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            sessionID: sessionID,
+            windowID: windowID
+        )
+    }
+
+    func replacing(sessionID: String) -> Self {
+        Self(
+            socket: socket,
+            childProcessID: childProcessID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            sessionID: sessionID,
+            windowID: windowID
+        )
+    }
+
+    func replacing(windowID: String) -> Self {
+        Self(
+            socket: socket,
+            childProcessID: childProcessID,
+            workspaceID: workspaceID,
+            panelID: panelID,
+            sessionID: sessionID,
+            windowID: windowID
+        )
+    }
 }
 
 private struct InteractivePTYTmuxClientRecord {
@@ -368,18 +492,19 @@ private final class InteractivePTYTmuxFixture {
         let sessionID = String(firstFields[0])
         let target = try run([
             "new-window", "-d",
-            "-P", "-F", "#{session_id}|#{window_id}",
+            "-P", "-F", "#{session_id}|#{window_id}|#{pane_id}",
             "-t", sessionID,
             "-n", "phone-target",
         ])
         let targetFields = target.split(separator: "|", omittingEmptySubsequences: false)
-        guard targetFields.count == 2,
+        guard targetFields.count == 3,
               targetFields[0] == Substring(sessionID) else {
             throw FixtureError.invalidRecord(target)
         }
         return InteractivePTYTmuxTarget(
             sessionID: sessionID,
-            windowID: String(targetFields[1])
+            windowID: String(targetFields[1]),
+            paneID: String(targetFields[2])
         )
     }
 
