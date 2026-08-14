@@ -210,6 +210,16 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         }
     }
 
+    func applyResize(_ resize: TmuxInteractiveResize) throws -> Bool {
+        try queue.sync {
+            guard state == .live,
+                  let resizeGate = activeResources?.resizeGate else {
+                throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
+            }
+            return try resizeGate.apply(resize)
+        }
+    }
+
     func pollAuthoritativeStart() throws -> TmuxInteractiveAuthoritativeStart? {
         try queue.sync {
             guard state == .redrawing,

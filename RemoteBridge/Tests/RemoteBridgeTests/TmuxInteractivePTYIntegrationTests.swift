@@ -352,6 +352,21 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         )
         XCTAssertFalse(authoritativeStart.initialBytes.isEmpty)
         XCTAssertEqual(owner.lifecycleState, .live)
+        let phoneViewport = TmuxInteractiveViewport(columns: 60, rows: 20)
+        let phoneResize = TmuxInteractiveResize(
+            binding: binding,
+            viewport: phoneViewport
+        )
+        XCTAssertTrue(try owner.applyResize(phoneResize))
+        XCTAssertTrue(
+            fixture.waitForClientSize(
+                processID: verifiedAttach.childProcessID,
+                columns: phoneViewport.columns,
+                rows: phoneViewport.rows,
+                timeout: 2
+            )
+        )
+        XCTAssertFalse(try owner.applyResize(phoneResize))
         XCTAssertEqual(try owner.sendInput(input), .written(input.bytes.count))
         XCTAssertTrue(
             fixture.waitForWindowCount(

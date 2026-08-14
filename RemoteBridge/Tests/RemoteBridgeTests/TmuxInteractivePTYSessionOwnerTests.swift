@@ -539,6 +539,102 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         store.releaseInteractiveLease(token: token, sessionKey: sessionKey)
     }
 
+    func testOwnerAppliesOnlyLiveCurrentGenerationResizes() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        controller.readResults = [
+            .wouldBlock,
+            .bytes(Data([0x1b, 0x5b, 0x48])),
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover
+        )
+        try owner.begin(request)
+        let liveViewport = TmuxInteractiveViewport(columns: 100, rows: 30)
+        let liveResize = TmuxInteractiveResize(
+            binding: request.subscribe.binding,
+            viewport: liveViewport
+        )
+
+        XCTAssertThrowsError(try owner.applyResize(liveResize)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .invalidState(.proving)
+            )
+        }
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        _ = try XCTUnwrap(owner.pollAuthoritativeStart())
+
+        let staleResize = TmuxInteractiveResize(
+            binding: TmuxInteractiveSubscriptionBinding(
+                subscriptionID: request.subscribe.binding.subscriptionID,
+                generation: request.subscribe.binding.generation - 1
+            ),
+            viewport: TmuxInteractiveViewport(columns: 0, rows: 0)
+        )
+        XCTAssertFalse(try owner.applyResize(staleResize))
+        XCTAssertFalse(
+            try owner.applyResize(
+                TmuxInteractiveResize(
+                    binding: request.subscribe.binding,
+                    viewport: request.subscribe.viewport
+                )
+            )
+        )
+        XCTAssertTrue(try owner.applyResize(liveResize))
+        XCTAssertFalse(try owner.applyResize(liveResize))
+        let invalidViewport = TmuxInteractiveViewport(columns: -1, rows: 30)
+        XCTAssertThrowsError(
+            try owner.applyResize(
+                TmuxInteractiveResize(
+                    binding: request.subscribe.binding,
+                    viewport: invalidViewport
+                )
+            )
+        ) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYResizeGateError,
+                .invalidViewport(invalidViewport)
+            )
+        }
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [
+                TmuxInteractivePTYSize(columns: 80, rows: 24),
+                TmuxInteractivePTYSize(columns: 100, rows: 30),
+            ]
+        )
+
+        try owner.close()
+        XCTAssertThrowsError(try owner.applyResize(liveResize)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .invalidState(.closed)
+            )
+        }
+        XCTAssertEqual(controller.resizedSizes.count, 2)
+    }
+
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
