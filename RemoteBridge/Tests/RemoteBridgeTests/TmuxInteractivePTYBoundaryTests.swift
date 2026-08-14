@@ -8,6 +8,15 @@ final class TmuxInteractivePTYBoundaryTests: XCTestCase {
         private(set) var resized: (fileDescriptor: Int32, size: TmuxInteractivePTYSize)?
         private(set) var closedFileDescriptor: Int32?
         private(set) var reapedProcessID: Int32?
+        private var readResults: [TmuxInteractivePTYReadResult] = [
+            .bytes(Data([0xff, 0x00])),
+            .wouldBlock,
+            .endOfFile,
+        ]
+        private var writeResults: [TmuxInteractivePTYWriteResult] = [
+            .written(1),
+            .wouldBlock,
+        ]
 
         func spawn(_ command: TmuxInteractivePTYAttachCommand) throws -> TmuxInteractivePTYHandle {
             spawnedCommand = command
@@ -25,6 +34,20 @@ final class TmuxInteractivePTYBoundaryTests: XCTestCase {
         func reap(childProcessID: Int32, blocking: Bool) throws -> TmuxInteractivePTYChildExit? {
             reapedProcessID = childProcessID
             return TmuxInteractivePTYChildExit(rawStatus: blocking ? 0 : 1)
+        }
+
+        func read(
+            masterFileDescriptor: Int32,
+            maximumBytes: Int
+        ) throws -> TmuxInteractivePTYReadResult {
+            readResults.removeFirst()
+        }
+
+        func write(
+            _ bytes: Data,
+            masterFileDescriptor: Int32
+        ) throws -> TmuxInteractivePTYWriteResult {
+            writeResults.removeFirst()
         }
     }
 
@@ -51,5 +74,30 @@ final class TmuxInteractivePTYBoundaryTests: XCTestCase {
         XCTAssertEqual(probe.closedFileDescriptor, 17)
         XCTAssertEqual(probe.reapedProcessID, 23)
         XCTAssertEqual(childExit, TmuxInteractivePTYChildExit(rawStatus: 0))
+    }
+
+    func testPTYIOBoundaryDistinguishesBytesBackpressureAndEOF() throws {
+        let probe = Probe()
+
+        XCTAssertEqual(
+            try probe.read(masterFileDescriptor: 17, maximumBytes: 4_096),
+            .bytes(Data([0xff, 0x00]))
+        )
+        XCTAssertEqual(
+            try probe.read(masterFileDescriptor: 17, maximumBytes: 4_096),
+            .wouldBlock
+        )
+        XCTAssertEqual(
+            try probe.read(masterFileDescriptor: 17, maximumBytes: 4_096),
+            .endOfFile
+        )
+        XCTAssertEqual(
+            try probe.write(Data([0x02, 0x64]), masterFileDescriptor: 17),
+            .written(1)
+        )
+        XCTAssertEqual(
+            try probe.write(Data([0x64]), masterFileDescriptor: 17),
+            .wouldBlock
+        )
     }
 }

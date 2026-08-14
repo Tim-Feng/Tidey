@@ -1,4 +1,5 @@
 import Darwin
+import Foundation
 import RemoteBridgePTYShim
 
 struct TmuxInteractivePTYSize: Equatable, Sendable {
@@ -23,11 +24,30 @@ struct TmuxInteractivePTYChildExit: Equatable, Sendable {
     let rawStatus: Int32
 }
 
+enum TmuxInteractivePTYReadResult: Equatable, Sendable {
+    case bytes(Data)
+    case wouldBlock
+    case endOfFile
+}
+
+enum TmuxInteractivePTYWriteResult: Equatable, Sendable {
+    case written(Int)
+    case wouldBlock
+}
+
 protocol TmuxInteractivePTYControlling: Sendable {
     func spawn(_ command: TmuxInteractivePTYAttachCommand) throws -> TmuxInteractivePTYHandle
     func resize(masterFileDescriptor: Int32, to size: TmuxInteractivePTYSize) throws
     func close(masterFileDescriptor: Int32) throws
     func reap(childProcessID: Int32, blocking: Bool) throws -> TmuxInteractivePTYChildExit?
+    func read(
+        masterFileDescriptor: Int32,
+        maximumBytes: Int
+    ) throws -> TmuxInteractivePTYReadResult
+    func write(
+        _ bytes: Data,
+        masterFileDescriptor: Int32
+    ) throws -> TmuxInteractivePTYWriteResult
 }
 
 enum TmuxInteractivePTYControllerError: Error, Equatable {
@@ -93,6 +113,26 @@ struct TmuxInteractivePTYController: TmuxInteractivePTYControlling {
         )
         guard didExit != 0 else { return nil }
         return TmuxInteractivePTYChildExit(rawStatus: rawStatus)
+    }
+
+    func read(
+        masterFileDescriptor: Int32,
+        maximumBytes: Int
+    ) throws -> TmuxInteractivePTYReadResult {
+        throw TmuxInteractivePTYControllerError.operationFailed(
+            operation: "read",
+            code: ENOTSUP
+        )
+    }
+
+    func write(
+        _ bytes: Data,
+        masterFileDescriptor: Int32
+    ) throws -> TmuxInteractivePTYWriteResult {
+        throw TmuxInteractivePTYControllerError.operationFailed(
+            operation: "write",
+            code: ENOTSUP
+        )
     }
 
     private func withSocket<Result>(
