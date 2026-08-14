@@ -55,6 +55,8 @@ enum TmuxInteractivePTYControllerError: Error, Equatable {
 }
 
 struct TmuxInteractivePTYController: TmuxInteractivePTYControlling {
+    private static let maximumReadSize = 1_024 * 1_024
+
     func spawn(_ command: TmuxInteractivePTYAttachCommand) throws -> TmuxInteractivePTYHandle {
         try command.tmuxExecutablePath.withCString { executablePath in
             try command.sessionID.withCString { sessionID in
@@ -119,20 +121,82 @@ struct TmuxInteractivePTYController: TmuxInteractivePTYControlling {
         masterFileDescriptor: Int32,
         maximumBytes: Int
     ) throws -> TmuxInteractivePTYReadResult {
-        throw TmuxInteractivePTYControllerError.operationFailed(
-            operation: "read",
-            code: ENOTSUP
-        )
+        guard masterFileDescriptor >= 0,
+              maximumBytes > 0,
+              maximumBytes <= Self.maximumReadSize else {
+            throw TmuxInteractivePTYControllerError.operationFailed(
+                operation: "read",
+                code: EINVAL
+            )
+        }
+
+        var data = Data(count: maximumBytes)
+        while true {
+            let count = data.withUnsafeMutableBytes { buffer in
+                Darwin.read(
+                    masterFileDescriptor,
+                    buffer.baseAddress,
+                    maximumBytes
+                )
+            }
+            if count > 0 {
+                data.removeSubrange(count..<data.count)
+                return .bytes(data)
+            }
+            if count == 0 {
+                return .endOfFile
+            }
+            let errorCode = errno
+            if errorCode == EINTR {
+                continue
+            }
+            if errorCode == EAGAIN || errorCode == EWOULDBLOCK {
+                return .wouldBlock
+            }
+            throw TmuxInteractivePTYControllerError.operationFailed(
+                operation: "read",
+                code: errorCode
+            )
+        }
     }
 
     func write(
         _ bytes: Data,
         masterFileDescriptor: Int32
     ) throws -> TmuxInteractivePTYWriteResult {
-        throw TmuxInteractivePTYControllerError.operationFailed(
-            operation: "write",
-            code: ENOTSUP
-        )
+        guard masterFileDescriptor >= 0 else {
+            throw TmuxInteractivePTYControllerError.operationFailed(
+                operation: "write",
+                code: EINVAL
+            )
+        }
+        guard bytes.isEmpty == false else {
+            return .written(0)
+        }
+
+        while true {
+            let count = bytes.withUnsafeBytes { buffer in
+                Darwin.write(
+                    masterFileDescriptor,
+                    buffer.baseAddress,
+                    buffer.count
+                )
+            }
+            if count >= 0 {
+                return .written(count)
+            }
+            let errorCode = errno
+            if errorCode == EINTR {
+                continue
+            }
+            if errorCode == EAGAIN || errorCode == EWOULDBLOCK {
+                return .wouldBlock
+            }
+            throw TmuxInteractivePTYControllerError.operationFailed(
+                operation: "write",
+                code: errorCode
+            )
+        }
     }
 
     private func withSocket<Result>(

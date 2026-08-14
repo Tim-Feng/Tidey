@@ -5,6 +5,13 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractivePTYIntegrationTests: XCTestCase {
+    private enum TestError: Error {
+        case readTimedOut
+        case unexpectedEndOfFile
+        case writeTimedOut
+        case invalidWriteProgress(Int)
+    }
+
     func testRealPTYAttachesExactSessionWindowWithInitialSizeAndReapsAfterMasterClose() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -64,6 +71,162 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertNotNil(childExit)
         didReapChild = childExit != nil
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
+    func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let handle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: TmuxInteractivePTYSize(columns: 80, rows: 24)
+            )
+        )
+        var didCloseMaster = false
+        var didReapChild = false
+        defer {
+            if didCloseMaster == false {
+                try? controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+            }
+            if didReapChild == false {
+                reapForCleanup(controller: controller, childProcessID: handle.childProcessID)
+            }
+        }
+
+        _ = try XCTUnwrap(
+            fixture.waitForClient(processID: handle.childProcessID, timeout: 3)
+        )
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 2)
+        XCTAssertFalse(
+            try readFirstBytes(
+                controller: controller,
+                masterFileDescriptor: handle.masterFileDescriptor,
+                timeout: 2
+            ).isEmpty
+        )
+
+        try writeAll(
+            Data([0x02, 0x63]),
+            controller: controller,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            timeout: 2
+        )
+        XCTAssertTrue(
+            fixture.waitForWindowCount(
+                sessionID: target.sessionID,
+                expected: 3,
+                timeout: 2
+            )
+        )
+
+        try writeAll(
+            Data([0x02, 0x64]),
+            controller: controller,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            timeout: 2
+        )
+        let childExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: handle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertEqual(childExit?.rawStatus, 0)
+        didReapChild = childExit != nil
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+        XCTAssertTrue(
+            try waitForEndOfFile(
+                controller: controller,
+                masterFileDescriptor: handle.masterFileDescriptor,
+                timeout: 2
+            )
+        )
+
+        try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+        didCloseMaster = true
+        usleep(100_000)
+        XCTAssertEqual(try fixture.clientCount(), 0)
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 3)
+    }
+
+    private func readFirstBytes(
+        controller: TmuxInteractivePTYControlling,
+        masterFileDescriptor: Int32,
+        timeout: TimeInterval
+    ) throws -> Data {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            switch try controller.read(
+                masterFileDescriptor: masterFileDescriptor,
+                maximumBytes: 16 * 1_024
+            ) {
+            case .bytes(let bytes):
+                return bytes
+            case .wouldBlock:
+                usleep(20_000)
+            case .endOfFile:
+                throw TestError.unexpectedEndOfFile
+            }
+        } while Date() < deadline
+        throw TestError.readTimedOut
+    }
+
+    private func writeAll(
+        _ bytes: Data,
+        controller: TmuxInteractivePTYControlling,
+        masterFileDescriptor: Int32,
+        timeout: TimeInterval
+    ) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var offset = 0
+        while offset < bytes.count, Date() < deadline {
+            let remaining = bytes.subdata(in: offset..<bytes.count)
+            switch try controller.write(
+                remaining,
+                masterFileDescriptor: masterFileDescriptor
+            ) {
+            case .written(let count):
+                guard count > 0, count <= remaining.count else {
+                    throw TestError.invalidWriteProgress(count)
+                }
+                offset += count
+            case .wouldBlock:
+                usleep(20_000)
+            }
+        }
+        guard offset == bytes.count else {
+            throw TestError.writeTimedOut
+        }
+    }
+
+    private func waitForEndOfFile(
+        controller: TmuxInteractivePTYControlling,
+        masterFileDescriptor: Int32,
+        timeout: TimeInterval
+    ) throws -> Bool {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            switch try controller.read(
+                masterFileDescriptor: masterFileDescriptor,
+                maximumBytes: 16 * 1_024
+            ) {
+            case .bytes:
+                continue
+            case .wouldBlock:
+                usleep(20_000)
+            case .endOfFile:
+                return true
+            }
+        } while Date() < deadline
+        return false
     }
 
     private func waitForChildExit(
@@ -235,6 +398,29 @@ private final class InteractivePTYTmuxFixture {
     func waitForClientCount(_ expected: Int, timeout: TimeInterval) -> Bool {
         waitUntil(timeout: timeout) {
             (try? self.clientRecords().count) == expected
+        }
+    }
+
+    func clientCount() throws -> Int {
+        try clientRecords().count
+    }
+
+    func windowCount(sessionID: String) throws -> Int {
+        let output = try run([
+            "list-windows",
+            "-t", sessionID,
+            "-F", "#{window_id}",
+        ])
+        return output.split(whereSeparator: \.isNewline).count
+    }
+
+    func waitForWindowCount(
+        sessionID: String,
+        expected: Int,
+        timeout: TimeInterval
+    ) -> Bool {
+        waitUntil(timeout: timeout) {
+            (try? self.windowCount(sessionID: sessionID)) == expected
         }
     }
 
