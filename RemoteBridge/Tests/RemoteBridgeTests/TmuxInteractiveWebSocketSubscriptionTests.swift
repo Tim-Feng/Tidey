@@ -394,6 +394,162 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         )
     }
 
+    func testUnsubscribeStopsOnlyExactGenerationAndClosesPTYWithoutLateEvents() throws {
+        let route = makeRoute()
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let controller = ControllerProbe(readResults: [.wouldBlock])
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: ProverStub(verifiedAttach: verifiedAttach)
+        )
+        let subscribe = TmuxInteractiveSubscribe(
+            workspaceID: route.workspaceID,
+            panelID: route.panelID,
+            binding: binding,
+            viewport: viewport
+        )
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: subscribe,
+                route: route,
+                tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+            )
+        )
+        let session = TmuxInteractivePTYConnectionSession(
+            binding: binding,
+            owner: owner
+        )
+        let candidateBuilder = TmuxInteractivePTYSessionCandidateBuilder(
+            routeResolver: RouteResolverStub(route: route),
+            migrateWindow: { _, _ in
+                .notEligible(.currentPolicyNotOwned("latest"))
+            },
+            sessionFactory: { _ in session },
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        let fixture = try makeFixture(candidateBuilder: candidateBuilder)
+        defer { fixture.cleanup() }
+
+        try writeRequest(
+            BridgeRequest(
+                id: "subscribe-before-unsubscribe",
+                action: TmuxInteractiveProtocolV1.subscribeAction,
+                params: [
+                    "workspace_id": .string(route.workspaceID),
+                    "panel_id": .string(route.panelID),
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                    "cols": .number(Double(viewport.columns)),
+                    "rows": .number(Double(viewport.rows)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+
+        try writeRequest(
+            BridgeRequest(
+                id: "unsubscribe-stale",
+                action: TmuxInteractiveProtocolV1.unsubscribeAction,
+                params: [
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation - 1)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let staleResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertFalse(staleResponse.ok)
+        XCTAssertEqual(staleResponse.error?.code, "superseded")
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+        XCTAssertEqual(controller.closeCount, 0)
+        XCTAssertEqual(controller.reapCount, 0)
+
+        try writeRequest(
+            BridgeRequest(
+                id: "unsubscribe-current",
+                action: TmuxInteractiveProtocolV1.unsubscribeAction,
+                params: [
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let currentResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertTrue(currentResponse.ok)
+        XCTAssertEqual(currentResponse.result?["subscribed"]?.boolValue, false)
+        XCTAssertEqual(
+            currentResponse.result?["subscription_id"]?.stringValue,
+            binding.subscriptionID
+        )
+        XCTAssertEqual(
+            currentResponse.result?["generation"]?.intValue,
+            Int(binding.generation)
+        )
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closeCount, 1)
+        XCTAssertEqual(controller.reapCount, 1)
+
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(100))
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertNil(
+            try fixture.channel.readOutbound(as: WebSocketFrame.self)
+        )
+
+        let sessionKey = OrdinaryTmuxSessionKey(
+            socket: route.socket,
+            sessionID: route.sessionID
+        )
+        let afterUnsubscribeToken = OrdinaryTmuxInteractiveLeaseToken(
+            rawValue: "after-unsubscribe"
+        )
+        XCTAssertTrue(
+            store.acquireInteractiveLease(
+                token: afterUnsubscribeToken,
+                sessionKey: sessionKey
+            )
+        )
+        store.releaseInteractiveLease(
+            token: afterUnsubscribeToken,
+            sessionKey: sessionKey
+        )
+    }
+
     private func writeRequest(
         _ request: BridgeRequest,
         to channel: EmbeddedChannel

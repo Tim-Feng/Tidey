@@ -1823,11 +1823,73 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     self?.startInteractivePTYPump(binding: binding)
                 }
             )
-        case .input, .resize, .unsubscribe:
+        case .unsubscribe(let unsubscribe):
+            let binding = unsubscribe.binding
+            return LocalRequestResult(
+                response: BridgeResponse(
+                    id: request.id,
+                    ok: true,
+                    result: [
+                        "subscribed": .bool(false),
+                        "subscription_id": .string(binding.subscriptionID),
+                        "generation": .number(Double(binding.generation)),
+                    ],
+                    error: nil
+                ),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: [],
+                applyOnEventLoop: interactivePTYUnsubscribeCommit(
+                    binding: binding
+                )
+            )
+        case .input, .resize:
             return interactivePTYUnavailableResponse(
                 requestID: request.id,
                 message: "Interactive tmux PTY action is not enabled yet."
             )
+        }
+    }
+
+    private func interactivePTYUnsubscribeCommit(
+        binding: TmuxInteractiveSubscriptionBinding
+    ) -> () -> CommitOutcome {
+        let workExecutor = InteractivePTYWorkExecutor(execute: requestExecutor)
+        let cleanupConnectionID = connectionID
+        return { [weak self] in
+            guard let self else {
+                return .rejected(
+                    reason: "interactive PTY connection is no longer active"
+                )
+            }
+            guard let session = self.interactivePTYConnectionState.remove(
+                binding: binding
+            ) else {
+                return .rejected(
+                    reason: "interactive PTY subscription is no longer current"
+                )
+            }
+            let pumpToStop: TmuxInteractivePTYEventPump?
+            if let entry = self.interactivePTYPumps[binding.subscriptionID],
+               entry.binding == binding,
+               entry.session === session {
+                self.interactivePTYPumps.removeValue(
+                    forKey: binding.subscriptionID
+                )
+                pumpToStop = entry.pump
+            } else {
+                pumpToStop = nil
+            }
+            pumpToStop?.stop()
+            workExecutor.submit {
+                do {
+                    try session.close()
+                } catch {
+                    BridgeLogger.server.error(
+                        "interactive PTY unsubscribe cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+            return .accepted
         }
     }
 
