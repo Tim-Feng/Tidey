@@ -235,6 +235,43 @@ final class OrdinaryTmuxWindowSizeIntegrationTests: XCTestCase {
     }
 }
 
+private struct IsolatedTmuxPaneGeometry: Equatable {
+    enum ParsingError: Error {
+        case invalidRecord(String)
+    }
+
+    let paneID: String
+    let paneIndex: Int
+    let left: Int
+    let top: Int
+    let width: Int
+    let height: Int
+    let windowWidth: Int
+    let windowHeight: Int
+
+    init(record: Substring) throws {
+        let fields = record.split(separator: "|", omittingEmptySubsequences: false)
+        guard fields.count == 8,
+              let paneIndex = Int(fields[1]),
+              let left = Int(fields[2]),
+              let top = Int(fields[3]),
+              let width = Int(fields[4]),
+              let height = Int(fields[5]),
+              let windowWidth = Int(fields[6]),
+              let windowHeight = Int(fields[7]) else {
+            throw ParsingError.invalidRecord(String(record))
+        }
+        paneID = String(fields[0])
+        self.paneIndex = paneIndex
+        self.left = left
+        self.top = top
+        self.width = width
+        self.height = height
+        self.windowWidth = windowWidth
+        self.windowHeight = windowHeight
+    }
+}
+
 private final class IsolatedTmuxControlClient: @unchecked Sendable {
     enum ClientError: Error {
         case unavailable
@@ -442,13 +479,15 @@ private final class IsolatedTmuxHarness {
         ])
     }
 
-    func paneGeometry(sessionName: String) throws -> [Substring] {
+    func paneGeometry(sessionName: String) throws -> [IsolatedTmuxPaneGeometry] {
         let output = try runServerCommand([
             "list-panes",
             "-t", "=\(sessionName):0",
-            "-F", "#{window_width}x#{window_height}|#{pane_index}|#{pane_left},#{pane_top}|#{pane_width}x#{pane_height}",
+            "-F", "#{pane_id}|#{pane_index}|#{pane_left}|#{pane_top}|#{pane_width}|#{pane_height}|#{window_width}|#{window_height}",
         ])
-        return output.split(whereSeparator: \.isNewline)
+        return try output.split(whereSeparator: \.isNewline).map {
+            try IsolatedTmuxPaneGeometry(record: $0)
+        }
     }
 
     func attachControlModeSizingClient(
