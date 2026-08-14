@@ -719,6 +719,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
     private var terminalStreamConnectionState = TerminalStreamConnectionState()
+    private var interactivePTYConnectionState =
+        TmuxInteractivePTYConnectionState<TmuxInteractivePTYSessionOwner>()
     private var connectedAt: Date?
     private var didRecordConnection = false
     private var didRecordDisconnect = false
@@ -943,6 +945,19 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        let interactivePTYOwners = interactivePTYConnectionState.retire()
+        let cleanupConnectionID = connectionID
+        for owner in interactivePTYOwners {
+            requestExecutor {
+                do {
+                    try owner.close()
+                } catch {
+                    BridgeLogger.server.error(
+                        "interactive PTY connection cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+        }
         terminalStreamConnectionAdmission.retire()
         if !didRecordDisconnect {
             let timestamp = now()
@@ -960,6 +975,13 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         unsubscribeFromWorkspaceEvents()
         observability.clearActiveTerminalStreamSubscriptionCount(forConnectionID: connectionID)
         context.fireChannelInactive()
+    }
+
+    func installInteractivePTYOwner(
+        binding: TmuxInteractiveSubscriptionBinding,
+        owner: TmuxInteractivePTYSessionOwner
+    ) -> Bool {
+        interactivePTYConnectionState.install(binding: binding, owner: owner)
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {

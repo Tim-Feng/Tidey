@@ -8,6 +8,48 @@ import XCTest
 final class WebSocketConnectionLifecycleObservabilityTests: XCTestCase {
     private struct StubWriteError: Error {}
 
+    private final class InteractivePTYControllerProbe:
+        TmuxInteractivePTYControlling,
+        @unchecked Sendable
+    {
+        private(set) var closeCalls = [Int32]()
+        private(set) var reapCalls = [(processID: Int32, blocking: Bool)]()
+
+        func spawn(
+            _ command: TmuxInteractivePTYAttachCommand
+        ) throws -> TmuxInteractivePTYHandle {
+            TmuxInteractivePTYHandle(masterFileDescriptor: 17, childProcessID: 23)
+        }
+
+        func resize(masterFileDescriptor: Int32, to size: TmuxInteractivePTYSize) throws {}
+
+        func close(masterFileDescriptor: Int32) throws {
+            closeCalls.append(masterFileDescriptor)
+        }
+
+        func reap(
+            childProcessID: Int32,
+            blocking: Bool
+        ) throws -> TmuxInteractivePTYChildExit? {
+            reapCalls.append((childProcessID, blocking))
+            return TmuxInteractivePTYChildExit(rawStatus: 0)
+        }
+
+        func read(
+            masterFileDescriptor: Int32,
+            maximumBytes: Int
+        ) throws -> TmuxInteractivePTYReadResult {
+            .wouldBlock
+        }
+
+        func write(
+            _ bytes: Data,
+            masterFileDescriptor: Int32
+        ) throws -> TmuxInteractivePTYWriteResult {
+            .written(bytes.count)
+        }
+    }
+
     private final class FailingOutboundHandler: ChannelOutboundHandler {
         typealias OutboundIn = WebSocketFrame
 
@@ -106,6 +148,86 @@ final class WebSocketConnectionLifecycleObservabilityTests: XCTestCase {
         XCTAssertFalse(events.contains { $0.kind == .disconnected })
     }
 
+    func testChannelInactiveClosesInteractivePTYAndReleasesLeaseExactlyOnce() throws {
+        let observability = BridgeObservabilityCenter()
+        let fixture = try makeFixture(
+            observability: observability,
+            connectionID: "connection-interactive-pty",
+            now: { Date(timeIntervalSince1970: 40) },
+            requestExecutor: { work in work() }
+        )
+        defer { fixture.cleanup() }
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let controller = InteractivePTYControllerProbe()
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller
+        )
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:path:$1:@2",
+            carrierPanelID: "carrier-1",
+            socket: .path("/private/tmp/tmux-501/default"),
+            sessionID: "$1",
+            sessionName: "session-1",
+            windowID: "@2",
+            windowIndex: 1,
+            activePaneID: "%3",
+            cwd: nil,
+            currentCommand: "zsh"
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: TmuxInteractiveSubscribe(
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    binding: binding,
+                    viewport: TmuxInteractiveViewport(columns: 80, rows: 24)
+                ),
+                route: route,
+                tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+            )
+        )
+        XCTAssertTrue(
+            fixture.handler.installInteractivePTYOwner(
+                binding: binding,
+                owner: owner
+            )
+        )
+
+        fixture.handler.channelInactive(context: fixture.context)
+        fixture.handler.channelInactive(context: fixture.context)
+
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closeCalls, [17])
+        XCTAssertEqual(controller.reapCalls.count, 1)
+        let sessionKey = OrdinaryTmuxSessionKey(
+            socket: route.socket,
+            sessionID: route.sessionID
+        )
+        let afterLossToken = OrdinaryTmuxInteractiveLeaseToken(rawValue: "after-loss")
+        XCTAssertTrue(
+            store.acquireInteractiveLease(token: afterLossToken, sessionKey: sessionKey)
+        )
+        store.releaseInteractiveLease(token: afterLossToken, sessionKey: sessionKey)
+        XCTAssertFalse(
+            fixture.handler.installInteractivePTYOwner(
+                binding: TmuxInteractiveSubscriptionBinding(
+                    subscriptionID: "late",
+                    generation: 10
+                ),
+                owner: TmuxInteractivePTYSessionOwner(
+                    admissionStore: store,
+                    controller: InteractivePTYControllerProbe()
+                )
+            )
+        )
+    }
+
     private struct Fixture {
         let handler: WebSocketFrameHandler
         let context: ChannelHandlerContext
@@ -121,7 +243,10 @@ final class WebSocketConnectionLifecycleObservabilityTests: XCTestCase {
     private func makeFixture(observability: BridgeObservabilityCenter,
                              connectionID: String,
                              now: @escaping @Sendable () -> Date,
-                             failWrites: Bool = false) throws -> Fixture {
+                             failWrites: Bool = false,
+                             requestExecutor: @escaping BridgeRequestExecutor = { work in
+                                 work()
+                             }) throws -> Fixture {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent("WebSocketConnectionLifecycleObservabilityTests-\(UUID().uuidString)",
                                     isDirectory: true)
@@ -141,7 +266,8 @@ final class WebSocketConnectionLifecycleObservabilityTests: XCTestCase {
                                             bridgePort: 0,
                                             cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
                                             connectionID: connectionID,
-                                            now: now)
+                                            now: now,
+                                            requestExecutor: requestExecutor)
         let channel = failWrites
             ? EmbeddedChannel(handlers: [FailingOutboundHandler(), handler])
             : EmbeddedChannel(handler: handler)
