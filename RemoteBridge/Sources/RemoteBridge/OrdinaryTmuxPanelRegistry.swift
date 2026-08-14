@@ -468,11 +468,17 @@ final class OrdinaryTmuxInputSubmissionStore: @unchecked Sendable {
         label: "com.tidey.remote-bridge.ordinary-tmux-input-submission-store"
     )
     private var submissionByRouteKey = [String: SubmissionReservation]()
+    private var interactiveLeaseBySessionKey = [
+        OrdinaryTmuxSessionKey: OrdinaryTmuxInteractiveLeaseToken
+    ]()
 
     func reserve(submissionID: String,
                  routeKey: String,
                  sessionKey: OrdinaryTmuxSessionKey) -> Bool {
         queue.sync {
+            guard interactiveLeaseBySessionKey[sessionKey] == nil else {
+                return false
+            }
             guard let current = submissionByRouteKey[routeKey] else {
                 submissionByRouteKey[routeKey] = SubmissionReservation(
                     submissionID: submissionID,
@@ -481,6 +487,30 @@ final class OrdinaryTmuxInputSubmissionStore: @unchecked Sendable {
                 return true
             }
             return current.submissionID == submissionID && current.sessionKey == sessionKey
+        }
+    }
+
+    func acquireInteractiveLease(token: OrdinaryTmuxInteractiveLeaseToken,
+                                 sessionKey: OrdinaryTmuxSessionKey) -> Bool {
+        queue.sync {
+            guard interactiveLeaseBySessionKey[sessionKey] == nil,
+                  submissionByRouteKey.values.contains(where: {
+                      $0.sessionKey == sessionKey
+                  }) == false else {
+                return false
+            }
+            interactiveLeaseBySessionKey[sessionKey] = token
+            return true
+        }
+    }
+
+    func releaseInteractiveLease(token: OrdinaryTmuxInteractiveLeaseToken,
+                                 sessionKey: OrdinaryTmuxSessionKey) {
+        queue.sync {
+            guard interactiveLeaseBySessionKey[sessionKey] == token else {
+                return
+            }
+            interactiveLeaseBySessionKey.removeValue(forKey: sessionKey)
         }
     }
 

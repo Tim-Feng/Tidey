@@ -55,6 +55,23 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
     }
 
+    private final class AdmissionRaceResults: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage = [Bool]()
+
+        func append(_ value: Bool) {
+            lock.lock()
+            storage.append(value)
+            lock.unlock()
+        }
+
+        var values: [Bool] {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
     func testInputSubmissionStoreReservesOneOwnerPerRoute() {
         let store = OrdinaryTmuxInputSubmissionStore()
         let firstSession = OrdinaryTmuxSessionKey(socket: .defaultSocket, sessionID: "$1")
@@ -88,6 +105,77 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             routeKey: "route-1",
             sessionKey: firstSession
         ))
+    }
+
+    func testInputSubmissionStoreAtomicallyExcludesInteractiveLeaseAcrossSessionRoutes() {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let session = OrdinaryTmuxSessionKey(socket: .defaultSocket, sessionID: "$1")
+        let otherSession = OrdinaryTmuxSessionKey(socket: .defaultSocket, sessionID: "$2")
+        let owner = OrdinaryTmuxInteractiveLeaseToken(rawValue: "interactive-owner")
+        let staleOwner = OrdinaryTmuxInteractiveLeaseToken(rawValue: "interactive-stale")
+
+        XCTAssertTrue(store.acquireInteractiveLease(token: owner, sessionKey: session))
+        XCTAssertFalse(store.acquireInteractiveLease(token: staleOwner, sessionKey: session))
+        XCTAssertFalse(store.reserve(
+            submissionID: "submission-blocked",
+            routeKey: "same-session-other-window",
+            sessionKey: session
+        ))
+        XCTAssertTrue(store.reserve(
+            submissionID: "submission-other-session",
+            routeKey: "other-session-window",
+            sessionKey: otherSession
+        ))
+
+        store.releaseInteractiveLease(token: staleOwner, sessionKey: session)
+        XCTAssertFalse(store.reserve(
+            submissionID: "submission-still-blocked",
+            routeKey: "same-session-third-window",
+            sessionKey: session
+        ))
+        store.releaseInteractiveLease(token: owner, sessionKey: session)
+        XCTAssertTrue(store.reserve(
+            submissionID: "submission-now-owner",
+            routeKey: "same-session-window",
+            sessionKey: session
+        ))
+        XCTAssertFalse(store.acquireInteractiveLease(token: owner, sessionKey: session))
+
+        for index in 0..<100 {
+            let raceStore = OrdinaryTmuxInputSubmissionStore()
+            let raceSession = OrdinaryTmuxSessionKey(
+                socket: .name("race-\(index)"),
+                sessionID: "$\(index + 10)"
+            )
+            let raceStart = DispatchSemaphore(value: 0)
+            let raceDone = DispatchGroup()
+            let raceResults = AdmissionRaceResults()
+
+            raceDone.enter()
+            DispatchQueue.global().async {
+                raceStart.wait()
+                raceResults.append(raceStore.acquireInteractiveLease(
+                    token: OrdinaryTmuxInteractiveLeaseToken(rawValue: "lease-\(index)"),
+                    sessionKey: raceSession
+                ))
+                raceDone.leave()
+            }
+            raceDone.enter()
+            DispatchQueue.global().async {
+                raceStart.wait()
+                raceResults.append(raceStore.reserve(
+                    submissionID: "submission-\(index)",
+                    routeKey: "route-\(index)",
+                    sessionKey: raceSession
+                ))
+                raceDone.leave()
+            }
+
+            raceStart.signal()
+            raceStart.signal()
+            XCTAssertEqual(raceDone.wait(timeout: .now() + 2), .success)
+            XCTAssertEqual(raceResults.values.filter { $0 }.count, 1)
+        }
     }
 
     func testSharedSubmissionStoreRejectsSecondRouterBeforeItPastesToTheSameRoute() throws {
