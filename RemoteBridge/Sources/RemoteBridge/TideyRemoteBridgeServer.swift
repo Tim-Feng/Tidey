@@ -580,6 +580,7 @@ typealias TerminalStreamEventLoopScheduler = (EventLoop, @escaping () -> Void) -
 
 enum BridgeProtocolCapability {
     static let terminalStreamSubscriptionOwnership = "terminal_stream_subscription_ownership_v1"
+    static let tmuxInteractive = TmuxInteractiveProtocolV1.capability
 }
 
 final class WebSocketFrameHandler: ChannelInboundHandler {
