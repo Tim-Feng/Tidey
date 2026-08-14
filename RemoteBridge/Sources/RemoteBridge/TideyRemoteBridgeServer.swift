@@ -597,6 +597,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         let session: TmuxInteractivePTYConnectionSession
         let outputPump: TmuxInteractivePTYEventPump
         let inputPump: TmuxInteractivePTYInputPump
+        let resizePump: TmuxInteractivePTYResizePump
     }
 
     private final class TerminalStreamDeltaSender: @unchecked Sendable {
@@ -758,7 +759,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             if case .success = result,
                case .start = event {
                 guard let handler,
-                      handler.activateInteractivePTYInputPump(
+                      handler.activateInteractivePTYMutationPumps(
                         binding: binding,
                         session: session
                       ) else {
@@ -1099,12 +1100,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             interactivePTYPumps.values.map(\.outputPump)
         let interactivePTYInputPumpsToStop =
             interactivePTYPumps.values.map(\.inputPump)
+        let interactivePTYResizePumpsToStop =
+            interactivePTYPumps.values.map(\.resizePump)
         interactivePTYPumps.removeAll(keepingCapacity: false)
         let interactivePTYSessions = interactivePTYConnectionState.retire()
         for pump in interactivePTYOutputPumpsToStop {
             pump.stop()
         }
         for pump in interactivePTYInputPumpsToStop {
+            pump.stop()
+        }
+        for pump in interactivePTYResizePumpsToStop {
             pump.stop()
         }
         let cleanupConnectionID = connectionID
@@ -1907,11 +1913,66 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 workspaceReplayEnvelopes: [],
                 applyOnEventLoop: interactivePTYInputCommit(input: input)
             )
-        case .resize:
-            return interactivePTYUnavailableResponse(
-                requestID: request.id,
-                message: "Interactive tmux PTY action is not enabled yet."
+        case .resize(let resize):
+            let binding = resize.binding
+            return LocalRequestResult(
+                response: BridgeResponse(
+                    id: request.id,
+                    ok: true,
+                    result: [
+                        "accepted": .bool(true),
+                        "subscription_id": .string(binding.subscriptionID),
+                        "generation": .number(Double(binding.generation)),
+                        "cols": .number(Double(resize.viewport.columns)),
+                        "rows": .number(Double(resize.viewport.rows)),
+                    ],
+                    error: nil
+                ),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: [],
+                applyOnEventLoop: interactivePTYResizeCommit(resize: resize)
             )
+        }
+    }
+
+    private func interactivePTYResizeCommit(
+        resize: TmuxInteractiveResize
+    ) -> () -> CommitOutcome {
+        let binding = resize.binding
+        return { [weak self] in
+            guard let self else {
+                return .rejected(
+                    reason: "interactive PTY connection is no longer active"
+                )
+            }
+            guard let session = self.interactivePTYConnectionState.owner(
+                for: binding
+            ),
+            let entry = self.interactivePTYPumps[binding.subscriptionID],
+            entry.binding == binding,
+            entry.session === session else {
+                return .rejected(
+                    reason: "interactive PTY subscription is no longer current"
+                )
+            }
+            switch entry.resizePump.enqueue(resize) {
+            case .accepted:
+                return .accepted
+            case .notActive:
+                return .failed(
+                    code: "tmux_interactive_not_ready",
+                    reason: "Interactive PTY authoritative start is not active."
+                )
+            case .bindingMismatch:
+                return .rejected(
+                    reason: "interactive PTY subscription is no longer current"
+                )
+            case .invalidViewport:
+                return .failed(
+                    code: "invalid_request",
+                    reason: "Interactive PTY viewport is invalid."
+                )
+            }
         }
     }
 
@@ -1992,6 +2053,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             }
             pumpsToStop?.outputPump.stop()
             pumpsToStop?.inputPump.stop()
+            pumpsToStop?.resizePump.stop()
             workExecutor.submit {
                 do {
                     try session.close()
@@ -2068,12 +2130,18 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 binding: binding,
                 context: context
             )
+            let resizePump = self.makeInteractivePTYResizePump(
+                session: session,
+                binding: binding,
+                context: context
+            )
             self.interactivePTYPumps[binding.subscriptionID] =
                 InteractivePTYPumpEntry(
                     binding: binding,
                     session: session,
                     outputPump: outputPump,
-                    inputPump: inputPump
+                    inputPump: inputPump,
+                    resizePump: resizePump
                 )
             return .accepted
         }
@@ -2091,7 +2159,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         entry.outputPump.start()
     }
 
-    private func activateInteractivePTYInputPump(
+    private func activateInteractivePTYMutationPumps(
         binding: TmuxInteractiveSubscriptionBinding,
         session: TmuxInteractivePTYConnectionSession
     ) -> Bool {
@@ -2101,7 +2169,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
               entry.session === session else {
             return false
         }
-        return entry.inputPump.activate()
+        return entry.inputPump.activate() && entry.resizePump.activate()
     }
 
     private func makeInteractivePTYPump(
@@ -2206,6 +2274,47 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         )
     }
 
+    private func makeInteractivePTYResizePump(
+        session: TmuxInteractivePTYConnectionSession,
+        binding: TmuxInteractiveSubscriptionBinding,
+        context: ChannelHandlerContext
+    ) -> TmuxInteractivePTYResizePump {
+        let workExecutor = InteractivePTYWorkExecutor(execute: requestExecutor)
+        let callbackTarget = InteractivePTYConnectionCallbackTarget(
+            handler: self,
+            context: context
+        )
+        let cleanupConnectionID = connectionID
+        let closeSession: @Sendable () -> Void = {
+            workExecutor.submit {
+                do {
+                    try session.close()
+                } catch {
+                    BridgeLogger.server.error(
+                        "interactive PTY resize cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+        }
+        return TmuxInteractivePTYResizePump(
+            binding: binding,
+            apply: { resize in
+                try session.applyResize(resize)
+            },
+            execute: { work in
+                workExecutor.submit(work)
+            },
+            onStopped: { error in
+                callbackTarget.stopped(
+                    error: error,
+                    binding: binding,
+                    session: session,
+                    closeSession: closeSession
+                )
+            }
+        )
+    }
+
     private func finishInteractivePTYPump(
         binding: TmuxInteractiveSubscriptionBinding,
         session: TmuxInteractivePTYConnectionSession,
@@ -2229,6 +2338,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         }
         pumpsToStop?.outputPump.stop()
         pumpsToStop?.inputPump.stop()
+        pumpsToStop?.resizePump.stop()
         if error != nil {
             closeSession()
         }

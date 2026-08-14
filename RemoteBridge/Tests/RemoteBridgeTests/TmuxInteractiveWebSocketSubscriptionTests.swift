@@ -17,6 +17,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         private(set) var closeCount = 0
         private(set) var reapCount = 0
         private(set) var writes = [Data]()
+        private(set) var resizeSizes = [TmuxInteractivePTYSize]()
 
         init(
             readResults: [TmuxInteractivePTYReadResult],
@@ -35,7 +36,11 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         func resize(
             masterFileDescriptor: Int32,
             to size: TmuxInteractivePTYSize
-        ) throws {}
+        ) throws {
+            lock.lock()
+            resizeSizes.append(size)
+            lock.unlock()
+        }
 
         func close(masterFileDescriptor: Int32) throws {
             lock.lock()
@@ -762,6 +767,217 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         XCTAssertEqual(controller.reapCount, 1)
     }
 
+    func testResizeActivatesAfterStartAndAppliesOnlyExactLatestViewport() throws {
+        let route = makeRoute()
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let startBytes = Data([0x1b, 0x5b, 0x48])
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let controller = ControllerProbe(
+            readResults: [
+                .wouldBlock,
+                .bytes(startBytes),
+                .wouldBlock,
+                .wouldBlock,
+            ]
+        )
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: ProverStub(verifiedAttach: verifiedAttach)
+        )
+        let subscribe = TmuxInteractiveSubscribe(
+            workspaceID: route.workspaceID,
+            panelID: route.panelID,
+            binding: binding,
+            viewport: viewport
+        )
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: subscribe,
+                route: route,
+                tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+            )
+        )
+        let session = TmuxInteractivePTYConnectionSession(
+            binding: binding,
+            owner: owner
+        )
+        let candidateBuilder = TmuxInteractivePTYSessionCandidateBuilder(
+            routeResolver: RouteResolverStub(route: route),
+            migrateWindow: { _, _ in
+                .notEligible(.currentPolicyNotOwned("latest"))
+            },
+            sessionFactory: { _ in session },
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        let fixture = try makeFixture(candidateBuilder: candidateBuilder)
+        defer { fixture.cleanup() }
+
+        try writeRequest(
+            BridgeRequest(
+                id: "subscribe-before-resize",
+                action: TmuxInteractiveProtocolV1.subscribeAction,
+                params: [
+                    "workspace_id": .string(route.workspaceID),
+                    "panel_id": .string(route.panelID),
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                    "cols": .number(Double(viewport.columns)),
+                    "rows": .number(Double(viewport.rows)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+
+        try writeRequest(
+            resizeRequest(
+                id: "resize-before-start",
+                binding: binding,
+                viewport: TmuxInteractiveViewport(columns: 70, rows: 20)
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let beforeStartResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertFalse(beforeStartResponse.ok)
+        XCTAssertEqual(
+            beforeStartResponse.error?.code,
+            "tmux_interactive_not_ready"
+        )
+        XCTAssertTrue(controller.resizeSizes.isEmpty)
+
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        let start = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: TmuxInteractiveAuthoritativeStartEnvelope.self
+        )
+        XCTAssertEqual(start.type, TmuxInteractiveProtocolV1.startEventType)
+        XCTAssertEqual(
+            controller.resizeSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
+
+        let staleBinding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: binding.subscriptionID,
+            generation: binding.generation - 1
+        )
+        try writeRequest(
+            resizeRequest(
+                id: "resize-stale",
+                binding: staleBinding,
+                viewport: TmuxInteractiveViewport(columns: 65, rows: 19)
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let staleResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertFalse(staleResponse.ok)
+        XCTAssertEqual(staleResponse.error?.code, "superseded")
+        XCTAssertEqual(controller.resizeSizes.count, 1)
+
+        let latestViewport = TmuxInteractiveViewport(columns: 60, rows: 20)
+        try writeRequest(
+            resizeRequest(
+                id: "resize-current",
+                binding: binding,
+                viewport: latestViewport
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let currentResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertTrue(currentResponse.ok)
+        XCTAssertEqual(currentResponse.result?["accepted"]?.boolValue, true)
+        XCTAssertEqual(currentResponse.result?["cols"]?.intValue, 60)
+        XCTAssertEqual(currentResponse.result?["rows"]?.intValue, 20)
+        XCTAssertEqual(
+            controller.resizeSizes,
+            [
+                TmuxInteractivePTYSize(columns: 80, rows: 24),
+                TmuxInteractivePTYSize(columns: 60, rows: 20),
+            ]
+        )
+
+        try writeRequest(
+            resizeRequest(
+                id: "resize-duplicate",
+                binding: binding,
+                viewport: latestViewport
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+        XCTAssertEqual(controller.resizeSizes.count, 2)
+
+        try writeRequest(
+            BridgeRequest(
+                id: "unsubscribe-after-resize",
+                action: TmuxInteractiveProtocolV1.unsubscribeAction,
+                params: [
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closeCount, 1)
+        XCTAssertEqual(controller.reapCount, 1)
+    }
+
     private func writeRequest(
         _ request: BridgeRequest,
         to channel: EmbeddedChannel
@@ -786,6 +1002,23 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
                 "subscription_id": .string(binding.subscriptionID),
                 "generation": .number(Double(binding.generation)),
                 "data_base64": .string(bytes.base64EncodedString()),
+            ]
+        )
+    }
+
+    private func resizeRequest(
+        id: String,
+        binding: TmuxInteractiveSubscriptionBinding,
+        viewport: TmuxInteractiveViewport
+    ) -> BridgeRequest {
+        BridgeRequest(
+            id: id,
+            action: TmuxInteractiveProtocolV1.resizeAction,
+            params: [
+                "subscription_id": .string(binding.subscriptionID),
+                "generation": .number(Double(binding.generation)),
+                "cols": .number(Double(viewport.columns)),
+                "rows": .number(Double(viewport.rows)),
             ]
         )
     }
