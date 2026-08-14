@@ -18,10 +18,28 @@ final class TerminalStreamSubscriptionLifecycleTests: XCTestCase {
             workspaceReplayEnvelopes: [],
             applyOnEventLoop: { .rejected(reason: "newer request already owns the slot") }
         )
+        let failed = WebSocketFrameHandler.LocalRequestResult(
+            response: BridgeResponse(id: "failed", ok: true, result: nil, error: nil),
+            agentReplayEnvelopes: [],
+            workspaceReplayEnvelopes: [],
+            applyOnEventLoop: {
+                .failed(
+                    code: "tmux_interactive_not_ready",
+                    reason: "authoritative start has not been delivered"
+                )
+            }
+        )
 
         XCTAssertEqual(try XCTUnwrap(accepted.applyOnEventLoop)(), .accepted)
         XCTAssertEqual(try XCTUnwrap(rejected.applyOnEventLoop)(),
                        .rejected(reason: "newer request already owns the slot"))
+        XCTAssertEqual(
+            try XCTUnwrap(failed.applyOnEventLoop)(),
+            .failed(
+                code: "tmux_interactive_not_ready",
+                reason: "authoritative start has not been delivered"
+            )
+        )
     }
 
     private final class EventLog: @unchecked Sendable {

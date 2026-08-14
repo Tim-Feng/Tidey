@@ -763,6 +763,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     enum CommitOutcome: Equatable {
         case accepted
         case rejected(reason: String)
+        case failed(code: String, reason: String)
     }
 
     struct LocalRequestResult {
@@ -1023,6 +1024,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                             ok: false,
                             result: nil,
                             error: BridgeErrorPayload(code: "superseded", message: reason)
+                        )
+                        shouldReplay = false
+                    case .failed(let code, let reason):
+                        responseToSend = BridgeResponse(
+                            id: response.id,
+                            ok: false,
+                            result: nil,
+                            error: BridgeErrorPayload(code: code, message: reason)
                         )
                         shouldReplay = false
                     }
