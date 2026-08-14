@@ -57,16 +57,37 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
 
     func testInputSubmissionStoreReservesOneOwnerPerRoute() {
         let store = OrdinaryTmuxInputSubmissionStore()
+        let firstSession = OrdinaryTmuxSessionKey(socket: .defaultSocket, sessionID: "$1")
+        let secondSession = OrdinaryTmuxSessionKey(socket: .path("/private/tmp/tmux-501/other"), sessionID: "$2")
+        let leaseToken = OrdinaryTmuxInteractiveLeaseToken(rawValue: "interactive-a")
 
-        XCTAssertTrue(store.reserve(submissionID: "submission-a", routeKey: "route-1"))
+        XCTAssertNotEqual(firstSession, secondSession)
+        XCTAssertEqual(leaseToken.rawValue, "interactive-a")
+        XCTAssertTrue(store.reserve(
+            submissionID: "submission-a",
+            routeKey: "route-1",
+            sessionKey: firstSession
+        ))
         XCTAssertTrue(store.isCurrent(submissionID: "submission-a", routeKey: "route-1"))
-        XCTAssertFalse(store.reserve(submissionID: "submission-b", routeKey: "route-1"))
-        XCTAssertTrue(store.reserve(submissionID: "submission-b", routeKey: "route-2"))
+        XCTAssertFalse(store.reserve(
+            submissionID: "submission-b",
+            routeKey: "route-1",
+            sessionKey: firstSession
+        ))
+        XCTAssertTrue(store.reserve(
+            submissionID: "submission-b",
+            routeKey: "route-2",
+            sessionKey: secondSession
+        ))
 
         store.release(submissionID: "submission-a", routeKey: "route-1")
 
         XCTAssertFalse(store.isCurrent(submissionID: "submission-a", routeKey: "route-1"))
-        XCTAssertTrue(store.reserve(submissionID: "submission-b", routeKey: "route-1"))
+        XCTAssertTrue(store.reserve(
+            submissionID: "submission-b",
+            routeKey: "route-1",
+            sessionKey: firstSession
+        ))
     }
 
     func testSharedSubmissionStoreRejectsSecondRouterBeforeItPastesToTheSameRoute() throws {

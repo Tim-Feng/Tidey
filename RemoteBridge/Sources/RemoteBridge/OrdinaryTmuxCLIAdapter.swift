@@ -18,7 +18,7 @@ private final class OrdinaryTmuxProcessDataBox: @unchecked Sendable {
     }
 }
 
-enum OrdinaryTmuxSocketSelector: Equatable, Sendable {
+enum OrdinaryTmuxSocketSelector: Hashable, Sendable {
     case defaultSocket
     case path(String)
     case name(String)

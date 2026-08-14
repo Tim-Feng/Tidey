@@ -449,45 +449,64 @@ struct OrdinaryTmuxPastePresentationGate {
     }
 }
 
+struct OrdinaryTmuxSessionKey: Hashable, Sendable {
+    let socket: OrdinaryTmuxSocketSelector
+    let sessionID: String
+}
+
+struct OrdinaryTmuxInteractiveLeaseToken: Hashable, Sendable {
+    let rawValue: String
+}
+
 final class OrdinaryTmuxInputSubmissionStore: @unchecked Sendable {
+    private struct SubmissionReservation {
+        let submissionID: String
+        let sessionKey: OrdinaryTmuxSessionKey
+    }
+
     private let queue = DispatchQueue(
         label: "com.tidey.remote-bridge.ordinary-tmux-input-submission-store"
     )
-    private var submissionIDByRouteKey = [String: String]()
+    private var submissionByRouteKey = [String: SubmissionReservation]()
 
-    func reserve(submissionID: String, routeKey: String) -> Bool {
+    func reserve(submissionID: String,
+                 routeKey: String,
+                 sessionKey: OrdinaryTmuxSessionKey) -> Bool {
         queue.sync {
-            guard let currentSubmissionID = submissionIDByRouteKey[routeKey] else {
-                submissionIDByRouteKey[routeKey] = submissionID
+            guard let current = submissionByRouteKey[routeKey] else {
+                submissionByRouteKey[routeKey] = SubmissionReservation(
+                    submissionID: submissionID,
+                    sessionKey: sessionKey
+                )
                 return true
             }
-            return currentSubmissionID == submissionID
+            return current.submissionID == submissionID && current.sessionKey == sessionKey
         }
     }
 
     func isCurrent(submissionID: String, routeKey: String) -> Bool {
         queue.sync {
-            submissionIDByRouteKey[routeKey] == submissionID
+            submissionByRouteKey[routeKey]?.submissionID == submissionID
         }
     }
 
     func isReserved(routeKey: String) -> Bool {
         queue.sync {
-            submissionIDByRouteKey[routeKey] != nil
+            submissionByRouteKey[routeKey] != nil
         }
     }
 
     func release(submissionID: String, routeKey: String) {
         queue.sync {
-            guard submissionIDByRouteKey[routeKey] == submissionID else { return }
-            submissionIDByRouteKey.removeValue(forKey: routeKey)
+            guard submissionByRouteKey[routeKey]?.submissionID == submissionID else { return }
+            submissionByRouteKey.removeValue(forKey: routeKey)
         }
     }
 
     func release(submissionID: String) {
         queue.sync {
-            submissionIDByRouteKey = submissionIDByRouteKey.filter {
-                $0.value != submissionID
+            submissionByRouteKey = submissionByRouteKey.filter {
+                $0.value.submissionID != submissionID
             }
         }
     }
@@ -695,7 +714,8 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
             if mode == .literalChatText {
                 guard inputSubmissionStore.reserve(
                     submissionID: submissionID,
-                    routeKey: routeKey
+                    routeKey: routeKey,
+                    sessionKey: Self.sessionKey(for: route)
                 ) else {
                     throw BridgeInternalError.conflict(
                         "Another terminal submission is already pending for this panel."
@@ -825,6 +845,10 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
             route.sessionID,
             route.windowID,
         ].joined(separator: "|")
+    }
+
+    private static func sessionKey(for route: OrdinaryTmuxPanelRoute) -> OrdinaryTmuxSessionKey {
+        OrdinaryTmuxSessionKey(socket: route.socket, sessionID: route.sessionID)
     }
 }
 
