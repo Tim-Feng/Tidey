@@ -599,6 +599,15 @@ enum TmuxInteractivePTYActivation: Sendable {
             return candidateBuilder
         }
     }
+
+    var protocolCapabilities: [String] {
+        switch self {
+        case .disabled:
+            return []
+        case .enabled:
+            return [BridgeProtocolCapability.tmuxInteractive]
+        }
+    }
 }
 
 final class WebSocketFrameHandler: ChannelInboundHandler {
@@ -1300,6 +1309,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             let lanEndpoints = BridgeLANEndpointResolver.resolve(port: bridgePort)
             let tailscaleEndpoint = BridgeTailscaleEndpointResolver.resolve(port: bridgePort)
             let tunnelEndpoint = cloudflaredManager.currentStatus().endpoint
+            let connectionCapabilities: [JSONValue] = [
+                .string("image_read_v1"),
+                .string(BridgeProtocolCapability.terminalStreamSubscriptionOwnership),
+            ] + interactivePTYActivation.protocolCapabilities.map(JSONValue.string)
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
                                          ok: true,
@@ -1308,10 +1321,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                             "tailscale_endpoint": tailscaleEndpoint.map(Self.jsonValue(for:)) ?? .null,
                                             "tunnel_endpoint": tunnelEndpoint.map(Self.jsonValue(for:)) ?? .null,
                                             "resolver_endpoint": .string(BridgeResolverConfiguration.resolverBaseURL().absoluteString),
-                                            "capabilities": .array([
-                                                .string("image_read_v1"),
-                                                .string(BridgeProtocolCapability.terminalStreamSubscriptionOwnership),
-                                            ]),
+                                            "capabilities": .array(connectionCapabilities),
                                          ],
                                          error: nil),
                 agentReplayEnvelopes: [],

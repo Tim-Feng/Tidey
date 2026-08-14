@@ -129,6 +129,68 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         }
     }
 
+    func testCapabilityAdvertisementMatchesTypedActivation() throws {
+        let route = makeRoute()
+        let candidateBuilder = TmuxInteractivePTYSessionCandidateBuilder(
+            routeResolver: RouteResolverStub(route: route),
+            migrateWindow: { _, _ in
+                .notEligible(.currentPolicyNotOwned("latest"))
+            },
+            sessionFactory: { _ in throw ReadFailure() },
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        let enabledFixture = try makeFixture(
+            activation: .enabled(candidateBuilder)
+        )
+        defer { enabledFixture.cleanup() }
+
+        try writeRequest(
+            BridgeRequest(
+                id: "enabled-capabilities",
+                action: "get_connection_endpoints",
+                params: nil
+            ),
+            to: enabledFixture.channel
+        )
+        enabledFixture.channel.embeddedEventLoop.run()
+        let enabledResponse = try decode(
+            XCTUnwrap(
+                enabledFixture.channel.readOutbound(as: WebSocketFrame.self)
+            ),
+            as: BridgeResponse.self
+        )
+        XCTAssertTrue(enabledResponse.ok)
+        XCTAssertTrue(
+            enabledResponse.result?["capabilities"]?.arrayValue?.contains(
+                .string(TmuxInteractiveProtocolV1.capability)
+            ) == true
+        )
+
+        let disabledFixture = try makeFixture(activation: .disabled)
+        defer { disabledFixture.cleanup() }
+        try writeRequest(
+            BridgeRequest(
+                id: "disabled-capabilities",
+                action: "get_connection_endpoints",
+                params: nil
+            ),
+            to: disabledFixture.channel
+        )
+        disabledFixture.channel.embeddedEventLoop.run()
+        let disabledResponse = try decode(
+            XCTUnwrap(
+                disabledFixture.channel.readOutbound(as: WebSocketFrame.self)
+            ),
+            as: BridgeResponse.self
+        )
+        XCTAssertTrue(disabledResponse.ok)
+        XCTAssertFalse(
+            disabledResponse.result?["capabilities"]?.arrayValue?.contains(
+                .string(TmuxInteractiveProtocolV1.capability)
+            ) == true
+        )
+    }
+
     func testSubscribeCommitsOwnershipBeforePumpingStartOutputAndDetach() throws {
         let route = makeRoute()
         let binding = TmuxInteractiveSubscriptionBinding(
@@ -207,11 +269,11 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
                 context: context
             )
         )
-        XCTAssertFalse(
+        XCTAssertTrue(
             endpointResult.response.result?["capabilities"]?
                 .arrayValue?
                 .contains(.string(BridgeProtocolCapability.tmuxInteractive))
-                ?? true
+                ?? false
         )
 
         try writeRequest(
@@ -1174,6 +1236,12 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
     private func makeFixture(
         candidateBuilder: TmuxInteractivePTYSessionCandidateBuilder
     ) throws -> Fixture {
+        try makeFixture(activation: .enabled(candidateBuilder))
+    }
+
+    private func makeFixture(
+        activation: TmuxInteractivePTYActivation
+    ) throws -> Fixture {
         let supportDirectory = FileManager.default.temporaryDirectory
             .appendingPathComponent(
                 "TmuxInteractiveWebSocketSubscriptionTests-\(UUID().uuidString)",
@@ -1198,7 +1266,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             bridgePort: 0,
             cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
             requestExecutor: { work in work() },
-            interactivePTYActivation: .enabled(candidateBuilder)
+            interactivePTYActivation: activation
         )
         return Fixture(
             handler: handler,
