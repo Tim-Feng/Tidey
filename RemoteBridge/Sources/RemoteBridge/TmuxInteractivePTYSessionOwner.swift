@@ -11,6 +11,7 @@ enum TmuxInteractivePTYSessionLifecycleState: Equatable, Sendable {
     case reserving
     case spawning
     case proving
+    case redrawing
     case live
     case closing
     case closed
@@ -20,6 +21,11 @@ enum TmuxInteractivePTYSessionOwnerError: Error, Equatable {
     case invalidRequest
     case admissionConflict
     case invalidState(TmuxInteractivePTYSessionLifecycleState)
+    case inputNotEnabled(TmuxInteractivePTYSessionLifecycleState)
+    case bindingMismatch
+    case unexpectedEndBeforeProof
+    case preProofBufferOverflow(limit: Int)
+    case attachProofMismatch
     case childDidNotExit
 }
 
@@ -28,16 +34,24 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let handle: TmuxInteractivePTYHandle
         let sessionKey: OrdinaryTmuxSessionKey
         let leaseToken: OrdinaryTmuxInteractiveLeaseToken
+        let request: TmuxInteractivePTYSessionStartRequest
+        let initialSize: TmuxInteractivePTYSize
+        var preProofBytes = Data()
+        var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var didCloseMaster = false
 
         init(
             handle: TmuxInteractivePTYHandle,
             sessionKey: OrdinaryTmuxSessionKey,
-            leaseToken: OrdinaryTmuxInteractiveLeaseToken
+            leaseToken: OrdinaryTmuxInteractiveLeaseToken,
+            request: TmuxInteractivePTYSessionStartRequest,
+            initialSize: TmuxInteractivePTYSize
         ) {
             self.handle = handle
             self.sessionKey = sessionKey
             self.leaseToken = leaseToken
+            self.request = request
+            self.initialSize = initialSize
         }
     }
 
@@ -46,15 +60,21 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     )
     private let admissionStore: OrdinaryTmuxInputSubmissionStore
     private let controller: TmuxInteractivePTYControlling
+    private let attachProver: TmuxInteractiveAttachProving
+    private let maximumPreProofBytes: Int
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
 
     init(
         admissionStore: OrdinaryTmuxInputSubmissionStore,
-        controller: TmuxInteractivePTYControlling
+        controller: TmuxInteractivePTYControlling,
+        attachProver: TmuxInteractiveAttachProving = TmuxInteractiveAttachProver(),
+        maximumPreProofBytes: Int = 1_024 * 1_024
     ) {
         self.admissionStore = admissionStore
         self.controller = controller
+        self.attachProver = attachProver
+        self.maximumPreProofBytes = max(1, maximumPreProofBytes)
     }
 
     var lifecycleState: TmuxInteractivePTYSessionLifecycleState {
@@ -100,7 +120,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 activeResources = ActiveResources(
                     handle: handle,
                     sessionKey: sessionKey,
-                    leaseToken: leaseToken
+                    leaseToken: leaseToken,
+                    request: request,
+                    initialSize: initialSize
                 )
                 state = .proving
             } catch {
@@ -111,6 +133,64 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 state = .idle
                 throw error
             }
+        }
+    }
+
+    func pollAttachProof() throws -> TmuxInteractiveVerifiedAttach? {
+        try queue.sync {
+            guard state == .proving,
+                  let resources = activeResources else {
+                throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
+            }
+            do {
+                try drainPreProofBytes(resources)
+                let route = resources.request.route
+                let subscribe = resources.request.subscribe
+                guard let verified = try attachProver.prove(
+                    TmuxInteractiveAttachClaim(
+                        socket: route.socket,
+                        childProcessID: resources.handle.childProcessID,
+                        workspaceID: subscribe.workspaceID,
+                        panelID: subscribe.panelID,
+                        sessionID: route.sessionID,
+                        windowID: route.windowID
+                    )
+                ) else {
+                    return nil
+                }
+                guard verified.childProcessID == resources.handle.childProcessID,
+                      verified.attachProof.workspaceID == subscribe.workspaceID,
+                      verified.attachProof.panelID == subscribe.panelID,
+                      verified.attachProof.sessionID == route.sessionID,
+                      verified.attachProof.windowID == route.windowID else {
+                    throw TmuxInteractivePTYSessionOwnerError.attachProofMismatch
+                }
+                resources.preProofBytes.removeAll(keepingCapacity: false)
+                resources.verifiedAttach = verified
+                state = .redrawing
+                return verified
+            } catch {
+                try closeActiveResources(resources)
+                throw error
+            }
+        }
+    }
+
+    func sendInput(
+        _ input: TmuxInteractiveInput
+    ) throws -> TmuxInteractivePTYWriteResult {
+        try queue.sync {
+            guard state == .live,
+                  let resources = activeResources else {
+                throw TmuxInteractivePTYSessionOwnerError.inputNotEnabled(state)
+            }
+            guard input.binding == resources.request.subscribe.binding else {
+                throw TmuxInteractivePTYSessionOwnerError.bindingMismatch
+            }
+            return try controller.write(
+                input.bytes,
+                masterFileDescriptor: resources.handle.masterFileDescriptor
+            )
         }
     }
 
@@ -127,26 +207,54 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 return
             }
 
-            state = .closing
-            if resources.didCloseMaster == false {
-                try controller.close(
-                    masterFileDescriptor: resources.handle.masterFileDescriptor
-                )
-                resources.didCloseMaster = true
-            }
-            guard try controller.reap(
-                childProcessID: resources.handle.childProcessID,
-                blocking: true
-            ) != nil else {
-                throw TmuxInteractivePTYSessionOwnerError.childDidNotExit
-            }
-            admissionStore.releaseInteractiveLease(
-                token: resources.leaseToken,
-                sessionKey: resources.sessionKey
-            )
-            activeResources = nil
-            state = .closed
+            try closeActiveResources(resources)
         }
+    }
+
+    private func drainPreProofBytes(_ resources: ActiveResources) throws {
+        while true {
+            switch try controller.read(
+                masterFileDescriptor: resources.handle.masterFileDescriptor,
+                maximumBytes: 64 * 1_024
+            ) {
+            case .bytes(let bytes):
+                guard bytes.isEmpty == false else {
+                    throw TmuxInteractivePTYSessionOwnerError.unexpectedEndBeforeProof
+                }
+                guard bytes.count <= maximumPreProofBytes - resources.preProofBytes.count else {
+                    throw TmuxInteractivePTYSessionOwnerError.preProofBufferOverflow(
+                        limit: maximumPreProofBytes
+                    )
+                }
+                resources.preProofBytes.append(bytes)
+            case .wouldBlock:
+                return
+            case .endOfFile:
+                throw TmuxInteractivePTYSessionOwnerError.unexpectedEndBeforeProof
+            }
+        }
+    }
+
+    private func closeActiveResources(_ resources: ActiveResources) throws {
+        state = .closing
+        if resources.didCloseMaster == false {
+            try controller.close(
+                masterFileDescriptor: resources.handle.masterFileDescriptor
+            )
+            resources.didCloseMaster = true
+        }
+        guard try controller.reap(
+            childProcessID: resources.handle.childProcessID,
+            blocking: true
+        ) != nil else {
+            throw TmuxInteractivePTYSessionOwnerError.childDidNotExit
+        }
+        admissionStore.releaseInteractiveLease(
+            token: resources.leaseToken,
+            sessionKey: resources.sessionKey
+        )
+        activeResources = nil
+        state = .closed
     }
 
     private static func validatedInitialSize(

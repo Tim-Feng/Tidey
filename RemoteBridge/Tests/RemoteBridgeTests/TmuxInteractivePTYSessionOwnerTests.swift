@@ -8,11 +8,13 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         private(set) var spawnCommands = [TmuxInteractivePTYAttachCommand]()
         private(set) var closedFileDescriptors = [Int32]()
         private(set) var reapCalls = [(processID: Int32, blocking: Bool)]()
+        private(set) var writtenBytes = [Data]()
         var spawnError: Error?
         var onSpawn: (() -> Void)?
         var reapResult: TmuxInteractivePTYChildExit? = TmuxInteractivePTYChildExit(
             rawStatus: 0
         )
+        var readResults = [TmuxInteractivePTYReadResult]()
 
         func spawn(_ command: TmuxInteractivePTYAttachCommand) throws -> TmuxInteractivePTYHandle {
             spawnCommands.append(command)
@@ -41,14 +43,33 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             masterFileDescriptor: Int32,
             maximumBytes: Int
         ) throws -> TmuxInteractivePTYReadResult {
-            .wouldBlock
+            guard readResults.isEmpty == false else {
+                return .wouldBlock
+            }
+            return readResults.removeFirst()
         }
 
         func write(
             _ bytes: Data,
             masterFileDescriptor: Int32
         ) throws -> TmuxInteractivePTYWriteResult {
-            .written(bytes.count)
+            writtenBytes.append(bytes)
+            return .written(bytes.count)
+        }
+    }
+
+    private final class ProverProbe: TmuxInteractiveAttachProving, @unchecked Sendable {
+        private(set) var claims = [TmuxInteractiveAttachClaim]()
+        var results = [TmuxInteractiveVerifiedAttach?]()
+
+        func prove(
+            _ claim: TmuxInteractiveAttachClaim
+        ) throws -> TmuxInteractiveVerifiedAttach? {
+            claims.append(claim)
+            guard results.isEmpty == false else {
+                return nil
+            }
+            return results.removeFirst()
         }
     }
 
@@ -188,6 +209,114 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 sessionKey: sessionKey
             )
         )
+    }
+
+    func testOwnerKeepsInputDisabledAndPreProofBytesHiddenUntilExactAttachProof() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        controller.readResults = [
+            .bytes(Data([0x1b, 0x5b, 0x48])),
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let expectedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [nil, expectedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover
+        )
+        try owner.begin(request)
+        let input = TmuxInteractiveInput(
+            binding: request.subscribe.binding,
+            bytes: Data([0x02, 0x63])
+        )
+
+        XCTAssertThrowsError(try owner.sendInput(input)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .inputNotEnabled(.proving)
+            )
+        }
+        XCTAssertNil(try owner.pollAttachProof())
+        XCTAssertEqual(owner.lifecycleState, .proving)
+        XCTAssertTrue(controller.writtenBytes.isEmpty)
+
+        XCTAssertEqual(try owner.pollAttachProof(), expectedAttach)
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+        XCTAssertThrowsError(try owner.sendInput(input)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .inputNotEnabled(.redrawing)
+            )
+        }
+        XCTAssertTrue(controller.writtenBytes.isEmpty)
+        XCTAssertEqual(
+            prover.claims,
+            [
+                TmuxInteractiveAttachClaim(
+                    socket: route.socket,
+                    childProcessID: 23,
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    sessionID: route.sessionID,
+                    windowID: route.windowID
+                ),
+                TmuxInteractiveAttachClaim(
+                    socket: route.socket,
+                    childProcessID: 23,
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    sessionID: route.sessionID,
+                    windowID: route.windowID
+                ),
+            ]
+        )
+        try owner.close()
+    }
+
+    func testOwnerClosesAndReleasesLeaseWhenPreProofBufferOverflows() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let controller = ControllerProbe()
+        controller.readResults = [.bytes(Data([0x01, 0x02, 0x03]))]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: ProverProbe(),
+            maximumPreProofBytes: 2
+        )
+        try owner.begin(makeRequest(route: route))
+
+        XCTAssertThrowsError(try owner.pollAttachProof()) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .preProofBufferOverflow(limit: 2)
+            )
+        }
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closedFileDescriptors, [17])
+        XCTAssertEqual(controller.reapCalls.count, 1)
+        let sessionKey = OrdinaryTmuxSessionKey(
+            socket: route.socket,
+            sessionID: route.sessionID
+        )
+        let token = OrdinaryTmuxInteractiveLeaseToken(rawValue: "after-overflow")
+        XCTAssertTrue(store.acquireInteractiveLease(token: token, sessionKey: sessionKey))
+        store.releaseInteractiveLease(token: token, sessionKey: sessionKey)
     }
 
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {

@@ -310,6 +310,37 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             )
         )
         XCTAssertTrue(fixture.waitForClientCount(1, timeout: 3))
+        let input = TmuxInteractiveInput(
+            binding: binding,
+            bytes: Data([0x02, 0x63])
+        )
+        XCTAssertThrowsError(try owner.sendInput(input)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .inputNotEnabled(.proving)
+            )
+        }
+        let verifiedAttach = try XCTUnwrap(
+            waitForSessionOwnerProof(owner: owner, timeout: 3)
+        )
+        XCTAssertEqual(
+            verifiedAttach.attachProof,
+            TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            )
+        )
+        XCTAssertTrue(verifiedAttach.clientTTY.hasPrefix("/dev/ttys"))
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+        XCTAssertThrowsError(try owner.sendInput(input)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .inputNotEnabled(.redrawing)
+            )
+        }
         let sessionKey = OrdinaryTmuxSessionKey(
             socket: route.socket,
             sessionID: route.sessionID
@@ -523,6 +554,20 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             usleep(20_000)
         } while Date() < deadline
         return try prover.prove(claim)
+    }
+
+    private func waitForSessionOwnerProof(
+        owner: TmuxInteractivePTYSessionOwner,
+        timeout: TimeInterval
+    ) throws -> TmuxInteractiveVerifiedAttach? {
+        let deadline = Date().addingTimeInterval(timeout)
+        repeat {
+            if let proof = try owner.pollAttachProof() {
+                return proof
+            }
+            usleep(20_000)
+        } while Date() < deadline
+        return try owner.pollAttachProof()
     }
 
     private func reapForCleanup(
