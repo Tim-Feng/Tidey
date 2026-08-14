@@ -73,6 +73,57 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testRealPTYForcesUTF8WhenBridgeLocaleIsNotUTF8() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let handle = try withNonUTF8ProcessLocale {
+            try controller.spawn(
+                TmuxInteractivePTYAttachCommand(
+                    tmuxExecutablePath: tmuxPath,
+                    socket: .path(fixture.socketPath),
+                    sessionID: target.sessionID,
+                    windowID: target.windowID,
+                    initialSize: TmuxInteractivePTYSize(columns: 80, rows: 24)
+                )
+            )
+        }
+        var didCloseMaster = false
+        var didReapChild = false
+        defer {
+            if didCloseMaster == false {
+                try? controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+            }
+            if didReapChild == false {
+                reapForCleanup(controller: controller, childProcessID: handle.childProcessID)
+            }
+        }
+
+        let client = try XCTUnwrap(
+            fixture.waitForClient(processID: handle.childProcessID, timeout: 3)
+        )
+        XCTAssertTrue(
+            client.flags.contains("UTF-8"),
+            "the Bridge-owned tmux client must preserve CJK cells even without a UTF-8 daemon locale"
+        )
+
+        try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+        didCloseMaster = true
+        let childExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: handle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(childExit)
+        didReapChild = childExit != nil
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
     func testAttachProofRequiresExactSpawnedClientTTYSessionWindowAndReportsActivePane() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")

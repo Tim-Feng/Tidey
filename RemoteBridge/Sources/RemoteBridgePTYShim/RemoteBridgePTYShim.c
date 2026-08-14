@@ -182,6 +182,7 @@ int32_t tidey_tmux_pty_spawn(
     char *arguments[8];
     size_t argument_index = 0;
     arguments[argument_index++] = (char *)request->tmux_executable_path;
+    arguments[argument_index++] = "-u";
     if (request->socket_kind == TIDEY_TMUX_SOCKET_PATH) {
         arguments[argument_index++] = "-S";
         arguments[argument_index++] = (char *)request->socket_value;
