@@ -830,10 +830,11 @@ private struct InteractivePTYTmuxClientRecord {
     let windowID: String
     let columns: Int
     let rows: Int
+    let flags: Set<String>
 
     init(record: Substring) throws {
         let fields = record.split(separator: "|", omittingEmptySubsequences: false)
-        guard fields.count == 6,
+        guard fields.count == 7,
               let processID = Int32(fields[0]),
               let columns = Int(fields[4]),
               let rows = Int(fields[5]) else {
@@ -845,6 +846,7 @@ private struct InteractivePTYTmuxClientRecord {
         windowID = String(fields[3])
         self.columns = columns
         self.rows = rows
+        flags = Set(fields[6].split(separator: ",").map(String.init))
     }
 }
 
@@ -1007,7 +1009,7 @@ private final class InteractivePTYTmuxFixture {
     private func clientRecords() throws -> [InteractivePTYTmuxClientRecord] {
         let output = try run([
             "list-clients",
-            "-F", "#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{client_width}|#{client_height}",
+            "-F", "#{client_pid}|#{client_tty}|#{session_id}|#{window_id}|#{client_width}|#{client_height}|#{client_flags}",
         ])
         return try output.split(whereSeparator: \.isNewline).map {
             try InteractivePTYTmuxClientRecord(record: $0)
@@ -1049,4 +1051,28 @@ private final class InteractivePTYTmuxFixture {
         } while Date() < deadline
         return predicate()
     }
+}
+
+private func withNonUTF8ProcessLocale<Result>(
+    _ body: () throws -> Result
+) rethrows -> Result {
+    let variableNames = ["LANG", "LC_ALL", "LC_CTYPE"]
+    let originalValues = Dictionary(uniqueKeysWithValues: variableNames.map { name in
+        (name, getenv(name).map { String(cString: $0) })
+    })
+
+    for name in variableNames {
+        unsetenv(name)
+    }
+    setenv("LANG", "C", 1)
+    defer {
+        for name in variableNames {
+            if let value = originalValues[name] ?? nil {
+                setenv(name, value, 1)
+            } else {
+                unsetenv(name)
+            }
+        }
+    }
+    return try body()
 }
