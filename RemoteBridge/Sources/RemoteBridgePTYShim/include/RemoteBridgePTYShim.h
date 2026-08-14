@@ -30,9 +30,7 @@ typedef struct tidey_tmux_pty_handle {
 
 int32_t tidey_tmux_pty_shim_abi_version(void);
 
-// The lifecycle entry points intentionally return ENOTSUP until their
-// behavior is introduced behind real-PTY tests. A zero return value will
-// mean success; nonzero values are POSIX error numbers.
+// A zero return value means success; nonzero values are POSIX error numbers.
 int32_t tidey_tmux_pty_spawn(
     const tidey_tmux_pty_spawn_request *request,
     tidey_tmux_pty_handle *handle_out
