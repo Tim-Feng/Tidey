@@ -150,6 +150,89 @@ final class OrdinaryTmuxWindowSizeIntegrationTests: XCTestCase {
             "largest|latest"
         )
     }
+
+    func testLargestPolicyKeepsMacGeometryStableAcrossSecondaryAttachResizeAndDetach() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        let version = try IsolatedTmuxHarness.version(at: tmuxPath)
+        guard version == "tmux 3.6a" else {
+            throw XCTSkip("isolated sizing regression requires tmux 3.6a; found \(version)")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/script") else {
+            throw XCTSkip("macOS script is unavailable")
+        }
+
+        let harness = try IsolatedTmuxHarness(tmuxPath: tmuxPath)
+        defer { harness.shutdown() }
+        let sessionName = "largest-stable"
+        try harness.startDetachedSession(name: sessionName, columns: 132, rows: 37)
+        _ = try harness.attachControlModeSizingClient(
+            sessionName: sessionName,
+            columns: 132,
+            rows: 37,
+            allocatingTTY: true
+        )
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        let clientTTY = try XCTUnwrap(
+            try harness.clientRecords().first?.split(separator: "|").first.map(String.init)
+        )
+
+        let isolatedSocket = OrdinaryTmuxSocketSelector.path(harness.socketPath)
+        let liveRunner = OrdinaryTmuxCLIAdapter.processCommandRunner(
+            executablePath: tmuxPath,
+            timeoutSeconds: 3
+        )
+        let adapter = OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
+            guard socket == isolatedSocket else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+            return try liveRunner(socket, arguments, stdin)
+        }
+        _ = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(
+                clientTTY: clientTTY,
+                targetSession: sessionName,
+                socketPath: harness.socketPath
+            )
+        )
+        XCTAssertEqual(try harness.windowSizeOwnership(sessionName: sessionName), "largest|latest")
+
+        try harness.splitWindowHorizontally(sessionName: sessionName, percentage: 30)
+        let macGeometry = try harness.paneGeometry(sessionName: sessionName)
+        XCTAssertEqual(macGeometry.count, 2)
+
+        let phoneClient = try harness.attachControlModeSizingClient(
+            sessionName: sessionName,
+            columns: 60,
+            rows: 20
+        )
+        XCTAssertTrue(harness.waitForClientCount(2, timeout: 2))
+        XCTAssertTrue(
+            harness.waitForWindowGeometry(
+                sessionName: sessionName,
+                expected: "\(sessionName)|132|37|largest",
+                timeout: 2
+            )
+        )
+        XCTAssertEqual(try harness.paneGeometry(sessionName: sessionName), macGeometry)
+
+        for size in [(80, 25), (50, 18)] {
+            try phoneClient.writeLine("refresh-client -C \(size.0),\(size.1)")
+            XCTAssertTrue(
+                harness.waitForWindowGeometry(
+                    sessionName: sessionName,
+                    expected: "\(sessionName)|132|37|largest",
+                    timeout: 2
+                )
+            )
+            XCTAssertEqual(try harness.paneGeometry(sessionName: sessionName), macGeometry)
+        }
+
+        XCTAssertEqual(try phoneClient.detachAndWait(timeout: 2), 0)
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        XCTAssertEqual(try harness.paneGeometry(sessionName: sessionName), macGeometry)
+    }
 }
 
 private final class IsolatedTmuxControlClient: @unchecked Sendable {
@@ -348,6 +431,24 @@ private final class IsolatedTmuxHarness {
             "-t", "=\(sessionName)",
             "-F", "#{window-size}|#{@tidey_window_size_before_multi_client}",
         ])
+    }
+
+    func splitWindowHorizontally(sessionName: String, percentage: Int) throws {
+        _ = try runServerCommand([
+            "split-window",
+            "-h",
+            "-p", String(percentage),
+            "-t", "=\(sessionName):0",
+        ])
+    }
+
+    func paneGeometry(sessionName: String) throws -> [Substring] {
+        let output = try runServerCommand([
+            "list-panes",
+            "-t", "=\(sessionName):0",
+            "-F", "#{window_width}x#{window_height}|#{pane_index}|#{pane_left},#{pane_top}|#{pane_width}x#{pane_height}",
+        ])
+        return output.split(whereSeparator: \.isNewline)
     }
 
     func attachControlModeSizingClient(
