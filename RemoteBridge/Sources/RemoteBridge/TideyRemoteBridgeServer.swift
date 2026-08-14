@@ -595,7 +595,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private struct InteractivePTYPumpEntry {
         let binding: TmuxInteractiveSubscriptionBinding
         let session: TmuxInteractivePTYConnectionSession
-        let pump: TmuxInteractivePTYEventPump
+        let outputPump: TmuxInteractivePTYEventPump
+        let inputPump: TmuxInteractivePTYInputPump
     }
 
     private final class TerminalStreamDeltaSender: @unchecked Sendable {
@@ -734,9 +735,40 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 handler.send(
                     interactivePTYEvent: event,
                     to: context,
-                    afterWrite: completion
+                    afterWrite: { result in
+                        self.completeDelivery(
+                            result,
+                            event: event,
+                            binding: binding,
+                            session: session,
+                            completion: completion
+                        )
+                    }
                 )
             }
+        }
+
+        private func completeDelivery(
+            _ result: Result<Void, Error>,
+            event: TmuxInteractivePTYEvent,
+            binding: TmuxInteractiveSubscriptionBinding,
+            session: TmuxInteractivePTYConnectionSession,
+            completion: @escaping TmuxInteractivePTYEventPump.DeliveryCompletion
+        ) {
+            if case .success = result,
+               case .start = event {
+                guard let handler,
+                      handler.activateInteractivePTYInputPump(
+                        binding: binding,
+                        session: session
+                      ) else {
+                    completion(.failure(
+                        InteractivePTYRoutingError.superseded
+                    ))
+                    return
+                }
+            }
+            completion(result)
         }
 
         func stopped(
@@ -1063,10 +1095,16 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        let interactivePTYPumpsToStop = interactivePTYPumps.values.map(\.pump)
+        let interactivePTYOutputPumpsToStop =
+            interactivePTYPumps.values.map(\.outputPump)
+        let interactivePTYInputPumpsToStop =
+            interactivePTYPumps.values.map(\.inputPump)
         interactivePTYPumps.removeAll(keepingCapacity: false)
         let interactivePTYSessions = interactivePTYConnectionState.retire()
-        for pump in interactivePTYPumpsToStop {
+        for pump in interactivePTYOutputPumpsToStop {
+            pump.stop()
+        }
+        for pump in interactivePTYInputPumpsToStop {
             pump.stop()
         }
         let cleanupConnectionID = connectionID
@@ -1851,11 +1889,75 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     binding: binding
                 )
             )
-        case .input, .resize:
+        case .input(let input):
+            let binding = input.binding
+            return LocalRequestResult(
+                response: BridgeResponse(
+                    id: request.id,
+                    ok: true,
+                    result: [
+                        "accepted": .bool(true),
+                        "subscription_id": .string(binding.subscriptionID),
+                        "generation": .number(Double(binding.generation)),
+                        "byte_count": .number(Double(input.bytes.count)),
+                    ],
+                    error: nil
+                ),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: [],
+                applyOnEventLoop: interactivePTYInputCommit(input: input)
+            )
+        case .resize:
             return interactivePTYUnavailableResponse(
                 requestID: request.id,
                 message: "Interactive tmux PTY action is not enabled yet."
             )
+        }
+    }
+
+    private func interactivePTYInputCommit(
+        input: TmuxInteractiveInput
+    ) -> () -> CommitOutcome {
+        let binding = input.binding
+        return { [weak self] in
+            guard let self else {
+                return .rejected(
+                    reason: "interactive PTY connection is no longer active"
+                )
+            }
+            guard let session = self.interactivePTYConnectionState.owner(
+                for: binding
+            ),
+            let entry = self.interactivePTYPumps[binding.subscriptionID],
+            entry.binding == binding,
+            entry.session === session else {
+                return .rejected(
+                    reason: "interactive PTY subscription is no longer current"
+                )
+            }
+            switch entry.inputPump.enqueue(input) {
+            case .accepted:
+                return .accepted
+            case .notActive:
+                return .failed(
+                    code: "tmux_interactive_not_ready",
+                    reason: "Interactive PTY authoritative start is not active."
+                )
+            case .capacityExceeded(let limit):
+                return .failed(
+                    code: "tmux_interactive_backpressure",
+                    reason: "Interactive PTY input queue exceeds \(limit) bytes."
+                )
+            case .bindingMismatch:
+                return .rejected(
+                    reason: "interactive PTY subscription is no longer current"
+                )
+            case .invalidInput:
+                return .failed(
+                    code: "invalid_request",
+                    reason: "Interactive PTY input bytes are invalid."
+                )
+            }
         }
     }
 
@@ -1877,18 +1979,19 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     reason: "interactive PTY subscription is no longer current"
                 )
             }
-            let pumpToStop: TmuxInteractivePTYEventPump?
+            let pumpsToStop: InteractivePTYPumpEntry?
             if let entry = self.interactivePTYPumps[binding.subscriptionID],
                entry.binding == binding,
                entry.session === session {
                 self.interactivePTYPumps.removeValue(
                     forKey: binding.subscriptionID
                 )
-                pumpToStop = entry.pump
+                pumpsToStop = entry
             } else {
-                pumpToStop = nil
+                pumpsToStop = nil
             }
-            pumpToStop?.stop()
+            pumpsToStop?.outputPump.stop()
+            pumpsToStop?.inputPump.stop()
             workExecutor.submit {
                 do {
                     try session.close()
@@ -1955,7 +2058,12 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                     reason: "interactive PTY subscription is no longer current"
                 )
             }
-            let pump = self.makeInteractivePTYPump(
+            let outputPump = self.makeInteractivePTYPump(
+                session: session,
+                binding: binding,
+                context: context
+            )
+            let inputPump = self.makeInteractivePTYInputPump(
                 session: session,
                 binding: binding,
                 context: context
@@ -1964,7 +2072,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 InteractivePTYPumpEntry(
                     binding: binding,
                     session: session,
-                    pump: pump
+                    outputPump: outputPump,
+                    inputPump: inputPump
                 )
             return .accepted
         }
@@ -1979,7 +2088,20 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
               entry.session === session else {
             return
         }
-        entry.pump.start()
+        entry.outputPump.start()
+    }
+
+    private func activateInteractivePTYInputPump(
+        binding: TmuxInteractiveSubscriptionBinding,
+        session: TmuxInteractivePTYConnectionSession
+    ) -> Bool {
+        guard interactivePTYConnectionState.owner(for: binding) === session,
+              let entry = interactivePTYPumps[binding.subscriptionID],
+              entry.binding == binding,
+              entry.session === session else {
+            return false
+        }
+        return entry.inputPump.activate()
     }
 
     private func makeInteractivePTYPump(
@@ -2034,6 +2156,56 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         )
     }
 
+    private func makeInteractivePTYInputPump(
+        session: TmuxInteractivePTYConnectionSession,
+        binding: TmuxInteractiveSubscriptionBinding,
+        context: ChannelHandlerContext
+    ) -> TmuxInteractivePTYInputPump {
+        let workExecutor = InteractivePTYWorkExecutor(execute: requestExecutor)
+        let callbackTarget = InteractivePTYConnectionCallbackTarget(
+            handler: self,
+            context: context
+        )
+        let cleanupConnectionID = connectionID
+        let closeSession: @Sendable () -> Void = {
+            workExecutor.submit {
+                do {
+                    try session.close()
+                } catch {
+                    BridgeLogger.server.error(
+                        "interactive PTY input cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+        }
+        return TmuxInteractivePTYInputPump(
+            binding: binding,
+            maximumPendingBytes: TmuxInteractiveWireCodec.maximumInputBytes,
+            write: { bytes in
+                try session.sendInput(
+                    TmuxInteractiveInput(binding: binding, bytes: bytes)
+                )
+            },
+            execute: { work in
+                workExecutor.submit(work)
+            },
+            scheduleRetry: { work in
+                callbackTarget.scheduleRetry(
+                    work,
+                    closeSession: closeSession
+                )
+            },
+            onStopped: { error in
+                callbackTarget.stopped(
+                    error: error,
+                    binding: binding,
+                    session: session,
+                    closeSession: closeSession
+                )
+            }
+        )
+    }
+
     private func finishInteractivePTYPump(
         binding: TmuxInteractiveSubscriptionBinding,
         session: TmuxInteractivePTYConnectionSession,
@@ -2046,11 +2218,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         removedSession === session else {
             return
         }
+        let pumpsToStop: InteractivePTYPumpEntry?
         if let entry = interactivePTYPumps[binding.subscriptionID],
            entry.binding == binding,
            entry.session === session {
             interactivePTYPumps.removeValue(forKey: binding.subscriptionID)
+            pumpsToStop = entry
+        } else {
+            pumpsToStop = nil
         }
+        pumpsToStop?.outputPump.stop()
+        pumpsToStop?.inputPump.stop()
         if error != nil {
             closeSession()
         }

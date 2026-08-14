@@ -13,11 +13,17 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
     {
         private let lock = NSLock()
         private var readResults: [TmuxInteractivePTYReadResult]
+        private var writeResults: [TmuxInteractivePTYWriteResult]
         private(set) var closeCount = 0
         private(set) var reapCount = 0
+        private(set) var writes = [Data]()
 
-        init(readResults: [TmuxInteractivePTYReadResult]) {
+        init(
+            readResults: [TmuxInteractivePTYReadResult],
+            writeResults: [TmuxInteractivePTYWriteResult] = []
+        ) {
             self.readResults = readResults
+            self.writeResults = writeResults
         }
 
         func spawn(
@@ -63,7 +69,13 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             _ bytes: Data,
             masterFileDescriptor: Int32
         ) throws -> TmuxInteractivePTYWriteResult {
-            .written(bytes.count)
+            lock.lock()
+            defer { lock.unlock() }
+            writes.append(bytes)
+            guard writeResults.isEmpty == false else {
+                return .written(bytes.count)
+            }
+            return writeResults.removeFirst()
         }
     }
 
@@ -550,6 +562,206 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         )
     }
 
+    func testInputActivatesOnlyAfterStartWriteAndPreservesPartialSuffix() throws {
+        let route = makeRoute()
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let startBytes = Data([0x1b, 0x5b, 0x48])
+        let inputBytes = Data([0x02, 0x63])
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let controller = ControllerProbe(
+            readResults: [
+                .wouldBlock,
+                .bytes(startBytes),
+                .wouldBlock,
+                .wouldBlock,
+            ],
+            writeResults: [
+                .written(1),
+                .wouldBlock,
+                .written(1),
+            ]
+        )
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: ProverStub(verifiedAttach: verifiedAttach)
+        )
+        let subscribe = TmuxInteractiveSubscribe(
+            workspaceID: route.workspaceID,
+            panelID: route.panelID,
+            binding: binding,
+            viewport: viewport
+        )
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: subscribe,
+                route: route,
+                tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+            )
+        )
+        let session = TmuxInteractivePTYConnectionSession(
+            binding: binding,
+            owner: owner
+        )
+        let candidateBuilder = TmuxInteractivePTYSessionCandidateBuilder(
+            routeResolver: RouteResolverStub(route: route),
+            migrateWindow: { _, _ in
+                .notEligible(.currentPolicyNotOwned("latest"))
+            },
+            sessionFactory: { _ in session },
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        let fixture = try makeFixture(candidateBuilder: candidateBuilder)
+        defer { fixture.cleanup() }
+
+        try writeRequest(
+            BridgeRequest(
+                id: "subscribe-before-input",
+                action: TmuxInteractiveProtocolV1.subscribeAction,
+                params: [
+                    "workspace_id": .string(route.workspaceID),
+                    "panel_id": .string(route.panelID),
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                    "cols": .number(Double(viewport.columns)),
+                    "rows": .number(Double(viewport.rows)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+
+        try writeRequest(
+            inputRequest(
+                id: "input-before-start",
+                binding: binding,
+                bytes: inputBytes
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let beforeStartResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertFalse(beforeStartResponse.ok)
+        XCTAssertEqual(
+            beforeStartResponse.error?.code,
+            "tmux_interactive_not_ready"
+        )
+        XCTAssertTrue(controller.writes.isEmpty)
+
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        let start = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: TmuxInteractiveAuthoritativeStartEnvelope.self
+        )
+        XCTAssertEqual(start.type, TmuxInteractiveProtocolV1.startEventType)
+        XCTAssertEqual(Data(base64Encoded: start.dataBase64), startBytes)
+
+        let staleBinding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: binding.subscriptionID,
+            generation: binding.generation - 1
+        )
+        try writeRequest(
+            inputRequest(
+                id: "input-stale",
+                binding: staleBinding,
+                bytes: inputBytes
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let staleResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertFalse(staleResponse.ok)
+        XCTAssertEqual(staleResponse.error?.code, "superseded")
+        XCTAssertTrue(controller.writes.isEmpty)
+
+        try writeRequest(
+            inputRequest(
+                id: "input-current",
+                binding: binding,
+                bytes: inputBytes
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        let currentResponse = try decode(
+            XCTUnwrap(fixture.channel.readOutbound(as: WebSocketFrame.self)),
+            as: BridgeResponse.self
+        )
+        XCTAssertTrue(currentResponse.ok)
+        XCTAssertEqual(currentResponse.result?["accepted"]?.boolValue, true)
+        XCTAssertEqual(
+            currentResponse.result?["byte_count"]?.intValue,
+            inputBytes.count
+        )
+        XCTAssertEqual(controller.writes, [inputBytes, Data([0x63])])
+
+        fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertEqual(
+            controller.writes,
+            [inputBytes, Data([0x63]), Data([0x63])]
+        )
+        XCTAssertNil(
+            try fixture.channel.readOutbound(as: WebSocketFrame.self)
+        )
+
+        try writeRequest(
+            BridgeRequest(
+                id: "unsubscribe-after-input",
+                action: TmuxInteractiveProtocolV1.unsubscribeAction,
+                params: [
+                    "subscription_id": .string(binding.subscriptionID),
+                    "generation": .number(Double(binding.generation)),
+                ]
+            ),
+            to: fixture.channel
+        )
+        fixture.channel.embeddedEventLoop.run()
+        XCTAssertTrue(
+            try decode(
+                XCTUnwrap(
+                    fixture.channel.readOutbound(as: WebSocketFrame.self)
+                ),
+                as: BridgeResponse.self
+            ).ok
+        )
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closeCount, 1)
+        XCTAssertEqual(controller.reapCount, 1)
+    }
+
     private func writeRequest(
         _ request: BridgeRequest,
         to channel: EmbeddedChannel
@@ -559,6 +771,22 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         buffer.writeBytes(payload)
         _ = try channel.writeInbound(
             WebSocketFrame(fin: true, opcode: .text, data: buffer)
+        )
+    }
+
+    private func inputRequest(
+        id: String,
+        binding: TmuxInteractiveSubscriptionBinding,
+        bytes: Data
+    ) -> BridgeRequest {
+        BridgeRequest(
+            id: id,
+            action: TmuxInteractiveProtocolV1.inputAction,
+            params: [
+                "subscription_id": .string(binding.subscriptionID),
+                "generation": .number(Double(binding.generation)),
+                "data_base64": .string(bytes.base64EncodedString()),
+            ]
         )
     }
 
