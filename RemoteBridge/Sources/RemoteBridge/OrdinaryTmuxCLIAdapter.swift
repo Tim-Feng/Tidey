@@ -148,6 +148,11 @@ enum OrdinaryTmuxProjectionError: Error, Equatable {
     case staleWindow(windowID: String)
 }
 
+enum OrdinaryTmuxWindowSizePolicyReconciliationMode: Sendable {
+    case stabilizeLargest
+    case preserveForInteractiveSizing
+}
+
 final class OrdinaryTmuxCLIAdapter {
     typealias CommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> String
     typealias RawCommandRunner = @Sendable (_ socket: OrdinaryTmuxSocketSelector, _ arguments: [String], _ stdin: String?) throws -> Data
@@ -265,11 +270,16 @@ final class OrdinaryTmuxCLIAdapter {
 
     private let commandRunner: CommandRunner
     private let rawCommandRunner: RawCommandRunner
+    private let windowSizePolicyReconciliationMode:
+        OrdinaryTmuxWindowSizePolicyReconciliationMode
 
     init(commandRunner: @escaping CommandRunner = OrdinaryTmuxCLIAdapter.liveCommandRunner,
-         rawCommandRunner: @escaping RawCommandRunner = OrdinaryTmuxCLIAdapter.liveRawCommandRunner) {
+         rawCommandRunner: @escaping RawCommandRunner = OrdinaryTmuxCLIAdapter.liveRawCommandRunner,
+         windowSizePolicyReconciliationMode:
+            OrdinaryTmuxWindowSizePolicyReconciliationMode = .stabilizeLargest) {
         self.commandRunner = commandRunner
         self.rawCommandRunner = rawCommandRunner
+        self.windowSizePolicyReconciliationMode = windowSizePolicyReconciliationMode
     }
 
     convenience init(commandRunner: @escaping CommandRunner) {
@@ -534,7 +544,8 @@ final class OrdinaryTmuxCLIAdapter {
         windows: [TmuxWindow],
         socket: OrdinaryTmuxSocketSelector
     ) {
-        guard client.affectsWindowSize else {
+        guard windowSizePolicyReconciliationMode == .stabilizeLargest,
+              client.affectsWindowSize else {
             return
         }
         let sizingClientCount = clients.lazy

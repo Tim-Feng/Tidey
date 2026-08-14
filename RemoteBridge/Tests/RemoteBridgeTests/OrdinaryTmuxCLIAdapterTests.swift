@@ -613,6 +613,38 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
         )
     }
 
+    func testInteractiveSizingModeNeverRewritesWindowPolicyOrMarker() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: .defaultSocket, arguments: listClientsArguments):
+                "/dev/ttys010\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,focused,UTF-8\n" +
+                "/dev/ttys099\t/tmp/tmux-501/default\t$7\tgenesis-extraction\t@15\tattached,UTF-8\n",
+            RunnerState.key(socket: socket, arguments: listWindowsArguments):
+                "@15\t0\tpriest\tlatest\t\n" +
+                "@16\t1\tmother_nature\tlargest\tlatest\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%15\t1\t1015\t/Users/timfeng/GitHub/priest\tclaude\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@16")):
+                "%16\t1\t1016\t/Users/timfeng/GitHub/mother_nature\tcodex\n",
+        ])
+        let adapter = OrdinaryTmuxCLIAdapter(
+            commandRunner: { socket, arguments, stdin in
+                try state.run(socket: socket, arguments: arguments, stdin: stdin)
+            },
+            windowSizePolicyReconciliationMode: .preserveForInteractiveSizing
+        )
+
+        let panels = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(
+                clientTTY: "/dev/ttys010",
+                targetSession: "genesis-extraction"
+            )
+        )
+
+        XCTAssertEqual(panels.map(\.windowID), ["@15", "@16"])
+        XCTAssertFalse(state.calls.contains { $0.arguments.first == "set-option" })
+    }
+
     func testProjectionClaimsLargestWindowPolicyBeforeAnotherClientAttaches() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let state = RunnerState(responses: [
