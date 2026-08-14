@@ -79,14 +79,26 @@ final class OrdinaryTmuxProjectionContext: @unchecked Sendable {
     let registry: OrdinaryTmuxPanelRegistry
     let projector: OrdinaryTmuxPanelProjector
     let inputSubmissionStore: OrdinaryTmuxInputSubmissionStore
+    let windowSizePolicyReconciliationMode:
+        OrdinaryTmuxWindowSizePolicyReconciliationMode
 
     init(
         registry: OrdinaryTmuxPanelRegistry = OrdinaryTmuxPanelRegistry(),
-        inputSubmissionStore: OrdinaryTmuxInputSubmissionStore = OrdinaryTmuxInputSubmissionStore()
+        inputSubmissionStore: OrdinaryTmuxInputSubmissionStore = OrdinaryTmuxInputSubmissionStore(),
+        windowSizePolicyReconciliationMode:
+            OrdinaryTmuxWindowSizePolicyReconciliationMode = .stabilizeLargest
     ) {
         self.registry = registry
-        self.projector = OrdinaryTmuxPanelProjector(registry: registry)
         self.inputSubmissionStore = inputSubmissionStore
+        self.windowSizePolicyReconciliationMode =
+            windowSizePolicyReconciliationMode
+        self.projector = OrdinaryTmuxPanelProjector(
+            adapter: OrdinaryTmuxCLIAdapter(
+                windowSizePolicyReconciliationMode:
+                    windowSizePolicyReconciliationMode
+            ),
+            registry: registry
+        )
     }
 }
 

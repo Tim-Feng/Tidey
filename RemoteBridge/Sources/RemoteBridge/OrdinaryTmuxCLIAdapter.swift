@@ -148,7 +148,7 @@ enum OrdinaryTmuxProjectionError: Error, Equatable {
     case staleWindow(windowID: String)
 }
 
-enum OrdinaryTmuxWindowSizePolicyReconciliationMode: Sendable {
+enum OrdinaryTmuxWindowSizePolicyReconciliationMode: Equatable, Sendable {
     case stabilizeLargest
     case preserveForInteractiveSizing
 }

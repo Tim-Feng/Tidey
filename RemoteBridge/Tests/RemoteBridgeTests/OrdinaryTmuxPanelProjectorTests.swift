@@ -375,6 +375,17 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         }
     }
 
+    func testProjectionContextOwnsRequestedWindowSizePolicyMode() {
+        let context = OrdinaryTmuxProjectionContext(
+            windowSizePolicyReconciliationMode: .preserveForInteractiveSizing
+        )
+
+        XCTAssertEqual(
+            context.windowSizePolicyReconciliationMode,
+            .preserveForInteractiveSizing
+        )
+    }
+
     func testProjectsMultiWindowCarrierIntoRemoteOnlyPanels() {
         let registry = OrdinaryTmuxPanelRegistry()
         let projector = OrdinaryTmuxPanelProjector(
