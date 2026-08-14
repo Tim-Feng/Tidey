@@ -6,6 +6,7 @@ enum TmuxInteractiveProtocolV1 {
     static let inputAction = "tmux_interactive_input"
     static let resizeAction = "tmux_interactive_resize"
     static let unsubscribeAction = "unsubscribe_tmux_interactive"
+    static let startEventType = "tmux_interactive_start"
     static let outputEventType = "tmux_interactive_output"
     static let stateEventType = "tmux_interactive_state"
 }
