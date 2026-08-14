@@ -72,6 +72,49 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         }
     }
 
+    private final class BlockingInputRunner: @unchecked Sendable {
+        let entered = DispatchSemaphore(value: 0)
+        let release = DispatchSemaphore(value: 0)
+        private let lock = NSLock()
+        private var shouldBlock = true
+
+        func run(
+            socket: OrdinaryTmuxSocketSelector,
+            arguments: [String],
+            stdin: String?
+        ) -> String {
+            lock.lock()
+            let blockThisCall = shouldBlock
+            shouldBlock = false
+            lock.unlock()
+            if blockThisCall {
+                entered.signal()
+                _ = release.wait(timeout: .now() + 2)
+            }
+            if arguments.first == "list-panes" {
+                return "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n"
+            }
+            return ""
+        }
+    }
+
+    private final class InputResultBox: @unchecked Sendable {
+        private let lock = NSLock()
+        private var storage: Result<Bool, Error>?
+
+        func store(_ result: Result<Bool, Error>) {
+            lock.lock()
+            storage = result
+            lock.unlock()
+        }
+
+        var value: Result<Bool, Error>? {
+            lock.lock()
+            defer { lock.unlock() }
+            return storage
+        }
+    }
+
     func testInputSubmissionStoreReservesOneOwnerPerRoute() {
         let store = OrdinaryTmuxInputSubmissionStore()
         let firstSession = OrdinaryTmuxSessionKey(socket: .defaultSocket, sessionID: "$1")
@@ -176,6 +219,70 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
             XCTAssertEqual(raceDone.wait(timeout: .now() + 2), .success)
             XCTAssertEqual(raceResults.values.filter { $0 }.count, 1)
         }
+    }
+
+    func testInteractiveLeaseAndRawTerminalInputExcludeEachOtherBeforeTmuxMutation() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(workspaceID: route.workspaceID, routes: [route])
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let sessionKey = OrdinaryTmuxSessionKey(socket: route.socket, sessionID: route.sessionID)
+        let leaseToken = OrdinaryTmuxInteractiveLeaseToken(rawValue: "interactive-owner")
+        let rejectedState = RunnerState(responses: [:])
+        rejectedState.failOnUnscripted = ["list-panes", "load-buffer", "paste-buffer"]
+        let rejectedRouter = OrdinaryTmuxInputRouter(
+            registry: registry,
+            adapter: adapter(state: rejectedState),
+            inputSubmissionStore: store
+        )
+
+        XCTAssertTrue(store.acquireInteractiveLease(token: leaseToken, sessionKey: sessionKey))
+        XCTAssertThrowsError(
+            try rejectedRouter.sendInput("\u{1b}", toPanelID: route.panelID)
+        ) { error in
+            guard case BridgeInternalError.conflict = error else {
+                return XCTFail("expected admission conflict, got \(error)")
+            }
+        }
+        XCTAssertTrue(rejectedState.calls.isEmpty)
+        store.releaseInteractiveLease(token: leaseToken, sessionKey: sessionKey)
+
+        let blockingRunner = BlockingInputRunner()
+        let activeRouter = OrdinaryTmuxInputRouter(
+            registry: registry,
+            adapter: OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
+                blockingRunner.run(socket: socket, arguments: arguments, stdin: stdin)
+            },
+            inputSubmissionStore: store
+        )
+        let inputResult = InputResultBox()
+        let inputDone = DispatchGroup()
+        inputDone.enter()
+        DispatchQueue.global().async {
+            inputResult.store(Result {
+                try activeRouter.sendInput("\u{1b}", toPanelID: route.panelID)
+            })
+            inputDone.leave()
+        }
+
+        XCTAssertEqual(blockingRunner.entered.wait(timeout: .now() + 2), .success)
+        XCTAssertFalse(store.acquireInteractiveLease(token: leaseToken, sessionKey: sessionKey))
+        blockingRunner.release.signal()
+        XCTAssertEqual(inputDone.wait(timeout: .now() + 2), .success)
+        XCTAssertEqual(try inputResult.value?.get(), true)
+        XCTAssertTrue(store.acquireInteractiveLease(token: leaseToken, sessionKey: sessionKey))
+        store.releaseInteractiveLease(token: leaseToken, sessionKey: sessionKey)
+
+        let failingState = RunnerState(responses: [:])
+        failingState.failOnUnscripted = ["list-panes"]
+        let failingRouter = OrdinaryTmuxInputRouter(
+            registry: registry,
+            adapter: adapter(state: failingState),
+            inputSubmissionStore: store
+        )
+        XCTAssertThrowsError(try failingRouter.sendInput("\u{1b}", toPanelID: route.panelID))
+        XCTAssertTrue(store.acquireInteractiveLease(token: leaseToken, sessionKey: sessionKey))
+        store.releaseInteractiveLease(token: leaseToken, sessionKey: sessionKey)
     }
 
     func testSharedSubmissionStoreRejectsSecondRouterBeforeItPastesToTheSameRoute() throws {

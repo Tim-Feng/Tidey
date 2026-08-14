@@ -739,31 +739,37 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
             return false
         }
         let routeKey = Self.lastPastePaneKey(for: route)
+        let sessionKey = Self.sessionKey(for: route)
+        let ownsEphemeralReservation = submissionID == nil
+        let effectiveSubmissionID = submissionID ?? "terminal-input-\(UUID().uuidString)"
         var didReserveSubmission = false
-        if let submissionID {
-            if mode == .literalChatText {
-                guard inputSubmissionStore.reserve(
-                    submissionID: submissionID,
-                    routeKey: routeKey,
-                    sessionKey: Self.sessionKey(for: route)
-                ) else {
-                    throw BridgeInternalError.conflict(
-                        "Another terminal submission is already pending for this panel."
-                    )
-                }
-                didReserveSubmission = true
-            } else if inputSubmissionStore.isCurrent(
-                submissionID: submissionID,
-                routeKey: routeKey
-            ) == false {
+        if ownsEphemeralReservation || mode == .literalChatText {
+            guard inputSubmissionStore.reserve(
+                submissionID: effectiveSubmissionID,
+                routeKey: routeKey,
+                sessionKey: sessionKey
+            ) else {
                 throw BridgeInternalError.conflict(
-                    "The terminal submission no longer owns this panel."
+                    "Another terminal submission is already pending for this session."
                 )
             }
-        } else if inputSubmissionStore.isReserved(routeKey: routeKey) {
+            didReserveSubmission = true
+        } else if let submissionID,
+                  inputSubmissionStore.isCurrent(
+                    submissionID: submissionID,
+                    routeKey: routeKey
+                  ) == false {
             throw BridgeInternalError.conflict(
-                "Another terminal submission is already pending for this panel."
+                "The terminal submission no longer owns this panel."
             )
+        }
+        defer {
+            if ownsEphemeralReservation, didReserveSubmission {
+                inputSubmissionStore.release(
+                    submissionID: effectiveSubmissionID,
+                    routeKey: routeKey
+                )
+            }
         }
         let fallbackEnterPaneID = lastPastePaneStore.paneID(for: routeKey)
         let delivery: OrdinaryTmuxInputDelivery
@@ -776,9 +782,9 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
                 allowAmbiguousPasteTimeout: allowAmbiguousPasteTimeout
             )
         } catch {
-            if didReserveSubmission, let submissionID {
+            if didReserveSubmission, ownsEphemeralReservation == false {
                 inputSubmissionStore.release(
-                    submissionID: submissionID,
+                    submissionID: effectiveSubmissionID,
                     routeKey: routeKey
                 )
             }
