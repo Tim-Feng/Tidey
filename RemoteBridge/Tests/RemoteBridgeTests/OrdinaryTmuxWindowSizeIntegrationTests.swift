@@ -330,6 +330,74 @@ final class OrdinaryTmuxWindowSizeIntegrationTests: XCTestCase {
         assertHorizontalSplit(restoredMacGeometry, columns: 132, rows: 37, paneIDs: paneIDs)
         XCTAssertEqual(try harness.windowSizeOwnership(sessionName: sessionName), "latest|")
     }
+
+    func testLatestPolicyPaneDistributionDriftStaysWithinTolerance() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        let version = try IsolatedTmuxHarness.version(at: tmuxPath)
+        guard version == "tmux 3.6a" else {
+            throw XCTSkip("isolated sizing regression requires tmux 3.6a; found \(version)")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/script") else {
+            throw XCTSkip("macOS script is unavailable")
+        }
+
+        let harness = try IsolatedTmuxHarness(tmuxPath: tmuxPath)
+        defer { harness.shutdown() }
+        let sessionName = "latest-drift"
+        try harness.startDetachedSession(name: sessionName, columns: 132, rows: 37)
+        _ = try harness.attachControlModeSizingClient(
+            sessionName: sessionName,
+            columns: 132,
+            rows: 37,
+            allocatingTTY: true
+        )
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        try harness.splitWindowHorizontally(sessionName: sessionName, percentage: 30)
+        let initialGeometry = try harness.paneGeometry(sessionName: sessionName)
+        XCTAssertEqual(initialGeometry.count, 2)
+
+        let phoneClient = try harness.attachControlModeSizingClient(
+            sessionName: sessionName,
+            columns: 60,
+            rows: 20
+        )
+        XCTAssertTrue(harness.waitForClientCount(2, timeout: 2))
+        for size in [(60, 20), (80, 25), (50, 18)] {
+            try phoneClient.writeLine("refresh-client -C \(size.0),\(size.1)")
+            XCTAssertTrue(
+                harness.waitForWindowGeometry(
+                    sessionName: sessionName,
+                    expected: "\(sessionName)|\(size.0)|\(size.1)|latest",
+                    timeout: 2
+                )
+            )
+        }
+
+        XCTAssertEqual(try phoneClient.detachAndWait(timeout: 2), 0)
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        XCTAssertTrue(
+            harness.waitForWindowGeometry(
+                sessionName: sessionName,
+                expected: "\(sessionName)|132|37|latest",
+                timeout: 2
+            )
+        )
+        let restoredGeometry = try harness.paneGeometry(sessionName: sessionName)
+        XCTAssertEqual(restoredGeometry.map(\.paneID), initialGeometry.map(\.paneID))
+        let initialLeadingPane = try XCTUnwrap(initialGeometry.first)
+        let restoredLeadingPane = try XCTUnwrap(restoredGeometry.first)
+
+        let initialAvailableColumns = Double(initialGeometry.reduce(0) { $0 + $1.width })
+        let restoredAvailableColumns = Double(restoredGeometry.reduce(0) { $0 + $1.width })
+        let initialLeadingShare = Double(initialLeadingPane.width) / initialAvailableColumns
+        let restoredLeadingShare = Double(restoredLeadingPane.width) / restoredAvailableColumns
+        let drift = abs(initialLeadingShare - restoredLeadingShare)
+
+        XCTAssertGreaterThan(drift, 0)
+        XCTAssertLessThanOrEqual(drift, 0.05)
+    }
 }
 
 private struct IsolatedTmuxPaneGeometry: Equatable {
