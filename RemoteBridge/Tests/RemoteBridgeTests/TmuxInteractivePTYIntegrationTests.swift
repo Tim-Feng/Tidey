@@ -261,6 +261,81 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testSessionOwnerHoldsRealPTYLeaseUntilCloseAndReapComplete() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "panel-1",
+            carrierPanelID: "carrier-1",
+            socket: .path(fixture.socketPath),
+            sessionID: target.sessionID,
+            sessionName: "pty-exact",
+            windowID: target.windowID,
+            windowIndex: 1,
+            activePaneID: target.paneID,
+            cwd: nil,
+            currentCommand: "zsh"
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-owner-1",
+            generation: 11
+        )
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: TmuxInteractivePTYController()
+        )
+        var didClose = false
+        defer {
+            if didClose == false {
+                try? owner.close()
+            }
+        }
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: TmuxInteractiveSubscribe(
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    binding: binding,
+                    viewport: TmuxInteractiveViewport(columns: 80, rows: 24)
+                ),
+                route: route,
+                tmuxExecutablePath: tmuxPath
+            )
+        )
+        XCTAssertTrue(fixture.waitForClientCount(1, timeout: 3))
+        let sessionKey = OrdinaryTmuxSessionKey(
+            socket: route.socket,
+            sessionID: route.sessionID
+        )
+        XCTAssertFalse(
+            store.reserve(
+                submissionID: "blocked-while-owned",
+                routeKey: "blocked-while-owned-route",
+                sessionKey: sessionKey
+            )
+        )
+
+        try owner.close()
+        didClose = true
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 2)
+        XCTAssertTrue(
+            store.reserve(
+                submissionID: "admitted-after-reap",
+                routeKey: "admitted-after-reap-route",
+                sessionKey: sessionKey
+            )
+        )
+    }
+
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
