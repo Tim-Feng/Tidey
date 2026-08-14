@@ -1198,8 +1198,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             bridgePort: 0,
             cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
             requestExecutor: { work in work() },
-            interactivePTYRoutingEnabled: true,
-            interactivePTYSessionCandidateBuilder: candidateBuilder
+            interactivePTYActivation: .enabled(candidateBuilder)
         )
         return Fixture(
             handler: handler,

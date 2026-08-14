@@ -23,6 +23,7 @@ final class TideyRemoteBridgeServer {
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
+    private let interactivePTYActivation: TmuxInteractivePTYActivation
     private let ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext
     private let requestSequencer: BridgeRequestSequencer
     private let terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry
@@ -47,6 +48,7 @@ final class TideyRemoteBridgeServer {
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
          startRegistryMonitor: Bool = true,
          startCloudflaredSupervisor: Bool = true,
+         interactivePTYActivation: TmuxInteractivePTYActivation = .disabled,
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
          terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry()) {
@@ -65,6 +67,7 @@ final class TideyRemoteBridgeServer {
         self.uploadGarbageCollector = uploadGarbageCollector
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
+        self.interactivePTYActivation = interactivePTYActivation
         self.ordinaryTmuxProjectionContext = ordinaryTmuxProjectionContext
         self.requestSequencer = requestSequencer
         self.terminalStreamLaneRegistry = terminalStreamLaneRegistry
@@ -92,7 +95,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, ordinaryTmuxProjectionContext, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, interactivePTYActivation, ordinaryTmuxProjectionContext, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -102,6 +105,7 @@ final class TideyRemoteBridgeServer {
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
+                                                                  interactivePTYActivation: interactivePTYActivation,
                                                                   ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext,
                                                                   requestSequencer: requestSequencer,
                                                                   terminalStreamLaneRegistry: terminalStreamLaneRegistry,
@@ -583,6 +587,20 @@ enum BridgeProtocolCapability {
     static let tmuxInteractive = TmuxInteractiveProtocolV1.capability
 }
 
+enum TmuxInteractivePTYActivation: Sendable {
+    case disabled
+    case enabled(TmuxInteractivePTYSessionCandidateBuilder)
+
+    var candidateBuilder: TmuxInteractivePTYSessionCandidateBuilder? {
+        switch self {
+        case .disabled:
+            return nil
+        case .enabled(let candidateBuilder):
+            return candidateBuilder
+        }
+    }
+}
+
 final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
@@ -839,9 +857,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let now: @Sendable () -> Date
     private let requestExecutor: BridgeRequestExecutor
     private let terminalStreamEventLoopScheduler: TerminalStreamEventLoopScheduler
-    private let interactivePTYRoutingEnabled: Bool
-    private let interactivePTYSessionCandidateBuilder:
-        TmuxInteractivePTYSessionCandidateBuilder?
+    private let interactivePTYActivation: TmuxInteractivePTYActivation
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -886,8 +902,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          terminalStreamEventLoopScheduler: @escaping TerminalStreamEventLoopScheduler = { eventLoop, work in
              eventLoop.execute(work)
          },
-         interactivePTYRoutingEnabled: Bool = false,
-         interactivePTYSessionCandidateBuilder: TmuxInteractivePTYSessionCandidateBuilder? = nil,
+         interactivePTYActivation: TmuxInteractivePTYActivation = .disabled,
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
          ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming? = nil,
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
@@ -908,8 +923,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.now = now
         self.requestExecutor = requestExecutor
         self.terminalStreamEventLoopScheduler = terminalStreamEventLoopScheduler
-        self.interactivePTYRoutingEnabled = interactivePTYRoutingEnabled
-        self.interactivePTYSessionCandidateBuilder = interactivePTYSessionCandidateBuilder
+        self.interactivePTYActivation = interactivePTYActivation
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxProjectionContext.registry
         self.ordinaryTmuxPanelProjector = ordinaryTmuxProjectionContext.projector
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxProjectionContext.registry)
@@ -1211,7 +1225,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                             context: ChannelHandlerContext,
                             receiptSequence: UInt64) -> LocalRequestResult? {
         do {
-            if interactivePTYRoutingEnabled,
+            if interactivePTYActivation.candidateBuilder != nil,
                let action = try TmuxInteractiveWireCodec.decode(request) {
                 return try handleInteractivePTYRequest(
                     action,
@@ -1849,7 +1863,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     ) throws -> LocalRequestResult {
         switch action {
         case .subscribe(let subscribe):
-            guard let candidateBuilder = interactivePTYSessionCandidateBuilder else {
+            guard let candidateBuilder = interactivePTYActivation.candidateBuilder else {
                 return interactivePTYUnavailableResponse(
                     requestID: request.id,
                     message: "Interactive tmux PTY routing is unavailable."
