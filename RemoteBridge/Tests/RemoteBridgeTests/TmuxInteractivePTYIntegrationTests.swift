@@ -146,6 +146,121 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testGenerationFencedResizeAppliesLatestValidPhoneViewportToRealClient() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let initialSize = TmuxInteractivePTYSize(columns: 80, rows: 24)
+        let handle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: initialSize
+            )
+        )
+        var didCloseMaster = false
+        var didReapChild = false
+        defer {
+            if didCloseMaster == false {
+                try? controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+            }
+            if didReapChild == false {
+                reapForCleanup(controller: controller, childProcessID: handle.childProcessID)
+            }
+        }
+
+        _ = try XCTUnwrap(
+            fixture.waitForClient(processID: handle.childProcessID, timeout: 3)
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 7
+        )
+        let gate = TmuxInteractivePTYResizeGate(
+            binding: binding,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            initialSize: initialSize,
+            controller: controller
+        )
+        XCTAssertFalse(
+            try gate.apply(
+                TmuxInteractiveResize(
+                    binding: TmuxInteractiveSubscriptionBinding(
+                        subscriptionID: binding.subscriptionID,
+                        generation: binding.generation - 1
+                    ),
+                    viewport: TmuxInteractiveViewport(columns: 120, rows: 40)
+                )
+            )
+        )
+        let invalidViewport = TmuxInteractiveViewport(columns: 0, rows: 24)
+        XCTAssertThrowsError(
+            try gate.apply(TmuxInteractiveResize(binding: binding, viewport: invalidViewport))
+        ) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYResizeGateError,
+                .invalidViewport(invalidViewport)
+            )
+        }
+
+        for viewport in [
+            TmuxInteractiveViewport(columns: 60, rows: 20),
+            TmuxInteractiveViewport(columns: 80, rows: 25),
+            TmuxInteractiveViewport(columns: 50, rows: 18),
+        ] {
+            XCTAssertTrue(
+                try gate.apply(TmuxInteractiveResize(binding: binding, viewport: viewport))
+            )
+            XCTAssertTrue(
+                fixture.waitForClientSize(
+                    processID: handle.childProcessID,
+                    columns: viewport.columns,
+                    rows: viewport.rows,
+                    timeout: 2
+                )
+            )
+            XCTAssertFalse(
+                try gate.apply(TmuxInteractiveResize(binding: binding, viewport: viewport))
+            )
+        }
+
+        gate.retire()
+        XCTAssertFalse(
+            try gate.apply(
+                TmuxInteractiveResize(
+                    binding: binding,
+                    viewport: TmuxInteractiveViewport(columns: 100, rows: 30)
+                )
+            )
+        )
+        XCTAssertTrue(
+            fixture.waitForClientSize(
+                processID: handle.childProcessID,
+                columns: 50,
+                rows: 18,
+                timeout: 1
+            )
+        )
+
+        try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+        didCloseMaster = true
+        let childExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: handle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(childExit)
+        didReapChild = childExit != nil
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -523,6 +638,21 @@ private final class InteractivePTYTmuxFixture {
     func waitForClientCount(_ expected: Int, timeout: TimeInterval) -> Bool {
         waitUntil(timeout: timeout) {
             (try? self.clientRecords().count) == expected
+        }
+    }
+
+    func waitForClientSize(
+        processID: Int32,
+        columns: Int,
+        rows: Int,
+        timeout: TimeInterval
+    ) -> Bool {
+        waitUntil(timeout: timeout) {
+            (try? self.clientRecords().contains {
+                $0.processID == processID &&
+                    $0.columns == columns &&
+                    $0.rows == rows
+            }) == true
         }
     }
 
