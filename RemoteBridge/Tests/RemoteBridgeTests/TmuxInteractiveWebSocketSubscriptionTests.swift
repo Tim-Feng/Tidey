@@ -92,29 +92,19 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         }
     }
 
-    func testSubscribeCommitsOwnershipBeforePumpingStartOutputAndDetach() throws {
-        let supportDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "TmuxInteractiveWebSocketSubscriptionTests-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        let paths = BridgePaths(supportDirectory: supportDirectory)
-        try paths.ensureSupportDirectoriesExist(fileManager: .default)
-        defer { try? FileManager.default.removeItem(at: supportDirectory) }
+    private struct Fixture {
+        let handler: WebSocketFrameHandler
+        let channel: EmbeddedChannel
+        let supportDirectory: URL
 
-        let route = OrdinaryTmuxPanelRoute(
-            workspaceID: "workspace-1",
-            panelID: "ordinary-tmux:path:$1:@2",
-            carrierPanelID: "carrier-1",
-            socket: .path("/private/tmp/tmux-501/default"),
-            sessionID: "$1",
-            sessionName: "session-1",
-            windowID: "@2",
-            windowIndex: 1,
-            activePaneID: "%3",
-            cwd: nil,
-            currentCommand: "zsh"
-        )
+        func cleanup() {
+            _ = try? channel.finish()
+            try? FileManager.default.removeItem(at: supportDirectory)
+        }
+    }
+
+    func testSubscribeCommitsOwnershipBeforePumpingStartOutputAndDetach() throws {
+        let route = makeRoute()
         let binding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-1",
             generation: 9
@@ -174,28 +164,10 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             sessionFactory: { _ in session },
             tmuxExecutablePath: "/opt/homebrew/bin/tmux"
         )
-        let eventHub = AgentEventHub()
-        let monitor = AgentSessionRegistryMonitor(
-            paths: paths,
-            fileManager: .default,
-            hub: eventHub,
-            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
-            parentPIDLookup: { _ in nil }
-        )
-        let handler = WebSocketFrameHandler(
-            socketClient: TideySocketClient(locator: TideySocketLocator()),
-            eventHub: eventHub,
-            workspaceEventHub: WorkspaceEventHub(),
-            registryMonitor: monitor,
-            observability: BridgeObservabilityCenter(),
-            bridgePort: 0,
-            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
-            requestExecutor: { work in work() },
-            interactivePTYRoutingEnabled: true,
-            interactivePTYSessionCandidateBuilder: candidateBuilder
-        )
-        let channel = EmbeddedChannel(handler: handler)
-        defer { _ = try? channel.finish() }
+        let fixture = try makeFixture(candidateBuilder: candidateBuilder)
+        defer { fixture.cleanup() }
+        let handler = fixture.handler
+        let channel = fixture.channel
         let context = try channel.pipeline.syncOperations.context(
             handler: handler
         )
@@ -317,28 +289,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
     }
 
     func testDuplicateSubscribeCommitClosesRejectedCandidateWithoutReplacement() throws {
-        let supportDirectory = FileManager.default.temporaryDirectory
-            .appendingPathComponent(
-                "TmuxInteractiveWebSocketSubscriptionTests-\(UUID().uuidString)",
-                isDirectory: true
-            )
-        let paths = BridgePaths(supportDirectory: supportDirectory)
-        try paths.ensureSupportDirectoriesExist(fileManager: .default)
-        defer { try? FileManager.default.removeItem(at: supportDirectory) }
-
-        let route = OrdinaryTmuxPanelRoute(
-            workspaceID: "workspace-1",
-            panelID: "ordinary-tmux:path:$1:@2",
-            carrierPanelID: "carrier-1",
-            socket: .path("/private/tmp/tmux-501/default"),
-            sessionID: "$1",
-            sessionName: "session-1",
-            windowID: "@2",
-            windowIndex: 1,
-            activePaneID: "%3",
-            cwd: nil,
-            currentCommand: "zsh"
-        )
+        let route = makeRoute()
         let existingBinding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-1",
             generation: 8
@@ -379,28 +330,10 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             sessionFactory: { _ in candidateSession },
             tmuxExecutablePath: "/opt/homebrew/bin/tmux"
         )
-        let eventHub = AgentEventHub()
-        let monitor = AgentSessionRegistryMonitor(
-            paths: paths,
-            fileManager: .default,
-            hub: eventHub,
-            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
-            parentPIDLookup: { _ in nil }
-        )
-        let handler = WebSocketFrameHandler(
-            socketClient: TideySocketClient(locator: TideySocketLocator()),
-            eventHub: eventHub,
-            workspaceEventHub: WorkspaceEventHub(),
-            registryMonitor: monitor,
-            observability: BridgeObservabilityCenter(),
-            bridgePort: 0,
-            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
-            requestExecutor: { work in work() },
-            interactivePTYRoutingEnabled: true,
-            interactivePTYSessionCandidateBuilder: candidateBuilder
-        )
-        let channel = EmbeddedChannel(handler: handler)
-        defer { _ = try? channel.finish() }
+        let fixture = try makeFixture(candidateBuilder: candidateBuilder)
+        defer { fixture.cleanup() }
+        let handler = fixture.handler
+        let channel = fixture.channel
         let existingOwner = TmuxInteractivePTYSessionOwner(
             admissionStore: OrdinaryTmuxInputSubmissionStore(),
             controller: ControllerProbe(readResults: [])
@@ -470,6 +403,59 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         buffer.writeBytes(payload)
         _ = try channel.writeInbound(
             WebSocketFrame(fin: true, opcode: .text, data: buffer)
+        )
+    }
+
+    private func makeFixture(
+        candidateBuilder: TmuxInteractivePTYSessionCandidateBuilder
+    ) throws -> Fixture {
+        let supportDirectory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "TmuxInteractiveWebSocketSubscriptionTests-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: .default)
+        let eventHub = AgentEventHub()
+        let monitor = AgentSessionRegistryMonitor(
+            paths: paths,
+            fileManager: .default,
+            hub: eventHub,
+            tmuxResolver: TmuxStateResolver(ttl: 60) { _, _ in "" },
+            parentPIDLookup: { _ in nil }
+        )
+        let handler = WebSocketFrameHandler(
+            socketClient: TideySocketClient(locator: TideySocketLocator()),
+            eventHub: eventHub,
+            workspaceEventHub: WorkspaceEventHub(),
+            registryMonitor: monitor,
+            observability: BridgeObservabilityCenter(),
+            bridgePort: 0,
+            cloudflaredManager: BridgeCloudflaredManager(binaryResolver: { nil }),
+            requestExecutor: { work in work() },
+            interactivePTYRoutingEnabled: true,
+            interactivePTYSessionCandidateBuilder: candidateBuilder
+        )
+        return Fixture(
+            handler: handler,
+            channel: EmbeddedChannel(handler: handler),
+            supportDirectory: supportDirectory
+        )
+    }
+
+    private func makeRoute() -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:path:$1:@2",
+            carrierPanelID: "carrier-1",
+            socket: .path("/private/tmp/tmux-501/default"),
+            sessionID: "$1",
+            sessionName: "session-1",
+            windowID: "@2",
+            windowIndex: 1,
+            activePaneID: "%3",
+            cwd: nil,
+            currentCommand: "zsh"
         )
     }
 
