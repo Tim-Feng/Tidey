@@ -20,7 +20,9 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
-let ordinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext()
+let interactivePTYRuntime = TmuxInteractivePTYRuntime.disabled()
+let ordinaryTmuxProjectionContext =
+    interactivePTYRuntime.ordinaryTmuxProjectionContext
 let ordinaryTmuxPaneIdentityReconciler = OrdinaryTmuxPaneIdentityReconciler(socketClient: socketClient,
                                                                             projectionContext: ordinaryTmuxProjectionContext)
 let ordinaryTmuxCarrierResolver = TideyOrdinaryTmuxCarrierResolver(socketClient: socketClient)
@@ -93,7 +95,7 @@ let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      uploadGarbageCollector: uploadGarbageCollector,
                                      startRegistryMonitor: runtimeConfiguration.shouldStartRegistryMonitor,
                                      startCloudflaredSupervisor: runtimeConfiguration.shouldStartCloudflaredSupervisor,
-                                     ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext)
+                                     interactivePTYRuntime: interactivePTYRuntime)
 
 do {
     if runtimeConfiguration.shouldStartBackgroundServices {

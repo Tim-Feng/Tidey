@@ -23,8 +23,7 @@ final class TideyRemoteBridgeServer {
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
-    private let interactivePTYActivation: TmuxInteractivePTYActivation
-    private let ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext
+    private let interactivePTYRuntime: TmuxInteractivePTYRuntime
     private let requestSequencer: BridgeRequestSequencer
     private let terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry
     private let terminalObserver: OrdinaryTmuxTerminalObserving
@@ -48,8 +47,7 @@ final class TideyRemoteBridgeServer {
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
          startRegistryMonitor: Bool = true,
          startCloudflaredSupervisor: Bool = true,
-         interactivePTYActivation: TmuxInteractivePTYActivation = .disabled,
-         ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
+         interactivePTYRuntime: TmuxInteractivePTYRuntime = .disabled(),
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
          terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry()) {
         self.host = host
@@ -67,8 +65,7 @@ final class TideyRemoteBridgeServer {
         self.uploadGarbageCollector = uploadGarbageCollector
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
-        self.interactivePTYActivation = interactivePTYActivation
-        self.ordinaryTmuxProjectionContext = ordinaryTmuxProjectionContext
+        self.interactivePTYRuntime = interactivePTYRuntime
         self.requestSequencer = requestSequencer
         self.terminalStreamLaneRegistry = terminalStreamLaneRegistry
         self.terminalObserver = terminalObserver
@@ -95,7 +92,7 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, interactivePTYActivation, ordinaryTmuxProjectionContext, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager] channel, _ in
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, interactivePTYRuntime, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager] channel, _ in
                 channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
@@ -105,8 +102,8 @@ final class TideyRemoteBridgeServer {
                                                                   observability: observability,
                                                                   bridgePort: port,
                                                                   cloudflaredManager: cloudflaredManager,
-                                                                  interactivePTYActivation: interactivePTYActivation,
-                                                                  ordinaryTmuxProjectionContext: ordinaryTmuxProjectionContext,
+                                                                  interactivePTYActivation: interactivePTYRuntime.activation,
+                                                                  ordinaryTmuxProjectionContext: interactivePTYRuntime.ordinaryTmuxProjectionContext,
                                                                   requestSequencer: requestSequencer,
                                                                   terminalStreamLaneRegistry: terminalStreamLaneRegistry,
                                                                   promptSubmitDeduper: promptSubmitDeduper))
