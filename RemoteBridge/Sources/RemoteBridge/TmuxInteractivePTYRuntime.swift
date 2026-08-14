@@ -19,6 +19,16 @@ struct TmuxInteractivePTYRuntime: Sendable {
         )
     }
 
+    static func production(
+        tmuxExecutablePath: String? = TmuxStateResolver.discoverTmuxBinaryPath()
+    ) -> TmuxInteractivePTYRuntime {
+        guard let tmuxExecutablePath,
+              tmuxExecutablePath.first == "/" else {
+            return disabled()
+        }
+        return enabled(tmuxExecutablePath: tmuxExecutablePath)
+    }
+
     static func enabled(
         tmuxExecutablePath: String
     ) -> TmuxInteractivePTYRuntime {

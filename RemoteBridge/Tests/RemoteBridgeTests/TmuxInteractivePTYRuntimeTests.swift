@@ -157,4 +157,31 @@ final class TmuxInteractivePTYRuntimeTests: XCTestCase {
         }
         XCTAssertEqual(controller.spawnCount, 0)
     }
+
+    func testProductionRuntimeEnablesOnlyWithDiscoveredTmuxPath() {
+        let enabled = TmuxInteractivePTYRuntime.production(
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        XCTAssertEqual(
+            enabled.activation.protocolCapabilities,
+            [TmuxInteractiveProtocolV1.capability]
+        )
+        XCTAssertNotNil(enabled.activation.candidateBuilder)
+        XCTAssertEqual(
+            enabled.ordinaryTmuxProjectionContext
+                .windowSizePolicyReconciliationMode,
+            .preserveForInteractiveSizing
+        )
+
+        let unavailable = TmuxInteractivePTYRuntime.production(
+            tmuxExecutablePath: nil
+        )
+        XCTAssertTrue(unavailable.activation.protocolCapabilities.isEmpty)
+        XCTAssertNil(unavailable.activation.candidateBuilder)
+        XCTAssertEqual(
+            unavailable.ordinaryTmuxProjectionContext
+                .windowSizePolicyReconciliationMode,
+            .stabilizeLargest
+        )
+    }
 }

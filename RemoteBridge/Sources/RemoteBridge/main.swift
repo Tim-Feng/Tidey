@@ -20,7 +20,7 @@ let locator = TideySocketLocator()
 let socketClient = TideySocketClient(locator: locator)
 let eventHub = AgentEventHub()
 let workspaceEventHub = WorkspaceEventHub()
-let interactivePTYRuntime = TmuxInteractivePTYRuntime.disabled()
+let interactivePTYRuntime = TmuxInteractivePTYRuntime.production()
 let ordinaryTmuxProjectionContext =
     interactivePTYRuntime.ordinaryTmuxProjectionContext
 let ordinaryTmuxPaneIdentityReconciler = OrdinaryTmuxPaneIdentityReconciler(socketClient: socketClient,
