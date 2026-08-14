@@ -4,6 +4,33 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractiveProtocolV1Tests: XCTestCase {
+    func testInteractiveAuthoritativeStartCarriesResolvedSessionWindowPaneIdentity() {
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-7",
+            generation: 19
+        )
+        let attachProof = TmuxInteractiveAttachProof(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:/private/tmp/tmux-501/default:$7:@11",
+            sessionID: "$7",
+            windowID: "@11",
+            paneID: "%19"
+        )
+        let start = TmuxInteractiveAuthoritativeStart(
+            binding: binding,
+            attachProof: attachProof,
+            viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
+            initialBytes: Data([0x1b, 0x5b, 0x48])
+        )
+
+        XCTAssertEqual(start.attachProof, attachProof)
+        XCTAssertEqual(start.attachProof.workspaceID, "workspace-1")
+        XCTAssertEqual(start.attachProof.panelID, "ordinary-tmux:/private/tmp/tmux-501/default:$7:@11")
+        XCTAssertEqual(start.attachProof.sessionID, "$7")
+        XCTAssertEqual(start.attachProof.windowID, "@11")
+        XCTAssertEqual(start.attachProof.paneID, "%19")
+    }
+
     func testProtocolValuesFenceEveryMutableAndEmittedValueBySubscriptionAndGeneration() {
         let binding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-7",
@@ -21,6 +48,13 @@ final class TmuxInteractiveProtocolV1Tests: XCTestCase {
         let unsubscribe = TmuxInteractiveUnsubscribe(binding: binding)
         let start = TmuxInteractiveAuthoritativeStart(
             binding: binding,
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: subscribe.workspaceID,
+                panelID: subscribe.panelID,
+                sessionID: "$7",
+                windowID: "@11",
+                paneID: "%19"
+            ),
             viewport: viewport,
             initialBytes: Data([0x1b, 0x5b, 0x48])
         )

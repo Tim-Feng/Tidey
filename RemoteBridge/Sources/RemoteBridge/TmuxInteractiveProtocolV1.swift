@@ -41,8 +41,17 @@ struct TmuxInteractiveUnsubscribe: Equatable, Sendable {
     let binding: TmuxInteractiveSubscriptionBinding
 }
 
+struct TmuxInteractiveAttachProof: Equatable, Sendable {
+    let workspaceID: String
+    let panelID: String
+    let sessionID: String
+    let windowID: String
+    let paneID: String
+}
+
 struct TmuxInteractiveAuthoritativeStart: Equatable, Sendable {
     let binding: TmuxInteractiveSubscriptionBinding
+    let attachProof: TmuxInteractiveAttachProof
     let viewport: TmuxInteractiveViewport
     let initialBytes: Data
 }
