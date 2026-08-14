@@ -96,6 +96,60 @@ final class OrdinaryTmuxWindowSizeIntegrationTests: XCTestCase {
         XCTAssertEqual(try client.detachAndWait(timeout: 2), 0)
         XCTAssertTrue(harness.waitForClientCount(0, timeout: 2))
     }
+
+    func testAdapterClaimsLargestBeforeSecondSizingClientAttaches() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        let version = try IsolatedTmuxHarness.version(at: tmuxPath)
+        guard version == "tmux 3.6a" else {
+            throw XCTSkip("isolated sizing regression requires tmux 3.6a; found \(version)")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/script") else {
+            throw XCTSkip("macOS script is unavailable")
+        }
+
+        let harness = try IsolatedTmuxHarness(tmuxPath: tmuxPath)
+        defer { harness.shutdown() }
+        try harness.startDetachedSession(name: "adapter-claim", columns: 132, rows: 37)
+        _ = try harness.attachControlModeSizingClient(
+            sessionName: "adapter-claim",
+            columns: 132,
+            rows: 37,
+            allocatingTTY: true
+        )
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        let clientTTY = try XCTUnwrap(
+            try harness.clientRecords().first?.split(separator: "|").first.map(String.init)
+        )
+
+        let isolatedSocket = OrdinaryTmuxSocketSelector.path(harness.socketPath)
+        let liveRunner = OrdinaryTmuxCLIAdapter.processCommandRunner(
+            executablePath: tmuxPath,
+            timeoutSeconds: 3
+        )
+        let adapter = OrdinaryTmuxCLIAdapter { socket, arguments, stdin in
+            guard socket == isolatedSocket else {
+                throw CocoaError(.fileReadNoPermission)
+            }
+            return try liveRunner(socket, arguments, stdin)
+        }
+
+        let panels = try adapter.projectedPanels(
+            for: OrdinaryTmuxAttachMetadata(
+                clientTTY: clientTTY,
+                targetSession: "adapter-claim",
+                socketPath: harness.socketPath
+            )
+        )
+
+        XCTAssertEqual(panels.count, 1)
+        XCTAssertEqual(try harness.clientCount(), 1)
+        XCTAssertEqual(
+            try harness.windowSizeOwnership(sessionName: "adapter-claim"),
+            "largest|latest"
+        )
+    }
 }
 
 private final class IsolatedTmuxControlClient: @unchecked Sendable {
@@ -285,6 +339,14 @@ private final class IsolatedTmuxHarness {
             "list-windows",
             "-t", "=\(sessionName)",
             "-F", "#{session_name}|#{window_width}|#{window_height}|#{window-size}",
+        ])
+    }
+
+    func windowSizeOwnership(sessionName: String) throws -> String {
+        try runServerCommand([
+            "list-windows",
+            "-t", "=\(sessionName)",
+            "-F", "#{window-size}|#{@tidey_window_size_before_multi_client}",
         ])
     }
 
