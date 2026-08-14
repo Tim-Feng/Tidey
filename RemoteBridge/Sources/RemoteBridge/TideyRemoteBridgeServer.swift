@@ -587,6 +587,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     typealias InboundIn = WebSocketFrame
     typealias OutboundOut = WebSocketFrame
 
+    private enum InteractivePTYRoutingError: Error {
+        case connectionUnavailable
+        case superseded
+    }
+
+    private struct InteractivePTYPumpEntry {
+        let binding: TmuxInteractiveSubscriptionBinding
+        let session: TmuxInteractivePTYConnectionSession
+        let pump: TmuxInteractivePTYEventPump
+    }
+
     private final class TerminalStreamDeltaSender: @unchecked Sendable {
         private weak var handler: WebSocketFrameHandler?
         private weak var context: ChannelHandlerContext?
@@ -659,6 +670,96 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         }
     }
 
+    private final class InteractivePTYWorkExecutor: @unchecked Sendable {
+        private let execute: BridgeRequestExecutor
+
+        init(execute: @escaping BridgeRequestExecutor) {
+            self.execute = execute
+        }
+
+        func submit(_ work: @escaping @Sendable () -> Void) {
+            execute(work)
+        }
+    }
+
+    private final class InteractivePTYConnectionCallbackTarget:
+        @unchecked Sendable
+    {
+        private weak var handler: WebSocketFrameHandler?
+        private weak var context: ChannelHandlerContext?
+        private let eventLoop: EventLoop
+
+        init(
+            handler: WebSocketFrameHandler,
+            context: ChannelHandlerContext
+        ) {
+            self.handler = handler
+            self.context = context
+            eventLoop = context.eventLoop
+        }
+
+        func scheduleRetry(
+            _ work: @escaping @Sendable () -> Void,
+            closeSession: @escaping @Sendable () -> Void
+        ) {
+            guard context != nil else {
+                closeSession()
+                return
+            }
+            _ = eventLoop.scheduleTask(in: .milliseconds(10), work)
+        }
+
+        func deliver(
+            _ event: TmuxInteractivePTYEvent,
+            binding: TmuxInteractiveSubscriptionBinding,
+            session: TmuxInteractivePTYConnectionSession,
+            completion: @escaping TmuxInteractivePTYEventPump.DeliveryCompletion
+        ) {
+            eventLoop.execute { [weak self] in
+                guard let self,
+                      let handler = self.handler,
+                      let context = self.context else {
+                    completion(.failure(
+                        InteractivePTYRoutingError.connectionUnavailable
+                    ))
+                    return
+                }
+                guard handler.interactivePTYConnectionState.owner(for: binding)
+                        === session else {
+                    completion(.failure(
+                        InteractivePTYRoutingError.superseded
+                    ))
+                    return
+                }
+                handler.send(
+                    interactivePTYEvent: event,
+                    to: context,
+                    afterWrite: completion
+                )
+            }
+        }
+
+        func stopped(
+            error: Error?,
+            binding: TmuxInteractiveSubscriptionBinding,
+            session: TmuxInteractivePTYConnectionSession,
+            closeSession: @escaping @Sendable () -> Void
+        ) {
+            eventLoop.execute { [weak self] in
+                guard let self, let handler = self.handler else {
+                    closeSession()
+                    return
+                }
+                handler.finishInteractivePTYPump(
+                    binding: binding,
+                    session: session,
+                    error: error,
+                    closeSession: closeSession
+                )
+            }
+        }
+    }
+
     enum CommitOutcome: Equatable {
         case accepted
         case rejected(reason: String)
@@ -701,6 +802,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let now: @Sendable () -> Date
     private let requestExecutor: BridgeRequestExecutor
     private let terminalStreamEventLoopScheduler: TerminalStreamEventLoopScheduler
+    private let interactivePTYRoutingEnabled: Bool
+    private let interactivePTYSessionCandidateBuilder:
+        TmuxInteractivePTYSessionCandidateBuilder?
     private let ordinaryTmuxPanelRegistry: OrdinaryTmuxPanelRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
@@ -720,7 +824,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private var workspaceSubscriptionID: UUID?
     private var terminalStreamConnectionState = TerminalStreamConnectionState()
     private var interactivePTYConnectionState =
-        TmuxInteractivePTYConnectionState<TmuxInteractivePTYSessionOwner>()
+        TmuxInteractivePTYConnectionState<TmuxInteractivePTYConnectionSession>()
+    private var interactivePTYPumps = [String: InteractivePTYPumpEntry]()
     private var connectedAt: Date?
     private var didRecordConnection = false
     private var didRecordDisconnect = false
@@ -744,6 +849,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          terminalStreamEventLoopScheduler: @escaping TerminalStreamEventLoopScheduler = { eventLoop, work in
              eventLoop.execute(work)
          },
+         interactivePTYRoutingEnabled: Bool = false,
+         interactivePTYSessionCandidateBuilder: TmuxInteractivePTYSessionCandidateBuilder? = nil,
          ordinaryTmuxProjectionContext: OrdinaryTmuxProjectionContext = OrdinaryTmuxProjectionContext(),
          ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming? = nil,
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
@@ -764,6 +871,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.now = now
         self.requestExecutor = requestExecutor
         self.terminalStreamEventLoopScheduler = terminalStreamEventLoopScheduler
+        self.interactivePTYRoutingEnabled = interactivePTYRoutingEnabled
+        self.interactivePTYSessionCandidateBuilder = interactivePTYSessionCandidateBuilder
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxProjectionContext.registry
         self.ordinaryTmuxPanelProjector = ordinaryTmuxProjectionContext.projector
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxProjectionContext.registry)
@@ -945,12 +1054,17 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
-        let interactivePTYOwners = interactivePTYConnectionState.retire()
+        let interactivePTYPumpsToStop = interactivePTYPumps.values.map(\.pump)
+        interactivePTYPumps.removeAll(keepingCapacity: false)
+        let interactivePTYSessions = interactivePTYConnectionState.retire()
+        for pump in interactivePTYPumpsToStop {
+            pump.stop()
+        }
         let cleanupConnectionID = connectionID
-        for owner in interactivePTYOwners {
+        for session in interactivePTYSessions {
             requestExecutor {
                 do {
-                    try owner.close()
+                    try session.close()
                 } catch {
                     BridgeLogger.server.error(
                         "interactive PTY connection cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
@@ -981,7 +1095,13 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         binding: TmuxInteractiveSubscriptionBinding,
         owner: TmuxInteractivePTYSessionOwner
     ) -> Bool {
-        interactivePTYConnectionState.install(binding: binding, owner: owner)
+        interactivePTYConnectionState.install(
+            binding: binding,
+            owner: TmuxInteractivePTYConnectionSession(
+                binding: binding,
+                owner: owner
+            )
+        )
     }
 
     func errorCaught(context: ChannelHandlerContext, error: Error) {
@@ -1035,6 +1155,14 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                             context: ChannelHandlerContext,
                             receiptSequence: UInt64) -> LocalRequestResult? {
         do {
+            if interactivePTYRoutingEnabled,
+               let action = try TmuxInteractiveWireCodec.decode(request) {
+                return try handleInteractivePTYRequest(
+                    action,
+                    request: request,
+                    context: context
+                )
+            }
             if request.action == "image_upload" {
                 BridgeImageUploadDiagnostics.log("local dispatch enter request_id=\(request.id)")
             }
@@ -1658,6 +1786,205 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         }
     }
 
+    private func handleInteractivePTYRequest(
+        _ action: TmuxInteractiveWireAction,
+        request: BridgeRequest,
+        context: ChannelHandlerContext
+    ) throws -> LocalRequestResult {
+        switch action {
+        case .subscribe(let subscribe):
+            guard let candidateBuilder = interactivePTYSessionCandidateBuilder else {
+                return interactivePTYUnavailableResponse(
+                    requestID: request.id,
+                    message: "Interactive tmux PTY routing is unavailable."
+                )
+            }
+            let session = try candidateBuilder.build(subscribe)
+            let binding = subscribe.binding
+            return LocalRequestResult(
+                response: BridgeResponse(
+                    id: request.id,
+                    ok: true,
+                    result: [
+                        "subscribed": .bool(true),
+                        "subscription_id": .string(binding.subscriptionID),
+                        "generation": .number(Double(binding.generation)),
+                    ],
+                    error: nil
+                ),
+                agentReplayEnvelopes: [],
+                workspaceReplayEnvelopes: [],
+                applyOnEventLoop: interactivePTYSubscribeCommit(
+                    session: session,
+                    binding: binding,
+                    context: context
+                ),
+                afterAcceptedResponseEnqueued: { [weak self] in
+                    self?.startInteractivePTYPump(binding: binding)
+                }
+            )
+        case .input, .resize, .unsubscribe:
+            return interactivePTYUnavailableResponse(
+                requestID: request.id,
+                message: "Interactive tmux PTY action is not enabled yet."
+            )
+        }
+    }
+
+    private func interactivePTYUnavailableResponse(
+        requestID: String,
+        message: String
+    ) -> LocalRequestResult {
+        LocalRequestResult(
+            response: BridgeResponse(
+                id: requestID,
+                ok: false,
+                result: nil,
+                error: BridgeErrorPayload(
+                    code: "tmux_interactive_unavailable",
+                    message: message
+                )
+            ),
+            agentReplayEnvelopes: [],
+            workspaceReplayEnvelopes: []
+        )
+    }
+
+    private func interactivePTYSubscribeCommit(
+        session: TmuxInteractivePTYConnectionSession,
+        binding: TmuxInteractiveSubscriptionBinding,
+        context: ChannelHandlerContext
+    ) -> () -> CommitOutcome {
+        let workExecutor = InteractivePTYWorkExecutor(execute: requestExecutor)
+        let cleanupConnectionID = connectionID
+        let closeCandidate: @Sendable () -> Void = {
+            workExecutor.submit {
+                do {
+                    try session.close()
+                } catch {
+                    BridgeLogger.server.error(
+                        "interactive PTY candidate cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+        }
+        return { [weak self, weak context] in
+            guard let self, let context else {
+                closeCandidate()
+                return .rejected(
+                    reason: "interactive PTY connection is no longer active"
+                )
+            }
+            guard self.interactivePTYConnectionState.install(
+                binding: binding,
+                owner: session
+            ) else {
+                closeCandidate()
+                return .rejected(
+                    reason: "interactive PTY subscription is no longer current"
+                )
+            }
+            let pump = self.makeInteractivePTYPump(
+                session: session,
+                binding: binding,
+                context: context
+            )
+            self.interactivePTYPumps[binding.subscriptionID] =
+                InteractivePTYPumpEntry(
+                    binding: binding,
+                    session: session,
+                    pump: pump
+                )
+            return .accepted
+        }
+    }
+
+    private func startInteractivePTYPump(
+        binding: TmuxInteractiveSubscriptionBinding
+    ) {
+        guard let session = interactivePTYConnectionState.owner(for: binding),
+              let entry = interactivePTYPumps[binding.subscriptionID],
+              entry.binding == binding,
+              entry.session === session else {
+            return
+        }
+        entry.pump.start()
+    }
+
+    private func makeInteractivePTYPump(
+        session: TmuxInteractivePTYConnectionSession,
+        binding: TmuxInteractiveSubscriptionBinding,
+        context: ChannelHandlerContext
+    ) -> TmuxInteractivePTYEventPump {
+        let workExecutor = InteractivePTYWorkExecutor(execute: requestExecutor)
+        let callbackTarget = InteractivePTYConnectionCallbackTarget(
+            handler: self,
+            context: context
+        )
+        let cleanupConnectionID = connectionID
+        let closeSession: @Sendable () -> Void = {
+            workExecutor.submit {
+                do {
+                    try session.close()
+                } catch {
+                    BridgeLogger.server.error(
+                        "interactive PTY pump cleanup failed connection_id=\(cleanupConnectionID, privacy: .public) error=\(error.localizedDescription, privacy: .public)"
+                    )
+                }
+            }
+        }
+        return TmuxInteractivePTYEventPump(
+            poll: { try session.poll() },
+            execute: { work in
+                workExecutor.submit(work)
+            },
+            scheduleRetry: { work in
+                callbackTarget.scheduleRetry(
+                    work,
+                    closeSession: closeSession
+                )
+            },
+            deliver: { event, completion in
+                callbackTarget.deliver(
+                    event,
+                    binding: binding,
+                    session: session,
+                    completion: completion
+                )
+            },
+            onStopped: { error in
+                callbackTarget.stopped(
+                    error: error,
+                    binding: binding,
+                    session: session,
+                    closeSession: closeSession
+                )
+            }
+        )
+    }
+
+    private func finishInteractivePTYPump(
+        binding: TmuxInteractiveSubscriptionBinding,
+        session: TmuxInteractivePTYConnectionSession,
+        error: Error?,
+        closeSession: @escaping @Sendable () -> Void
+    ) {
+        guard let removedSession = interactivePTYConnectionState.remove(
+            binding: binding
+        ),
+        removedSession === session else {
+            return
+        }
+        if let entry = interactivePTYPumps[binding.subscriptionID],
+           entry.binding == binding,
+           entry.session === session {
+            interactivePTYPumps.removeValue(forKey: binding.subscriptionID)
+        }
+        if error != nil {
+            closeSession()
+        }
+    }
+
     private func unsubscribeFromAgentEvents() {
         for subscriptionID in agentSubscriptions.removeAll() {
             eventHub.unsubscribe(subscriptionID)
@@ -1999,10 +2326,41 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         sendEncodable(terminalStreamEnvelope, messageType: "terminal_stream_delta", to: context)
     }
 
+    private func send(
+        interactivePTYEvent: TmuxInteractivePTYEvent,
+        to context: ChannelHandlerContext,
+        afterWrite: @escaping @Sendable (Result<Void, Error>) -> Void
+    ) {
+        switch interactivePTYEvent {
+        case .start(let start):
+            sendEncodable(
+                TmuxInteractiveWireCodec.envelope(for: start),
+                messageType: TmuxInteractiveProtocolV1.startEventType,
+                to: context,
+                afterWrite: afterWrite
+            )
+        case .output(let output):
+            sendEncodable(
+                TmuxInteractiveWireCodec.envelope(for: output),
+                messageType: TmuxInteractiveProtocolV1.outputEventType,
+                to: context,
+                afterWrite: afterWrite
+            )
+        case .terminal(let state):
+            sendEncodable(
+                TmuxInteractiveWireCodec.envelope(for: state),
+                messageType: TmuxInteractiveProtocolV1.stateEventType,
+                to: context,
+                afterWrite: afterWrite
+            )
+        }
+    }
+
     private func sendEncodable<Value: Encodable>(_ value: Value,
                                                   messageType: String,
                                                   to context: ChannelHandlerContext,
-                                                  afterEnqueued: (() -> Void)? = nil) {
+                                                  afterEnqueued: (() -> Void)? = nil,
+                                                  afterWrite: (@Sendable (Result<Void, Error>) -> Void)? = nil) {
         do {
             let startedAt = CFAbsoluteTimeGetCurrent()
             let payload = try encoder.encode(value)
@@ -2017,7 +2375,8 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                   messageType: messageType,
                   byteCount: payload.count,
                   to: context,
-                  afterEnqueued: afterEnqueued)
+                  afterEnqueued: afterEnqueued,
+                  afterWrite: afterWrite)
         } catch {
             let bridgedError = error as NSError
             recordConnectionEvent(kind: .encodeFailed,
@@ -2025,6 +2384,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                   errorDomain: bridgedError.domain,
                                   errorCode: bridgedError.code,
                                   messageType: messageType)
+            afterWrite?(.failure(error))
             context.close(promise: nil)
         }
     }
@@ -2033,19 +2393,21 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                        messageType: String,
                        byteCount: Int,
                        to context: ChannelHandlerContext,
-                       afterEnqueued: (() -> Void)? = nil) {
+                       afterEnqueued: (() -> Void)? = nil,
+                       afterWrite: (@Sendable (Result<Void, Error>) -> Void)? = nil) {
         let promise = context.eventLoop.makePromise(of: Void.self)
-        promise.futureResult.whenFailure { [weak self] error in
-            guard let self else {
-                return
+        promise.futureResult.whenComplete { [weak self] result in
+            if case .failure(let error) = result,
+               let self {
+                let bridgedError = error as NSError
+                self.recordConnectionEvent(kind: .writeFailed,
+                                           errorType: String(reflecting: type(of: error)),
+                                           errorDomain: bridgedError.domain,
+                                           errorCode: bridgedError.code,
+                                           messageType: messageType,
+                                           byteCount: byteCount)
             }
-            let bridgedError = error as NSError
-            self.recordConnectionEvent(kind: .writeFailed,
-                                       errorType: String(reflecting: type(of: error)),
-                                       errorDomain: bridgedError.domain,
-                                       errorCode: bridgedError.code,
-                                       messageType: messageType,
-                                       byteCount: byteCount)
+            afterWrite?(result)
         }
         context.writeAndFlush(wrapOutboundOut(frame), promise: promise)
         afterEnqueued?()
