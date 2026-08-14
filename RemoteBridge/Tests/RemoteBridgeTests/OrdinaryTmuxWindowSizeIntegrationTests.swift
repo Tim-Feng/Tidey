@@ -62,6 +62,40 @@ final class OrdinaryTmuxWindowSizeIntegrationTests: XCTestCase {
         XCTAssertEqual(try client.detachAndWait(timeout: 2), 0)
         XCTAssertTrue(harness.waitForClientCount(0, timeout: 2))
     }
+
+    func testTTYBackedControlClientExposesUniqueTTYForAdapterMatching() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        let version = try IsolatedTmuxHarness.version(at: tmuxPath)
+        guard version == "tmux 3.6a" else {
+            throw XCTSkip("isolated sizing regression requires tmux 3.6a; found \(version)")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/script") else {
+            throw XCTSkip("macOS script is unavailable")
+        }
+
+        let harness = try IsolatedTmuxHarness(tmuxPath: tmuxPath)
+        defer { harness.shutdown() }
+        try harness.startDetachedSession(name: "tty-proof", columns: 132, rows: 37)
+
+        let client = try harness.attachControlModeSizingClient(
+            sessionName: "tty-proof",
+            columns: 132,
+            rows: 37,
+            allocatingTTY: true
+        )
+
+        XCTAssertTrue(harness.waitForClientCount(1, timeout: 2))
+        let fields = try XCTUnwrap(try harness.clientRecords().first?.split(separator: "|"))
+        XCTAssertEqual(fields.count, 3)
+        XCTAssertTrue(fields[0].hasPrefix("/dev/ttys"))
+        XCTAssertTrue(fields[2].contains("control-mode"))
+        XCTAssertFalse(fields[2].contains("ignore-size"))
+
+        XCTAssertEqual(try client.detachAndWait(timeout: 2), 0)
+        XCTAssertTrue(harness.waitForClientCount(0, timeout: 2))
+    }
 }
 
 private final class IsolatedTmuxControlClient: @unchecked Sendable {
@@ -94,12 +128,13 @@ private final class IsolatedTmuxControlClient: @unchecked Sendable {
     private let output = DataAccumulator()
     private let errorOutput = DataAccumulator()
 
-    init(tmuxPath: String, arguments: [String]) throws {
-        process.executableURL = URL(fileURLWithPath: tmuxPath)
+    init(executablePath: String, arguments: [String]) throws {
+        process.executableURL = URL(fileURLWithPath: executablePath)
         process.arguments = arguments
         var environment = ProcessInfo.processInfo.environment
         environment["LC_CTYPE"] = "UTF-8"
         environment["LANG"] = "en_US.UTF-8"
+        environment["TERM"] = "xterm-256color"
         process.environment = environment
         process.standardInput = inputPipe
         process.standardOutput = outputPipe
@@ -256,16 +291,27 @@ private final class IsolatedTmuxHarness {
     func attachControlModeSizingClient(
         sessionName: String,
         columns: Int,
-        rows: Int
+        rows: Int,
+        allocatingTTY: Bool = false
     ) throws -> IsolatedTmuxControlClient {
+        let tmuxArguments = [
+            "-S", socketPath,
+            "-f", "/dev/null",
+            "-C", "attach-session",
+            "-t", "=\(sessionName)",
+        ]
+        let executablePath: String
+        let arguments: [String]
+        if allocatingTTY {
+            executablePath = "/usr/bin/script"
+            arguments = ["-q", "/dev/null", tmuxPath] + tmuxArguments
+        } else {
+            executablePath = tmuxPath
+            arguments = tmuxArguments
+        }
         let client = try IsolatedTmuxControlClient(
-            tmuxPath: tmuxPath,
-            arguments: [
-                "-S", socketPath,
-                "-f", "/dev/null",
-                "-C", "attach-session",
-                "-t", "=\(sessionName)",
-            ]
+            executablePath: executablePath,
+            arguments: arguments
         )
         lock.lock()
         controlClients.append(client)
@@ -275,11 +321,15 @@ private final class IsolatedTmuxHarness {
     }
 
     func clientCount() throws -> Int {
+        try clientRecords().count
+    }
+
+    func clientRecords() throws -> [Substring] {
         let output = try runServerCommand([
             "list-clients",
-            "-F", "#{client_pid}|#{client_flags}",
+            "-F", "#{client_tty}|#{client_pid}|#{client_flags}",
         ])
-        return output.split(whereSeparator: \.isNewline).count
+        return output.split(whereSeparator: \.isNewline)
     }
 
     func waitForWindowGeometry(
