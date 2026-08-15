@@ -50,8 +50,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let sessionKey: OrdinaryTmuxSessionKey
         let leaseToken: OrdinaryTmuxInteractiveLeaseToken
         let request: TmuxInteractivePTYSessionStartRequest
+        let bootstrapSize: TmuxInteractivePTYSize
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
+        var bootstrapPhase: TmuxInteractiveBootstrapPhase?
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var finalStartupResizeAppliedAtUptimeNanoseconds: UInt64?
         var didRequestClientRefresh = false
@@ -67,12 +69,14 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             sessionKey: OrdinaryTmuxSessionKey,
             leaseToken: OrdinaryTmuxInteractiveLeaseToken,
             request: TmuxInteractivePTYSessionStartRequest,
+            bootstrapSize: TmuxInteractivePTYSize,
             initialSize: TmuxInteractivePTYSize
         ) {
             self.handle = handle
             self.sessionKey = sessionKey
             self.leaseToken = leaseToken
             self.request = request
+            self.bootstrapSize = bootstrapSize
             self.initialSize = initialSize
         }
     }
@@ -166,6 +170,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                     sessionKey: sessionKey,
                     leaseToken: leaseToken,
                     request: request,
+                    bootstrapSize: startupSizingPlan.bootstrapSize,
                     initialSize: initialSize
                 )
                 state = .proving
@@ -210,6 +215,21 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                     throw TmuxInteractivePTYSessionOwnerError.attachProofMismatch
                 }
                 try drainPreProofBytes(resources)
+                guard resources.preProofBytes.count <= maximumAuthoritativeStartBytes else {
+                    throw TmuxInteractivePTYSessionOwnerError
+                        .authoritativeStartBufferOverflow(
+                            limit: maximumAuthoritativeStartBytes
+                        )
+                }
+                if resources.preProofBytes.isEmpty == false {
+                    resources.bootstrapPhase = TmuxInteractiveBootstrapPhase(
+                        viewport: TmuxInteractiveViewport(
+                            columns: Int(resources.bootstrapSize.columns),
+                            rows: Int(resources.bootstrapSize.rows)
+                        ),
+                        bytes: resources.preProofBytes
+                    )
+                }
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
                 try controller.resize(
@@ -274,7 +294,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             throw TmuxInteractivePTYSessionOwnerError
                                 .unexpectedEndBeforeAuthoritativeStart
                         }
+                        let bootstrapByteCount = resources.bootstrapPhase?.bytes.count ?? 0
                         guard bytes.count <= maximumAuthoritativeStartBytes -
+                                bootstrapByteCount -
                                 resources.authoritativeStartBytes.count else {
                             throw TmuxInteractivePTYSessionOwnerError
                                 .authoritativeStartBufferOverflow(
@@ -344,6 +366,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         let start = TmuxInteractiveAuthoritativeStart(
                             binding: subscribe.binding,
                             attachProof: verifiedAttach.attachProof,
+                            bootstrapPhase: resources.bootstrapPhase,
                             viewport: subscribe.viewport,
                             initialBytes: resources.authoritativeStartBytes
                         )

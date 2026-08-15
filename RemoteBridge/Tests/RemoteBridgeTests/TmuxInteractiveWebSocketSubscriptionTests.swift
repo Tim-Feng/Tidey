@@ -205,11 +205,16 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             generation: 9
         )
         let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let bootstrapBytes = Data([0x62, 0x6f, 0x6f, 0x74])
         let startBytes = Data([0x1b, 0x5b, 0x48])
         let outputBytes = Data([0x6f, 0x75, 0x74])
         let store = OrdinaryTmuxInputSubmissionStore()
         let controller = ControllerProbe(
-            readResults: [.wouldBlock, .wouldBlock],
+            readResults: [
+                .bytes(bootstrapBytes),
+                .wouldBlock,
+                .wouldBlock,
+            ],
             readResultsAfterFirstResize: [
                 .bytes(startBytes),
                 .wouldBlock,
@@ -338,6 +343,12 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         XCTAssertEqual(start.paneID, route.activePaneID)
         XCTAssertEqual(start.columns, viewport.columns)
         XCTAssertEqual(start.rows, viewport.rows)
+        XCTAssertEqual(start.bootstrapColumns, viewport.columns)
+        XCTAssertEqual(start.bootstrapRows, viewport.rows - 1)
+        XCTAssertEqual(
+            Data(base64Encoded: try XCTUnwrap(start.bootstrapDataBase64)),
+            bootstrapBytes
+        )
         XCTAssertEqual(Data(base64Encoded: start.dataBase64), startBytes)
 
         let output = try decode(

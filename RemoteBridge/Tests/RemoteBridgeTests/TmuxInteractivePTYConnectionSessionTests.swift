@@ -141,6 +141,13 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
                 TmuxInteractiveAuthoritativeStart(
                     binding: binding,
                     attachProof: verifiedAttach.attachProof,
+                    bootstrapPhase: TmuxInteractiveBootstrapPhase(
+                        viewport: TmuxInteractiveViewport(
+                            columns: 80,
+                            rows: 23
+                        ),
+                        bytes: hiddenProofBytes
+                    ),
                     viewport: request.subscribe.viewport,
                     initialBytes: startBytes
                 )

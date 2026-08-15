@@ -339,7 +339,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerAttachesOneRowShortThenAppliesExactViewportOnlyAfterProof() throws {
+    func testOwnerCarriesHiddenBootstrapPhaseThenAppliesExactViewportOnlyAfterProof() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
@@ -392,21 +392,31 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertNil(try owner.pollAuthoritativeStart())
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertEqual(start.viewport, request.subscribe.viewport)
+        XCTAssertEqual(
+            start.bootstrapPhase,
+            TmuxInteractiveBootstrapPhase(
+                viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
+                bytes: bootstrapBytes
+            )
+        )
         XCTAssertEqual(start.initialBytes, finalViewportBytes)
-        XCTAssertFalse(start.initialBytes.contains(bootstrapBytes))
         XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
         XCTAssertEqual(owner.lifecycleState, .live)
 
         try owner.close()
     }
 
-    func testOwnerDiscardsBootstrapBytesThatArriveDuringAttachProofBeforeFinalResize() throws {
+    func testOwnerKeepsProofDurationBytesInHiddenBootstrapPhaseBeforeFinalResize() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
+        let bootstrapBytesBeforeProof = Data("initial-bootstrap-grid".utf8)
         let bootstrapBytesDuringProof = Data("late-bootstrap-grid".utf8)
         let finalViewportBytes = Data("exact-final-grid".utf8)
-        controller.readResults = [.wouldBlock]
+        controller.readResults = [
+            .bytes(bootstrapBytesBeforeProof),
+            .wouldBlock,
+        ]
         controller.onResize = {
             controller.readResults.append(.bytes(finalViewportBytes))
             controller.readResults.append(.wouldBlock)
@@ -443,8 +453,14 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         }
         let start = try XCTUnwrap(observedStart)
 
+        XCTAssertEqual(
+            start.bootstrapPhase,
+            TmuxInteractiveBootstrapPhase(
+                viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
+                bytes: bootstrapBytesBeforeProof + bootstrapBytesDuringProof
+            )
+        )
         XCTAssertEqual(start.initialBytes, finalViewportBytes)
-        XCTAssertFalse(start.initialBytes.contains(bootstrapBytesDuringProof))
         XCTAssertEqual(
             controller.resizedSizes,
             [TmuxInteractivePTYSize(columns: 80, rows: 24)]
@@ -542,6 +558,10 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             TmuxInteractiveAuthoritativeStart(
                 binding: request.subscribe.binding,
                 attachProof: verifiedAttach.attachProof,
+                bootstrapPhase: TmuxInteractiveBootstrapPhase(
+                    viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
+                    bytes: preProofBytes
+                ),
                 viewport: request.subscribe.viewport,
                 initialBytes: redrawBytes
             )
@@ -791,13 +811,16 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerClosesWhenAuthoritativeStartFrameOverflows() throws {
+    func testOwnerClosesWhenCombinedAuthoritativeStartPhasesOverflow() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let controller = ControllerProbe()
-        controller.readResults = [.wouldBlock]
+        controller.readResults = [
+            .bytes(Data([0x01])),
+            .wouldBlock,
+        ]
         controller.onResize = {
-            controller.readResults.append(.bytes(Data([0x01, 0x02, 0x03])))
+            controller.readResults.append(.bytes(Data([0x02, 0x03])))
         }
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
