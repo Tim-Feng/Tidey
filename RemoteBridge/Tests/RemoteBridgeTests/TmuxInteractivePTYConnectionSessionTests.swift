@@ -9,6 +9,7 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
         var readResultsAfterResize = [TmuxInteractivePTYReadResult]()
         private(set) var closeCount = 0
         private(set) var reapCount = 0
+        private(set) var writtenBytes = [Data]()
 
         func spawn(
             _ command: TmuxInteractivePTYAttachCommand
@@ -47,7 +48,8 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
             _ bytes: Data,
             masterFileDescriptor: Int32
         ) throws -> TmuxInteractivePTYWriteResult {
-            .written(bytes.count)
+            writtenBytes.append(bytes)
+            return .written(bytes.count)
         }
     }
 
@@ -176,5 +178,101 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
         XCTAssertEqual(controller.closeCount, 1)
         XCTAssertEqual(controller.reapCount, 1)
         XCTAssertEqual(owner.lifecycleState, .closed)
+    }
+
+    func testSessionRoutesStreamingAttachedReadyAndLiveOutputInOrder() throws {
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:path:$1:@2",
+            carrierPanelID: "carrier-1",
+            socket: .path("/private/tmp/tmux-501/default"),
+            sessionID: "$1",
+            sessionName: "session-1",
+            windowID: "@2",
+            windowIndex: 1,
+            activePaneID: "%3",
+            cwd: nil,
+            currentCommand: "zsh"
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        let request = TmuxInteractivePTYSessionStartRequest(
+            subscribe: TmuxInteractiveSubscribe(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                binding: binding,
+                viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
+                startupMode: .streamingReplies
+            ),
+            route: route,
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux"
+        )
+        let provedPrefix = Data([0x1b, 0x5b, 0x3e, 0x63])
+        let liveOutput = Data([0x00, 0xff])
+        let controller = ControllerProbe()
+        controller.readResults = [.bytes(provedPrefix), .wouldBlock]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover
+        )
+        try owner.begin(request)
+        let session = TmuxInteractivePTYConnectionSession(
+            binding: binding,
+            owner: owner
+        )
+
+        XCTAssertEqual(try session.poll(), .wouldBlock)
+        XCTAssertEqual(
+            try session.poll(),
+            .attached(
+                TmuxInteractiveAttached(
+                    binding: binding,
+                    attachProof: verifiedAttach.attachProof,
+                    viewport: request.subscribe.viewport,
+                    initialBytes: provedPrefix,
+                    sequence: 1
+                )
+            )
+        )
+        let replyBytes = Data([0x1b, 0x5b, 0x3e, 0x36, 0x35, 0x3b, 0x63])
+        XCTAssertEqual(
+            try session.sendTerminalReply(
+                TmuxInteractiveTerminalReply(binding: binding, bytes: replyBytes)
+            ),
+            .written(replyBytes.count)
+        )
+        XCTAssertEqual(controller.writtenBytes, [replyBytes])
+        XCTAssertEqual(
+            try session.poll(),
+            .ready(TmuxInteractiveReady(binding: binding, sequence: 2))
+        )
+        controller.readResults.append(.bytes(liveOutput))
+        XCTAssertEqual(
+            try session.poll(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: binding,
+                    sequence: 3,
+                    bytes: liveOutput
+                )
+            )
+        )
+        try session.close()
     }
 }

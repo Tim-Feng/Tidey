@@ -185,4 +185,78 @@ final class TmuxInteractivePTYEventPumpTests: XCTestCase {
         XCTAssertEqual(pollStop.callCount, 1)
         XCTAssertEqual(pollStop.errorCount, 1)
     }
+
+    func testPumpSerializesStreamingStartupThroughDeliveryCompletion() {
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-1",
+            generation: 9
+        )
+        let attached = TmuxInteractiveAttached(
+            binding: binding,
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: "workspace-1",
+                panelID: "panel-1",
+                sessionID: "$1",
+                windowID: "@2",
+                paneID: "%3"
+            ),
+            viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
+            initialBytes: Data([0x1b, 0x5b, 0x3e, 0x63]),
+            sequence: 1
+        )
+        let output = TmuxInteractiveOutputChunk(
+            binding: binding,
+            sequence: 2,
+            bytes: Data([0x1b, 0x5b, 0x32, 0x4a])
+        )
+        let ready = TmuxInteractiveReady(binding: binding, sequence: 3)
+        let terminal = TmuxInteractiveStateChange(
+            binding: binding,
+            state: .detached,
+            message: nil
+        )
+        let poll = PollProbe([
+            .success(.attached(attached)),
+            .success(.output(output)),
+            .success(.ready(ready)),
+            .success(.terminal(terminal)),
+        ])
+        let delivery = DeliveryProbe()
+        let stop = StopProbe()
+        let pump = TmuxInteractivePTYEventPump(
+            poll: poll.poll,
+            execute: { work in work() },
+            scheduleRetry: { _ in XCTFail("Streaming events should not retry") },
+            deliver: delivery.deliver,
+            onStopped: stop.stopped
+        )
+
+        pump.start()
+        XCTAssertEqual(poll.callCount, 1)
+        XCTAssertEqual(delivery.events, [.attached(attached)])
+
+        delivery.complete(0, with: .success(()))
+        XCTAssertEqual(poll.callCount, 2)
+        XCTAssertEqual(delivery.events, [.attached(attached), .output(output)])
+
+        delivery.complete(1, with: .success(()))
+        XCTAssertEqual(poll.callCount, 3)
+        XCTAssertEqual(
+            delivery.events,
+            [.attached(attached), .output(output), .ready(ready)]
+        )
+
+        delivery.complete(2, with: .success(()))
+        XCTAssertEqual(poll.callCount, 4)
+        XCTAssertEqual(
+            delivery.events,
+            [.attached(attached), .output(output), .ready(ready), .terminal(terminal)]
+        )
+        XCTAssertEqual(stop.callCount, 0)
+
+        delivery.complete(3, with: .success(()))
+        XCTAssertEqual(stop.callCount, 1)
+        XCTAssertEqual(stop.errorCount, 0)
+        XCTAssertEqual(poll.callCount, 4)
+    }
 }

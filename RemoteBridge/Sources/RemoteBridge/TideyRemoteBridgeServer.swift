@@ -780,8 +780,15 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             session: TmuxInteractivePTYConnectionSession,
             completion: @escaping TmuxInteractivePTYEventPump.DeliveryCompletion
         ) {
+            let enablesMutations: Bool
+            switch event {
+            case .start, .ready:
+                enablesMutations = true
+            case .attached, .output, .terminal:
+                enablesMutations = false
+            }
             if case .success = result,
-               case .start = event {
+               enablesMutations {
                 guard let handler,
                       handler.activateInteractivePTYMutationPumps(
                         binding: binding,
@@ -2732,10 +2739,24 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 to: context,
                 afterWrite: afterWrite
             )
+        case .attached(let attached):
+            sendEncodable(
+                TmuxInteractiveWireCodec.envelope(for: attached),
+                messageType: TmuxInteractiveProtocolV1.attachedEventType,
+                to: context,
+                afterWrite: afterWrite
+            )
         case .output(let output):
             sendEncodable(
                 TmuxInteractiveWireCodec.envelope(for: output),
                 messageType: TmuxInteractiveProtocolV1.outputEventType,
+                to: context,
+                afterWrite: afterWrite
+            )
+        case .ready(let ready):
+            sendEncodable(
+                TmuxInteractiveWireCodec.envelope(for: ready),
+                messageType: TmuxInteractiveProtocolV1.readyEventType,
                 to: context,
                 afterWrite: afterWrite
             )

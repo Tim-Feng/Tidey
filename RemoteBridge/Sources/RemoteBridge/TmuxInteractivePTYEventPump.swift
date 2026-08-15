@@ -2,7 +2,9 @@ import Foundation
 
 enum TmuxInteractivePTYEvent: Equatable, Sendable {
     case start(TmuxInteractiveAuthoritativeStart)
+    case attached(TmuxInteractiveAttached)
     case output(TmuxInteractiveOutputChunk)
+    case ready(TmuxInteractiveReady)
     case terminal(TmuxInteractiveStateChange)
 }
 
@@ -113,8 +115,12 @@ final class TmuxInteractivePTYEventPump: @unchecked Sendable {
             }
         case .start(let start):
             beginDelivery(.start(start), isTerminal: false)
+        case .attached(let attached):
+            beginDelivery(.attached(attached), isTerminal: false)
         case .output(let output):
             beginDelivery(.output(output), isTerminal: false)
+        case .ready(let ready):
+            beginDelivery(.ready(ready), isTerminal: false)
         case .terminal(let terminal):
             beginDelivery(.terminal(terminal), isTerminal: true)
         case .finished:

@@ -3,7 +3,9 @@ import Foundation
 enum TmuxInteractivePTYConnectionSessionPollResult: Equatable, Sendable {
     case wouldBlock
     case start(TmuxInteractiveAuthoritativeStart)
+    case attached(TmuxInteractiveAttached)
     case output(TmuxInteractiveOutputChunk)
+    case ready(TmuxInteractiveReady)
     case terminal(TmuxInteractiveStateChange)
     case finished
 }
@@ -44,7 +46,16 @@ final class TmuxInteractivePTYConnectionSession: @unchecked Sendable {
                 }
                 return .start(start)
             case .settling:
-                return .wouldBlock
+                switch try owner.pollStreamingStartup() {
+                case .attached(let attached):
+                    return .attached(attached)
+                case .output(let output):
+                    return .output(output)
+                case .ready(let ready):
+                    return .ready(ready)
+                case .wouldBlock:
+                    return .wouldBlock
+                }
             case .live:
                 switch try owner.pollLiveOutput() {
                 case .output(let output):
@@ -82,6 +93,12 @@ final class TmuxInteractivePTYConnectionSession: @unchecked Sendable {
 
     func applyResize(_ resize: TmuxInteractiveResize) throws -> Bool {
         try owner.applyResize(resize)
+    }
+
+    func sendTerminalReply(
+        _ reply: TmuxInteractiveTerminalReply
+    ) throws -> TmuxInteractivePTYWriteResult {
+        try owner.sendTerminalReply(reply)
     }
 
     func close() throws {
