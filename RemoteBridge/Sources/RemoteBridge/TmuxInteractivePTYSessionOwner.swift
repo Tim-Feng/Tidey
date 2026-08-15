@@ -39,6 +39,9 @@ enum TmuxInteractivePTYSessionLivePollResult: Equatable, Sendable {
 }
 
 final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
+    static let productionAuthoritativeStartQuiescenceNanoseconds: UInt64 =
+        150_000_000
+
     private final class ActiveResources {
         let handle: TmuxInteractivePTYHandle
         let sessionKey: OrdinaryTmuxSessionKey
@@ -265,10 +268,22 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                                 )
                         }
                         resources.authoritativeStartBytes.append(bytes)
+                        resources.lastAuthoritativeOutputUptimeNanoseconds =
+                            uptimeNanoseconds()
                         receivedBytesThisPoll = true
                     case .wouldBlock:
                         guard receivedBytesThisPoll == false,
                               resources.authoritativeStartBytes.isEmpty == false else {
+                            return nil
+                        }
+                        guard let lastOutputUptimeNanoseconds =
+                                resources.lastAuthoritativeOutputUptimeNanoseconds else {
+                            return nil
+                        }
+                        let currentUptimeNanoseconds = uptimeNanoseconds()
+                        guard currentUptimeNanoseconds >= lastOutputUptimeNanoseconds,
+                              currentUptimeNanoseconds - lastOutputUptimeNanoseconds >=
+                                authoritativeStartQuiescenceNanoseconds else {
                             return nil
                         }
                         let subscribe = resources.request.subscribe

@@ -77,6 +77,23 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         }
     }
 
+    private final class UptimeProbe: @unchecked Sendable {
+        private let lock = NSLock()
+        private var value: UInt64 = 1_000
+
+        func now() -> UInt64 {
+            lock.lock()
+            defer { lock.unlock() }
+            return value
+        }
+
+        func advance(by nanoseconds: UInt64) {
+            lock.lock()
+            value += nanoseconds
+            lock.unlock()
+        }
+    }
+
     func testOwnerAcquiresLeaseBeforeSpawnAndReleasesOnlyAfterCloseAndReap() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
@@ -402,6 +419,63 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             )
         }
         XCTAssertEqual(controller.writtenBytes, [input.bytes])
+        try owner.close()
+    }
+
+    func testOwnerWaitsForContinuousAuthoritativeRedrawQuiescenceBeforePublishingStart() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        let tmuxCachedRedraw = Data([0x1b, 0x5b, 0x32, 0x4a])
+        let paneTUIRedraw = Data([0x1b, 0x5b, 0x48, 0x66])
+        controller.readResults = [
+            .wouldBlock,
+            .bytes(tmuxCachedRedraw),
+            .wouldBlock,
+            .bytes(paneTUIRedraw),
+            .wouldBlock,
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let uptime = UptimeProbe()
+        let quiescenceNanoseconds =
+            TmuxInteractivePTYSessionOwner
+                .productionAuthoritativeStartQuiescenceNanoseconds
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover,
+            authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
+            uptimeNanoseconds: { uptime.now() }
+        )
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        uptime.advance(by: 40_000_000)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        uptime.advance(by: quiescenceNanoseconds - 1)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+
+        uptime.advance(by: 1)
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(start.initialBytes, tmuxCachedRedraw + paneTUIRedraw)
+        XCTAssertEqual(owner.lifecycleState, .live)
         try owner.close()
     }
 

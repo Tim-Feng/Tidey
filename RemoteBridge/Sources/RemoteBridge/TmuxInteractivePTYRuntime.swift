@@ -71,7 +71,10 @@ struct TmuxInteractivePTYRuntime: Sendable {
                 let owner = TmuxInteractivePTYSessionOwner(
                     admissionStore: projectionContext.inputSubmissionStore,
                     controller: controller,
-                    attachProver: attachProver
+                    attachProver: attachProver,
+                    authoritativeStartQuiescenceNanoseconds:
+                        TmuxInteractivePTYSessionOwner
+                            .productionAuthoritativeStartQuiescenceNanoseconds
                 )
                 try owner.begin(request)
                 return TmuxInteractivePTYConnectionSession(
