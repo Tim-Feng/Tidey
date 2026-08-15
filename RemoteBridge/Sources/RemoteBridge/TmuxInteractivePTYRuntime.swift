@@ -60,6 +60,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
         attachProver: TmuxInteractiveAttachProving,
         clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
             DisabledTmuxInteractiveClientRefreshRequester(),
+        uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        },
         migrateWindow: @escaping
             TmuxInteractivePTYSessionCandidateBuilder.MigrateWindow
     ) -> TmuxInteractivePTYRuntime {
@@ -87,7 +90,8 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     requiresPostRefreshObservation: true,
                     postRefreshQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
-                            .productionPostRefreshQuiescenceNanoseconds
+                            .productionPostRefreshQuiescenceNanoseconds,
+                    uptimeNanoseconds: uptimeNanoseconds
                 )
                 try owner.begin(request)
                 return TmuxInteractivePTYConnectionSession(
