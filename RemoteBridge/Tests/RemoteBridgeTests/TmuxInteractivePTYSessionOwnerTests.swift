@@ -153,7 +153,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                     socket: route.socket,
                     sessionID: route.sessionID,
                     windowID: route.windowID,
-                    initialSize: TmuxInteractivePTYSize(columns: 80, rows: 24)
+                    initialSize: TmuxInteractivePTYSize(columns: 80, rows: 23)
                 ),
             ]
         )
@@ -335,6 +335,65 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
+    func testOwnerAttachesOneRowShortThenAppliesExactViewportOnlyAfterProof() throws {
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        let bootstrapBytes = Data("bootstrap-grid".utf8)
+        let finalViewportBytes = Data("exact-final-grid".utf8)
+        controller.readResults = [
+            .bytes(bootstrapBytes),
+            .wouldBlock,
+            .bytes(finalViewportBytes),
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let clientRefreshRequester = ClientRefreshRequesterProbe()
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover,
+            clientRefreshRequester: clientRefreshRequester
+        )
+
+        try owner.begin(request)
+
+        XCTAssertEqual(
+            controller.spawnCommands.map(\.initialSize),
+            [TmuxInteractivePTYSize(columns: 80, rows: 23)]
+        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(start.viewport, request.subscribe.viewport)
+        XCTAssertEqual(start.initialBytes, finalViewportBytes)
+        XCTAssertFalse(start.initialBytes.contains(bootstrapBytes))
+        XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
+        XCTAssertEqual(owner.lifecycleState, .live)
+
+        try owner.close()
+    }
+
     func testOwnerClosesAndReleasesLeaseWhenPreProofBufferOverflows() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
@@ -406,7 +465,10 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
 
         XCTAssertNil(try owner.pollAuthoritativeStart())
-        XCTAssertTrue(controller.resizedSizes.isEmpty)
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
         XCTAssertThrowsError(try owner.sendInput(input)) { error in
             XCTAssertEqual(
                 error as? TmuxInteractivePTYSessionOwnerError,
@@ -421,7 +483,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 binding: request.subscribe.binding,
                 attachProof: verifiedAttach.attachProof,
                 viewport: request.subscribe.viewport,
-                initialBytes: preProofBytes + redrawBytes
+                initialBytes: redrawBytes
             )
         )
         XCTAssertEqual(owner.lifecycleState, .live)
@@ -445,7 +507,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerPublishesProvedSameEpochAttachPrefixWithoutWaitingForSyntheticRedraw() throws {
+    func testOwnerNeverPublishesBootstrapPrefixWithoutFinalViewportOutput() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -472,6 +534,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
+        let clientRefreshRequester = ClientRefreshRequesterProbe()
         let uptime = UptimeProbe()
         let quiescenceNanoseconds =
             TmuxInteractivePTYSessionOwner
@@ -480,6 +543,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             admissionStore: store,
             controller: controller,
             attachProver: prover,
+            clientRefreshRequester: clientRefreshRequester,
             authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
             uptimeNanoseconds: { uptime.now() }
         )
@@ -489,14 +553,25 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertNil(try owner.pollAuthoritativeStart())
         uptime.advance(by: quiescenceNanoseconds)
 
-        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
-        XCTAssertEqual(start.initialBytes, attachPrefix)
-        XCTAssertEqual(owner.lifecycleState, .live)
-        XCTAssertTrue(controller.resizedSizes.isEmpty)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(
+            clientRefreshRequester.requests,
+            [
+                TmuxInteractiveClientRefreshRequest(
+                    socket: route.socket,
+                    clientTTY: verifiedAttach.clientTTY
+                ),
+            ]
+        )
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
         try owner.close()
     }
 
-    func testOwnerPublishesProvedAttachAfterTmuxClientRefreshWhenAttachProducedNoBytes() throws {
+    func testOwnerPublishesFinalResizeOutputWithoutRedundantClientRefresh() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -541,20 +616,15 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
 
         XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
         XCTAssertEqual(
-            clientRefreshRequester.requests,
-            [
-                TmuxInteractiveClientRefreshRequest(
-                    socket: route.socket,
-                    clientTTY: verifiedAttach.clientTTY
-                ),
-            ]
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
         )
-        XCTAssertTrue(controller.resizedSizes.isEmpty)
         uptime.advance(by: quiescenceNanoseconds)
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertEqual(start.initialBytes, authoritativeScreen)
-        XCTAssertEqual(clientRefreshRequester.requests.count, 1)
+        XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
         XCTAssertEqual(owner.lifecycleState, .live)
         try owner.close()
     }
@@ -698,7 +768,10 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             )
         }
         XCTAssertEqual(owner.lifecycleState, .closed)
-        XCTAssertTrue(controller.resizedSizes.isEmpty)
+        XCTAssertEqual(
+            controller.resizedSizes,
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
+        )
         XCTAssertEqual(controller.closedFileDescriptors, [17])
         XCTAssertEqual(controller.reapCalls.count, 1)
     }
@@ -873,6 +946,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(
             controller.resizedSizes,
             [
+                TmuxInteractivePTYSize(columns: 80, rows: 24),
                 TmuxInteractivePTYSize(columns: 100, rows: 30),
             ]
         )
@@ -884,7 +958,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 .invalidState(.closed)
             )
         }
-        XCTAssertEqual(controller.resizedSizes.count, 1)
+        XCTAssertEqual(controller.resizedSizes.count, 2)
     }
 
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {

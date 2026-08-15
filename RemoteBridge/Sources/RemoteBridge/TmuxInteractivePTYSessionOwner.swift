@@ -53,7 +53,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
-        var didCaptureProvedAttachPrefix = false
+        var finalStartupResizeAppliedAtUptimeNanoseconds: UInt64?
         var didRequestClientRefresh = false
         var clientRefreshRequestedAtUptimeNanoseconds: UInt64?
         var authoritativeStartBytes = Data()
@@ -127,7 +127,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             guard state == .idle else {
                 throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
             }
-            guard let initialSize = Self.validatedInitialSize(request) else {
+            guard let initialSize = Self.validatedInitialSize(request),
+                  let startupSizingPlan = TmuxInteractivePTYStartupSizingPlan(
+                    targetSize: initialSize
+                  ) else {
                 throw TmuxInteractivePTYSessionOwnerError.invalidRequest
             }
 
@@ -155,7 +158,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         socket: request.route.socket,
                         sessionID: request.route.sessionID,
                         windowID: request.route.windowID,
-                        initialSize: initialSize
+                        initialSize: startupSizingPlan.bootstrapSize
                     )
                 )
                 activeResources = ActiveResources(
@@ -206,23 +209,15 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                       verified.attachProof.windowID == route.windowID else {
                     throw TmuxInteractivePTYSessionOwnerError.attachProofMismatch
                 }
-                guard resources.preProofBytes.count <=
-                        maximumAuthoritativeStartBytes -
-                            resources.authoritativeStartBytes.count else {
-                    throw TmuxInteractivePTYSessionOwnerError
-                        .authoritativeStartBufferOverflow(
-                            limit: maximumAuthoritativeStartBytes
-                        )
-                }
-                resources.authoritativeStartBytes.append(resources.preProofBytes)
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
                 let provedAtUptimeNanoseconds = uptimeNanoseconds()
-                if resources.authoritativeStartBytes.isEmpty == false {
-                    resources.didCaptureProvedAttachPrefix = true
-                    resources.lastAuthoritativeOutputUptimeNanoseconds =
-                        provedAtUptimeNanoseconds
-                }
+                try controller.resize(
+                    masterFileDescriptor: resources.handle.masterFileDescriptor,
+                    to: resources.initialSize
+                )
+                resources.finalStartupResizeAppliedAtUptimeNanoseconds =
+                    provedAtUptimeNanoseconds
                 state = .redrawing
                 return verified
             } catch {
@@ -268,20 +263,6 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
             }
             do {
-                if resources.didCaptureProvedAttachPrefix == false,
-                   resources.didRequestClientRefresh == false {
-                    let requestedAtUptimeNanoseconds = uptimeNanoseconds()
-                    try clientRefreshRequester.requestRefresh(
-                        TmuxInteractiveClientRefreshRequest(
-                            socket: resources.request.route.socket,
-                            clientTTY: verifiedAttach.clientTTY
-                        )
-                    )
-                    resources.didRequestClientRefresh = true
-                    resources.clientRefreshRequestedAtUptimeNanoseconds =
-                        requestedAtUptimeNanoseconds
-                }
-
                 var receivedBytesThisPoll = false
                 while true {
                     switch try controller.read(
@@ -309,6 +290,31 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             return nil
                         }
                         if resources.authoritativeStartBytes.isEmpty {
+                            if resources.didRequestClientRefresh == false {
+                                guard let resizeAppliedAtUptimeNanoseconds =
+                                        resources
+                                            .finalStartupResizeAppliedAtUptimeNanoseconds else {
+                                    return nil
+                                }
+                                let currentUptimeNanoseconds = uptimeNanoseconds()
+                                guard currentUptimeNanoseconds >=
+                                        resizeAppliedAtUptimeNanoseconds,
+                                      currentUptimeNanoseconds -
+                                        resizeAppliedAtUptimeNanoseconds >=
+                                        authoritativeStartQuiescenceNanoseconds else {
+                                    return nil
+                                }
+                                try clientRefreshRequester.requestRefresh(
+                                    TmuxInteractiveClientRefreshRequest(
+                                        socket: resources.request.route.socket,
+                                        clientTTY: verifiedAttach.clientTTY
+                                    )
+                                )
+                                resources.didRequestClientRefresh = true
+                                resources.clientRefreshRequestedAtUptimeNanoseconds =
+                                    currentUptimeNanoseconds
+                                return nil
+                            }
                             guard let requestedAtUptimeNanoseconds =
                                     resources.clientRefreshRequestedAtUptimeNanoseconds else {
                                 return nil
