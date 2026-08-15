@@ -12,6 +12,7 @@ enum TmuxInteractivePTYSessionLifecycleState: Equatable, Sendable {
     case spawning
     case proving
     case redrawing
+    case settling
     case live
     case closing
     case closed

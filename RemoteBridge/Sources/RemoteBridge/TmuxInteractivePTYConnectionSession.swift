@@ -43,6 +43,8 @@ final class TmuxInteractivePTYConnectionSession: @unchecked Sendable {
                     return .wouldBlock
                 }
                 return .start(start)
+            case .settling:
+                return .wouldBlock
             case .live:
                 switch try owner.pollLiveOutput() {
                 case .output(let output):
