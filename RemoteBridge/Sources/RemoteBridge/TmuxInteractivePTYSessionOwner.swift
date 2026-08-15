@@ -88,6 +88,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let maximumAuthoritativeStartBytes: Int
     private let authoritativeStartQuiescenceNanoseconds: UInt64
     private let clientRefreshTimeoutNanoseconds: UInt64
+    private let requiresVerificationClientRefresh: Bool
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
@@ -102,6 +103,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
         clientRefreshTimeoutNanoseconds: UInt64 = .max,
+        requiresVerificationClientRefresh: Bool = false,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
@@ -115,6 +117,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.authoritativeStartQuiescenceNanoseconds =
             authoritativeStartQuiescenceNanoseconds
         self.clientRefreshTimeoutNanoseconds = clientRefreshTimeoutNanoseconds
+        self.requiresVerificationClientRefresh =
+            requiresVerificationClientRefresh
         self.uptimeNanoseconds = uptimeNanoseconds
     }
 
