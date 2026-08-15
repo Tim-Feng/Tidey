@@ -157,6 +157,10 @@ final class TmuxInteractiveWireCodecTests: XCTestCase {
                 windowID: "@11",
                 paneID: "%19"
             ),
+            bootstrapPhase: TmuxInteractiveBootstrapPhase(
+                viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
+                bytes: Data("bootstrap-state".utf8)
+            ),
             viewport: viewport,
             initialBytes: opaqueBytes
         )
@@ -210,6 +214,12 @@ final class TmuxInteractiveWireCodecTests: XCTestCase {
         XCTAssertEqual(startObject["pane_id"] as? String, start.attachProof.paneID)
         XCTAssertEqual(startObject["cols"] as? Int, viewport.columns)
         XCTAssertEqual(startObject["rows"] as? Int, viewport.rows)
+        XCTAssertEqual(startObject["bootstrap_cols"] as? Int, viewport.columns)
+        XCTAssertEqual(startObject["bootstrap_rows"] as? Int, 23)
+        XCTAssertEqual(
+            startObject["bootstrap_data_base64"] as? String,
+            Data("bootstrap-state".utf8).base64EncodedString()
+        )
         XCTAssertEqual(startObject["data_base64"] as? String, opaqueBytes.base64EncodedString())
         XCTAssertEqual(outputEnvelope.dataBase64, opaqueBytes.base64EncodedString())
         XCTAssertEqual(outputEnvelope.sequence, 3)

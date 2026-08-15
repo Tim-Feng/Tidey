@@ -50,11 +50,31 @@ struct TmuxInteractiveAttachProof: Equatable, Sendable {
     let paneID: String
 }
 
+struct TmuxInteractiveBootstrapPhase: Equatable, Sendable {
+    let viewport: TmuxInteractiveViewport
+    let bytes: Data
+}
+
 struct TmuxInteractiveAuthoritativeStart: Equatable, Sendable {
     let binding: TmuxInteractiveSubscriptionBinding
     let attachProof: TmuxInteractiveAttachProof
+    let bootstrapPhase: TmuxInteractiveBootstrapPhase?
     let viewport: TmuxInteractiveViewport
     let initialBytes: Data
+
+    init(
+        binding: TmuxInteractiveSubscriptionBinding,
+        attachProof: TmuxInteractiveAttachProof,
+        bootstrapPhase: TmuxInteractiveBootstrapPhase? = nil,
+        viewport: TmuxInteractiveViewport,
+        initialBytes: Data
+    ) {
+        self.binding = binding
+        self.attachProof = attachProof
+        self.bootstrapPhase = bootstrapPhase
+        self.viewport = viewport
+        self.initialBytes = initialBytes
+    }
 }
 
 struct TmuxInteractiveOutputChunk: Equatable, Sendable {

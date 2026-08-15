@@ -20,6 +20,9 @@ struct TmuxInteractiveAuthoritativeStartEnvelope: Codable, Equatable, Sendable {
     let sessionID: String
     let windowID: String
     let paneID: String
+    let bootstrapColumns: Int?
+    let bootstrapRows: Int?
+    let bootstrapDataBase64: String?
     let columns: Int
     let rows: Int
     let dataBase64: String
@@ -33,6 +36,9 @@ struct TmuxInteractiveAuthoritativeStartEnvelope: Codable, Equatable, Sendable {
         case sessionID = "session_id"
         case windowID = "window_id"
         case paneID = "pane_id"
+        case bootstrapColumns = "bootstrap_cols"
+        case bootstrapRows = "bootstrap_rows"
+        case bootstrapDataBase64 = "bootstrap_data_base64"
         case columns = "cols"
         case rows
         case dataBase64 = "data_base64"
@@ -129,6 +135,9 @@ enum TmuxInteractiveWireCodec {
             sessionID: proof.sessionID,
             windowID: proof.windowID,
             paneID: proof.paneID,
+            bootstrapColumns: start.bootstrapPhase?.viewport.columns,
+            bootstrapRows: start.bootstrapPhase?.viewport.rows,
+            bootstrapDataBase64: start.bootstrapPhase?.bytes.base64EncodedString(),
             columns: start.viewport.columns,
             rows: start.viewport.rows,
             dataBase64: start.initialBytes.base64EncodedString()
