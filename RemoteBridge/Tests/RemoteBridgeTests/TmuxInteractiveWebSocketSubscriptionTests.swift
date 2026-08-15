@@ -13,7 +13,6 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
     {
         private let lock = NSLock()
         private var readResults: [TmuxInteractivePTYReadResult]
-        private var readResultsAfterFirstResize: [TmuxInteractivePTYReadResult]
         private var readErrorAfterResults: Error?
         private var writeResults: [TmuxInteractivePTYWriteResult]
         private(set) var closeCount = 0
@@ -23,12 +22,10 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
 
         init(
             readResults: [TmuxInteractivePTYReadResult],
-            readResultsAfterFirstResize: [TmuxInteractivePTYReadResult] = [],
             readErrorAfterResults: Error? = nil,
             writeResults: [TmuxInteractivePTYWriteResult] = []
         ) {
             self.readResults = readResults
-            self.readResultsAfterFirstResize = readResultsAfterFirstResize
             self.readErrorAfterResults = readErrorAfterResults
             self.writeResults = writeResults
         }
@@ -45,10 +42,6 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         ) throws {
             lock.lock()
             resizeSizes.append(size)
-            if readResultsAfterFirstResize.isEmpty == false {
-                readResults.append(contentsOf: readResultsAfterFirstResize)
-                readResultsAfterFirstResize.removeAll()
-            }
             lock.unlock()
         }
 
