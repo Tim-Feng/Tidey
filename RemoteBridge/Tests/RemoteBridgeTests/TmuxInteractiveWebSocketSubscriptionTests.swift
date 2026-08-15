@@ -13,6 +13,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
     {
         private let lock = NSLock()
         private var readResults: [TmuxInteractivePTYReadResult]
+        private var readResultsAfterFirstResize: [TmuxInteractivePTYReadResult]
         private var readErrorAfterResults: Error?
         private var writeResults: [TmuxInteractivePTYWriteResult]
         private(set) var closeCount = 0
@@ -22,10 +23,12 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
 
         init(
             readResults: [TmuxInteractivePTYReadResult],
+            readResultsAfterFirstResize: [TmuxInteractivePTYReadResult] = [],
             readErrorAfterResults: Error? = nil,
             writeResults: [TmuxInteractivePTYWriteResult] = []
         ) {
             self.readResults = readResults
+            self.readResultsAfterFirstResize = readResultsAfterFirstResize
             self.readErrorAfterResults = readErrorAfterResults
             self.writeResults = writeResults
         }
@@ -42,6 +45,10 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         ) throws {
             lock.lock()
             resizeSizes.append(size)
+            if readResultsAfterFirstResize.isEmpty == false {
+                readResults.append(contentsOf: readResultsAfterFirstResize)
+                readResultsAfterFirstResize.removeAll()
+            }
             lock.unlock()
         }
 
@@ -202,8 +209,8 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         let outputBytes = Data([0x6f, 0x75, 0x74])
         let store = OrdinaryTmuxInputSubmissionStore()
         let controller = ControllerProbe(
-            readResults: [
-                .wouldBlock,
+            readResults: [.wouldBlock, .wouldBlock],
+            readResultsAfterFirstResize: [
                 .bytes(startBytes),
                 .wouldBlock,
                 .wouldBlock,
@@ -649,8 +656,8 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         let inputBytes = Data([0x02, 0x63])
         let store = OrdinaryTmuxInputSubmissionStore()
         let controller = ControllerProbe(
-            readResults: [
-                .wouldBlock,
+            readResults: [.wouldBlock],
+            readResultsAfterFirstResize: [
                 .bytes(startBytes),
                 .wouldBlock,
                 .wouldBlock,
@@ -849,8 +856,8 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         let startBytes = Data([0x1b, 0x5b, 0x48])
         let store = OrdinaryTmuxInputSubmissionStore()
         let controller = ControllerProbe(
-            readResults: [
-                .wouldBlock,
+            readResults: [.wouldBlock],
+            readResultsAfterFirstResize: [
                 .bytes(startBytes),
                 .wouldBlock,
                 .wouldBlock,
@@ -1057,8 +1064,8 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         let startBytes = Data([0x1b, 0x5b, 0x48])
         let store = OrdinaryTmuxInputSubmissionStore()
         let controller = ControllerProbe(
-            readResults: [
-                .wouldBlock,
+            readResults: [.wouldBlock, .wouldBlock],
+            readResultsAfterFirstResize: [
                 .bytes(startBytes),
                 .wouldBlock,
                 .wouldBlock,

@@ -6,6 +6,7 @@ import XCTest
 final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
     private final class ControllerProbe: TmuxInteractivePTYControlling, @unchecked Sendable {
         var readResults = [TmuxInteractivePTYReadResult]()
+        var readResultsAfterResize = [TmuxInteractivePTYReadResult]()
         private(set) var closeCount = 0
         private(set) var reapCount = 0
 
@@ -15,7 +16,10 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
             TmuxInteractivePTYHandle(masterFileDescriptor: 17, childProcessID: 23)
         }
 
-        func resize(masterFileDescriptor: Int32, to size: TmuxInteractivePTYSize) throws {}
+        func resize(masterFileDescriptor: Int32, to size: TmuxInteractivePTYSize) throws {
+            readResults.append(contentsOf: readResultsAfterResize)
+            readResultsAfterResize.removeAll()
+        }
 
         func close(masterFileDescriptor: Int32) throws {
             closeCount += 1
@@ -95,6 +99,8 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
             .bytes(hiddenProofBytes),
             .wouldBlock,
             .wouldBlock,
+        ]
+        controller.readResultsAfterResize = [
             .bytes(startBytes),
             .wouldBlock,
             .wouldBlock,
