@@ -49,6 +49,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var didRequestRedraw = false
         var authoritativeStartBytes = Data()
+        var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
         var resizeGate: TmuxInteractivePTYResizeGate?
         var nextOutputSequence: UInt64 = 1
         var didCloseMaster = false
@@ -76,6 +77,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let attachProver: TmuxInteractiveAttachProving
     private let maximumPreProofBytes: Int
     private let maximumAuthoritativeStartBytes: Int
+    private let authoritativeStartQuiescenceNanoseconds: UInt64
+    private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
 
@@ -84,13 +87,20 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         controller: TmuxInteractivePTYControlling,
         attachProver: TmuxInteractiveAttachProving = TmuxInteractiveAttachProver(),
         maximumPreProofBytes: Int = 1_024 * 1_024,
-        maximumAuthoritativeStartBytes: Int = 1_024 * 1_024
+        maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
+        authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
+        uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
+            DispatchTime.now().uptimeNanoseconds
+        }
     ) {
         self.admissionStore = admissionStore
         self.controller = controller
         self.attachProver = attachProver
         self.maximumPreProofBytes = max(1, maximumPreProofBytes)
         self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
+        self.authoritativeStartQuiescenceNanoseconds =
+            authoritativeStartQuiescenceNanoseconds
+        self.uptimeNanoseconds = uptimeNanoseconds
     }
 
     var lifecycleState: TmuxInteractivePTYSessionLifecycleState {
