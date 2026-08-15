@@ -845,6 +845,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             generation: 9
         )
         let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let startupFinalResize = TmuxInteractivePTYSize(columns: 80, rows: 24)
         let startBytes = Data([0x1b, 0x5b, 0x48])
         let store = OrdinaryTmuxInputSubmissionStore()
         let controller = ControllerProbe(
@@ -942,7 +943,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             beforeStartResponse.error?.code,
             "tmux_interactive_not_ready"
         )
-        XCTAssertTrue(controller.resizeSizes.isEmpty)
+        XCTAssertEqual(controller.resizeSizes, [startupFinalResize])
 
         fixture.channel.embeddedEventLoop.advanceTime(by: .milliseconds(10))
         fixture.channel.embeddedEventLoop.run()
@@ -953,7 +954,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             as: TmuxInteractiveAuthoritativeStartEnvelope.self
         )
         XCTAssertEqual(start.type, TmuxInteractiveProtocolV1.startEventType)
-        XCTAssertTrue(controller.resizeSizes.isEmpty)
+        XCTAssertEqual(controller.resizeSizes, [startupFinalResize])
 
         let staleBinding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: binding.subscriptionID,
@@ -974,7 +975,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         )
         XCTAssertFalse(staleResponse.ok)
         XCTAssertEqual(staleResponse.error?.code, "superseded")
-        XCTAssertTrue(controller.resizeSizes.isEmpty)
+        XCTAssertEqual(controller.resizeSizes, [startupFinalResize])
 
         let latestViewport = TmuxInteractiveViewport(columns: 60, rows: 20)
         try writeRequest(
@@ -997,6 +998,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         XCTAssertEqual(
             controller.resizeSizes,
             [
+                startupFinalResize,
                 TmuxInteractivePTYSize(columns: 60, rows: 20),
             ]
         )
@@ -1018,7 +1020,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
                 as: BridgeResponse.self
             ).ok
         )
-        XCTAssertEqual(controller.resizeSizes.count, 1)
+        XCTAssertEqual(controller.resizeSizes.count, 2)
 
         try writeRequest(
             BridgeRequest(
