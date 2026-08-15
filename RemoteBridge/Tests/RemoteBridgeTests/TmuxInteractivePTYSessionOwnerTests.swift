@@ -513,20 +513,17 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerRequiresSecondProvedPaneRedrawBeforePublishingAuthoritativeStart() throws {
+    func testOwnerPublishesProvedAttachAfterTmuxClientRefreshWhenAttachProducedNoBytes() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
-        let firstRedraw = Data("collapsed".utf8)
-        let verificationRedraw = Data("complete-footer".utf8)
+        let authoritativeScreen = Data(
+            "\u{1B}[2J\u{1B}[Hproved tmux client screen".utf8
+        )
         controller.readResults = [
             .wouldBlock,
-            .bytes(firstRedraw),
-            .wouldBlock,
-            .wouldBlock,
-            .wouldBlock,
-            .bytes(verificationRedraw),
+            .bytes(authoritativeScreen),
             .wouldBlock,
             .wouldBlock,
         ]
@@ -544,50 +541,88 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
         let paneRedrawRequester = PaneRedrawRequesterProbe()
+        let clientRefreshRequester = ClientRefreshRequesterProbe()
+        let uptime = UptimeProbe()
+        let quiescenceNanoseconds =
+            TmuxInteractivePTYSessionOwner
+                .productionAuthoritativeStartQuiescenceNanoseconds
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: store,
             controller: controller,
             attachProver: prover,
+            clientRefreshRequester: clientRefreshRequester,
             paneRedrawRequester: paneRedrawRequester,
-            requiresVerificationRedraw: true
+            authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
+            clientRefreshTimeoutNanoseconds: 1_000_000_000,
+            requiresVerificationRedraw: true,
+            uptimeNanoseconds: { uptime.now() }
         )
         try owner.begin(request)
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
 
         XCTAssertNil(try owner.pollAuthoritativeStart())
         XCTAssertEqual(
-            paneRedrawRequester.requests,
+            clientRefreshRequester.requests,
             [
-                TmuxInteractivePaneRedrawRequest(
+                TmuxInteractiveClientRefreshRequest(
                     socket: route.socket,
-                    paneID: verifiedAttach.attachProof.paneID
+                    clientTTY: verifiedAttach.clientTTY
                 ),
             ]
         )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
+        XCTAssertTrue(paneRedrawRequester.requests.isEmpty)
+        uptime.advance(by: quiescenceNanoseconds)
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(start.initialBytes, authoritativeScreen)
+        XCTAssertEqual(clientRefreshRequester.requests.count, 1)
+        XCTAssertEqual(owner.lifecycleState, .live)
+        try owner.close()
+    }
+
+    func testOwnerClosesWhenProvedClientRefreshProducesNoScreenByDeadline() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let controller = ControllerProbe()
+        controller.readResults = [.wouldBlock, .wouldBlock, .wouldBlock]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let clientRefreshRequester = ClientRefreshRequesterProbe()
+        let uptime = UptimeProbe()
+        let timeoutNanoseconds: UInt64 = 2_000_000_000
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover,
+            clientRefreshRequester: clientRefreshRequester,
+            clientRefreshTimeoutNanoseconds: timeoutNanoseconds,
+            uptimeNanoseconds: { uptime.now() }
+        )
+        try owner.begin(makeRequest(route: route))
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
 
         XCTAssertNil(try owner.pollAuthoritativeStart())
-        XCTAssertEqual(
-            paneRedrawRequester.requests,
-            [
-                TmuxInteractivePaneRedrawRequest(
-                    socket: route.socket,
-                    paneID: verifiedAttach.attachProof.paneID
-                ),
-                TmuxInteractivePaneRedrawRequest(
-                    socket: route.socket,
-                    paneID: verifiedAttach.attachProof.paneID
-                ),
-            ]
-        )
-        XCTAssertNil(try owner.pollAuthoritativeStart())
-        XCTAssertNil(
-            try owner.pollAuthoritativeStart(),
-            "a second redraw request cannot publish until it produces output"
-        )
-        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
-        XCTAssertEqual(start.initialBytes, firstRedraw + verificationRedraw)
-        XCTAssertEqual(paneRedrawRequester.requests.count, 2)
-        try owner.close()
+        uptime.advance(by: timeoutNanoseconds)
+        XCTAssertThrowsError(try owner.pollAuthoritativeStart()) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .authoritativeStartTimedOut
+            )
+        }
+        XCTAssertEqual(clientRefreshRequester.requests.count, 1)
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closedFileDescriptors, [17])
     }
 
     func testOwnerWaitsForContinuousAuthoritativeRedrawQuiescenceBeforePublishingStart() throws {
@@ -684,10 +719,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             )
         }
         XCTAssertEqual(owner.lifecycleState, .closed)
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         XCTAssertEqual(controller.closedFileDescriptors, [17])
         XCTAssertEqual(controller.reapCalls.count, 1)
     }
@@ -862,7 +894,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(
             controller.resizedSizes,
             [
-                TmuxInteractivePTYSize(columns: 80, rows: 24),
                 TmuxInteractivePTYSize(columns: 100, rows: 30),
             ]
         )
@@ -874,7 +905,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 .invalidState(.closed)
             )
         }
-        XCTAssertEqual(controller.resizedSizes.count, 2)
+        XCTAssertEqual(controller.resizedSizes.count, 1)
     }
 
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {

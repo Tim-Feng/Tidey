@@ -28,6 +28,7 @@ enum TmuxInteractivePTYSessionOwnerError: Error, Equatable {
     case attachProofMismatch
     case unexpectedEndBeforeAuthoritativeStart
     case authoritativeStartBufferOverflow(limit: Int)
+    case authoritativeStartTimedOut
     case outputSequenceExhausted
     case childDidNotExit
 }
@@ -43,6 +44,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         150_000_000
     static let productionPostProofRedrawDelayNanoseconds: UInt64 =
         150_000_000
+    static let productionClientRefreshTimeoutNanoseconds: UInt64 =
+        2_000_000_000
 
     private final class ActiveResources {
         let handle: TmuxInteractivePTYHandle
@@ -54,6 +57,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var provedAtUptimeNanoseconds: UInt64?
         var didCaptureProvedAttachPrefix = false
+        var didRequestClientRefresh = false
+        var clientRefreshRequestedAtUptimeNanoseconds: UInt64?
         var didRequestRedraw = false
         var didRequestVerificationRedraw = false
         var didReceiveVerificationRedrawOutput = false
@@ -90,6 +95,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let maximumAuthoritativeStartBytes: Int
     private let postProofRedrawDelayNanoseconds: UInt64
     private let authoritativeStartQuiescenceNanoseconds: UInt64
+    private let clientRefreshTimeoutNanoseconds: UInt64
     private let requiresVerificationRedraw: Bool
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
@@ -107,6 +113,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
         postProofRedrawDelayNanoseconds: UInt64 = 0,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
+        clientRefreshTimeoutNanoseconds: UInt64 = .max,
         requiresVerificationRedraw: Bool = false,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
@@ -122,6 +129,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.postProofRedrawDelayNanoseconds = postProofRedrawDelayNanoseconds
         self.authoritativeStartQuiescenceNanoseconds =
             authoritativeStartQuiescenceNanoseconds
+        self.clientRefreshTimeoutNanoseconds = clientRefreshTimeoutNanoseconds
         self.requiresVerificationRedraw = requiresVerificationRedraw
         self.uptimeNanoseconds = uptimeNanoseconds
     }
@@ -215,7 +223,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                     throw TmuxInteractivePTYSessionOwnerError.attachProofMismatch
                 }
                 guard resources.preProofBytes.count <=
-                        maximumAuthoritativeStartBytes else {
+                        maximumAuthoritativeStartBytes -
+                            resources.authoritativeStartBytes.count else {
                     throw TmuxInteractivePTYSessionOwnerError
                         .authoritativeStartBufferOverflow(
                             limit: maximumAuthoritativeStartBytes
@@ -277,28 +286,17 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             }
             do {
                 if resources.didCaptureProvedAttachPrefix == false,
-                   resources.didRequestRedraw == false {
-                    guard let provedAtUptimeNanoseconds =
-                            resources.provedAtUptimeNanoseconds else {
-                        return nil
-                    }
-                    let currentUptimeNanoseconds = uptimeNanoseconds()
-                    guard currentUptimeNanoseconds >= provedAtUptimeNanoseconds,
-                          currentUptimeNanoseconds - provedAtUptimeNanoseconds >=
-                            postProofRedrawDelayNanoseconds else {
-                        return nil
-                    }
-                    try controller.resize(
-                        masterFileDescriptor: resources.handle.masterFileDescriptor,
-                        to: resources.initialSize
-                    )
-                    try paneRedrawRequester.requestRedraw(
-                        TmuxInteractivePaneRedrawRequest(
+                   resources.didRequestClientRefresh == false {
+                    let requestedAtUptimeNanoseconds = uptimeNanoseconds()
+                    try clientRefreshRequester.requestRefresh(
+                        TmuxInteractiveClientRefreshRequest(
                             socket: resources.request.route.socket,
-                            paneID: verifiedAttach.attachProof.paneID
+                            clientTTY: verifiedAttach.clientTTY
                         )
                     )
-                    resources.didRequestRedraw = true
+                    resources.didRequestClientRefresh = true
+                    resources.clientRefreshRequestedAtUptimeNanoseconds =
+                        requestedAtUptimeNanoseconds
                 }
 
                 var receivedBytesThisPoll = false
@@ -327,9 +325,24 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             uptimeNanoseconds()
                         receivedBytesThisPoll = true
                     case .wouldBlock:
-                        guard receivedBytesThisPoll == false,
-                              resources.authoritativeStartBytes.isEmpty == false else {
+                        guard receivedBytesThisPoll == false else {
                             return nil
+                        }
+                        if resources.authoritativeStartBytes.isEmpty {
+                            guard let requestedAtUptimeNanoseconds =
+                                    resources.clientRefreshRequestedAtUptimeNanoseconds else {
+                                return nil
+                            }
+                            let currentUptimeNanoseconds = uptimeNanoseconds()
+                            guard currentUptimeNanoseconds >=
+                                    requestedAtUptimeNanoseconds,
+                                  currentUptimeNanoseconds -
+                                    requestedAtUptimeNanoseconds >=
+                                    clientRefreshTimeoutNanoseconds else {
+                                return nil
+                            }
+                            throw TmuxInteractivePTYSessionOwnerError
+                                .authoritativeStartTimedOut
                         }
                         guard let lastOutputUptimeNanoseconds =
                                 resources.lastAuthoritativeOutputUptimeNanoseconds else {
@@ -339,24 +352,6 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         guard currentUptimeNanoseconds >= lastOutputUptimeNanoseconds,
                               currentUptimeNanoseconds - lastOutputUptimeNanoseconds >=
                                 authoritativeStartQuiescenceNanoseconds else {
-                            return nil
-                        }
-                        if requiresVerificationRedraw,
-                           resources.didCaptureProvedAttachPrefix == false,
-                           resources.didRequestVerificationRedraw == false {
-                            try paneRedrawRequester.requestRedraw(
-                                TmuxInteractivePaneRedrawRequest(
-                                    socket: resources.request.route.socket,
-                                    paneID: verifiedAttach.attachProof.paneID
-                                )
-                            )
-                            resources.didRequestVerificationRedraw = true
-                            resources.lastAuthoritativeOutputUptimeNanoseconds = nil
-                            return nil
-                        }
-                        guard resources.didCaptureProvedAttachPrefix
-                                || requiresVerificationRedraw == false
-                                || resources.didReceiveVerificationRedrawOutput else {
                             return nil
                         }
                         let subscribe = resources.request.subscribe

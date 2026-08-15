@@ -953,10 +953,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
             as: TmuxInteractiveAuthoritativeStartEnvelope.self
         )
         XCTAssertEqual(start.type, TmuxInteractiveProtocolV1.startEventType)
-        XCTAssertEqual(
-            controller.resizeSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizeSizes.isEmpty)
 
         let staleBinding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: binding.subscriptionID,
@@ -977,7 +974,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         )
         XCTAssertFalse(staleResponse.ok)
         XCTAssertEqual(staleResponse.error?.code, "superseded")
-        XCTAssertEqual(controller.resizeSizes.count, 1)
+        XCTAssertTrue(controller.resizeSizes.isEmpty)
 
         let latestViewport = TmuxInteractiveViewport(columns: 60, rows: 20)
         try writeRequest(
@@ -1000,7 +997,6 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
         XCTAssertEqual(
             controller.resizeSizes,
             [
-                TmuxInteractivePTYSize(columns: 80, rows: 24),
                 TmuxInteractivePTYSize(columns: 60, rows: 20),
             ]
         )
@@ -1022,7 +1018,7 @@ final class TmuxInteractiveWebSocketSubscriptionTests: XCTestCase {
                 as: BridgeResponse.self
             ).ok
         )
-        XCTAssertEqual(controller.resizeSizes.count, 2)
+        XCTAssertEqual(controller.resizeSizes.count, 1)
 
         try writeRequest(
             BridgeRequest(

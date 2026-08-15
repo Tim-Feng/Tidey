@@ -483,6 +483,83 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testRealPTYClientRefreshEmitsAuthoritativeScreenWithoutPaneSignalOrInput() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let initialSize = TmuxInteractivePTYSize(columns: 80, rows: 24)
+        let handle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: initialSize
+            )
+        )
+        var didCloseMaster = false
+        var didReapChild = false
+        defer {
+            if didCloseMaster == false {
+                try? controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+            }
+            if didReapChild == false {
+                reapForCleanup(controller: controller, childProcessID: handle.childProcessID)
+            }
+        }
+
+        let client = try XCTUnwrap(
+            fixture.waitForClient(processID: handle.childProcessID, timeout: 3)
+        )
+        try drainUntilQuiet(
+            controller: controller,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            quietPeriod: 0.2,
+            timeout: 2
+        )
+
+        try TmuxInteractiveClientRefreshRequester(
+            tmuxExecutablePath: tmuxPath
+        ).requestRefresh(
+            TmuxInteractiveClientRefreshRequest(
+                socket: .path(fixture.socketPath),
+                clientTTY: client.tty
+            )
+        )
+
+        let screen = try readBytesUntilQuiet(
+            controller: controller,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            quietPeriod: 0.2,
+            timeout: 2
+        )
+        let screenText = String(decoding: screen, as: UTF8.self)
+        XCTAssertTrue(
+            screenText.contains("\u{1b}[1;1H"),
+            screen.base64EncodedString()
+        )
+        XCTAssertGreaterThanOrEqual(
+            screenText.components(separatedBy: "\u{1b}[K").count - 1,
+            Int(initialSize.rows) - 1
+        )
+
+        try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+        didCloseMaster = true
+        let childExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: handle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(childExit)
+        didReapChild = childExit != nil
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
     func testLazyWindowSizeMigrationRestoresOnlyExactTargetOnIsolatedSocket() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -978,6 +1055,40 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 if let quietSince,
                    Date().timeIntervalSince(quietSince) >= quietPeriod {
                     return
+                }
+                if quietSince == nil {
+                    quietSince = Date()
+                }
+                usleep(20_000)
+            case .endOfFile:
+                throw TestError.unexpectedEndOfFile
+            }
+        } while Date() < deadline
+        throw TestError.readTimedOut
+    }
+
+    private func readBytesUntilQuiet(
+        controller: TmuxInteractivePTYControlling,
+        masterFileDescriptor: Int32,
+        quietPeriod: TimeInterval,
+        timeout: TimeInterval
+    ) throws -> Data {
+        let deadline = Date().addingTimeInterval(timeout)
+        var bytes = Data()
+        var quietSince: Date?
+        repeat {
+            switch try controller.read(
+                masterFileDescriptor: masterFileDescriptor,
+                maximumBytes: 16 * 1_024
+            ) {
+            case .bytes(let nextBytes):
+                bytes.append(nextBytes)
+                quietSince = nil
+            case .wouldBlock:
+                if bytes.isEmpty == false,
+                   let quietSince,
+                   Date().timeIntervalSince(quietSince) >= quietPeriod {
+                    return bytes
                 }
                 if quietSince == nil {
                     quietSince = Date()

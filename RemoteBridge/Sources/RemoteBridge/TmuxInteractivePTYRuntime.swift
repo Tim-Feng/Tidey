@@ -41,6 +41,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
             attachProver: TmuxInteractiveAttachProver(
                 tmuxExecutablePath: tmuxExecutablePath
             ),
+            clientRefreshRequester: TmuxInteractiveClientRefreshRequester(
+                tmuxExecutablePath: tmuxExecutablePath
+            ),
             paneRedrawRequester: TmuxInteractivePaneRedrawRequester(
                 tmuxExecutablePath: tmuxExecutablePath
             ),
@@ -58,6 +61,8 @@ struct TmuxInteractivePTYRuntime: Sendable {
         tmuxExecutablePath: String,
         controller: TmuxInteractivePTYControlling,
         attachProver: TmuxInteractiveAttachProving,
+        clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
+            DisabledTmuxInteractiveClientRefreshRequester(),
         paneRedrawRequester: TmuxInteractivePaneRedrawRequesting =
             DisabledTmuxInteractivePaneRedrawRequester(),
         migrateWindow: @escaping
@@ -77,6 +82,7 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     admissionStore: projectionContext.inputSubmissionStore,
                     controller: controller,
                     attachProver: attachProver,
+                    clientRefreshRequester: clientRefreshRequester,
                     paneRedrawRequester: paneRedrawRequester,
                     postProofRedrawDelayNanoseconds:
                         TmuxInteractivePTYSessionOwner
@@ -84,6 +90,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     authoritativeStartQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
                             .productionAuthoritativeStartQuiescenceNanoseconds,
+                    clientRefreshTimeoutNanoseconds:
+                        TmuxInteractivePTYSessionOwner
+                            .productionClientRefreshTimeoutNanoseconds,
                     requiresVerificationRedraw: true
                 )
                 try owner.begin(request)
