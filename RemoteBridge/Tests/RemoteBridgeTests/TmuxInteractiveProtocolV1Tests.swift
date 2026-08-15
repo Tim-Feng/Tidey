@@ -4,6 +4,54 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractiveProtocolV1Tests: XCTestCase {
+    func testStreamingStartupProtocolValuesRemainTypedAndDormant() {
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-7",
+            generation: 19
+        )
+        let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let proof = TmuxInteractiveAttachProof(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:/private/tmp/tmux-501/default:$7:@11",
+            sessionID: "$7",
+            windowID: "@11",
+            paneID: "%19"
+        )
+        let reply = TmuxInteractiveTerminalReply(
+            binding: binding,
+            bytes: Data([0x1b, 0x5b, 0x3e, 0x63])
+        )
+        let attached = TmuxInteractiveAttached(
+            binding: binding,
+            attachProof: proof,
+            viewport: viewport,
+            initialBytes: Data([0x1b, 0x5b, 0x48]),
+            sequence: 1
+        )
+        let output = TmuxInteractiveOutputChunk(
+            binding: binding,
+            sequence: 2,
+            bytes: Data([0xff, 0x00])
+        )
+        let ready = TmuxInteractiveReady(binding: binding, sequence: 3)
+
+        XCTAssertEqual(TmuxInteractiveProtocolV1.replyAction, "tmux_interactive_reply")
+        XCTAssertEqual(TmuxInteractiveProtocolV1.attachedEventType, "tmux_interactive_attached")
+        XCTAssertEqual(TmuxInteractiveProtocolV1.readyEventType, "tmux_interactive_ready")
+        XCTAssertEqual(TmuxInteractiveStartupMode.legacy.rawValue, "legacy")
+        XCTAssertEqual(TmuxInteractiveStartupMode.streamingReplies.rawValue, "streaming_replies_v1")
+        XCTAssertEqual(reply.binding, binding)
+        XCTAssertEqual(reply.bytes, Data([0x1b, 0x5b, 0x3e, 0x63]))
+        XCTAssertEqual(attached.binding, binding)
+        XCTAssertEqual(attached.attachProof, proof)
+        XCTAssertEqual(attached.viewport, viewport)
+        XCTAssertEqual(attached.initialBytes, Data([0x1b, 0x5b, 0x48]))
+        XCTAssertEqual(attached.sequence, 1)
+        XCTAssertEqual(output.sequence, 2)
+        XCTAssertEqual(ready.binding, binding)
+        XCTAssertEqual(ready.sequence, 3)
+    }
+
     func testInteractiveAuthoritativeStartCarriesResolvedSessionWindowPaneIdentity() {
         let binding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-7",
