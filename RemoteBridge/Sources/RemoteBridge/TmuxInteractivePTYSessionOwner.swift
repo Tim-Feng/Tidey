@@ -209,15 +209,15 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                       verified.attachProof.windowID == route.windowID else {
                     throw TmuxInteractivePTYSessionOwnerError.attachProofMismatch
                 }
+                try drainPreProofBytes(resources)
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
-                let provedAtUptimeNanoseconds = uptimeNanoseconds()
                 try controller.resize(
                     masterFileDescriptor: resources.handle.masterFileDescriptor,
                     to: resources.initialSize
                 )
                 resources.finalStartupResizeAppliedAtUptimeNanoseconds =
-                    provedAtUptimeNanoseconds
+                    uptimeNanoseconds()
                 state = .redrawing
                 return verified
             } catch {
