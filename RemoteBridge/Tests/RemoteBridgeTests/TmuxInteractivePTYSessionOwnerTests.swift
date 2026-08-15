@@ -77,6 +77,19 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         }
     }
 
+    private final class PaneRedrawRequesterProbe:
+        TmuxInteractivePaneRedrawRequesting,
+        @unchecked Sendable
+    {
+        private(set) var requests = [TmuxInteractivePaneRedrawRequest]()
+
+        func requestRedraw(
+            _ request: TmuxInteractivePaneRedrawRequest
+        ) throws {
+            requests.append(request)
+        }
+    }
+
     private final class UptimeProbe: @unchecked Sendable {
         private let lock = NSLock()
         private var value: UInt64 = 1_000
@@ -419,6 +432,56 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             )
         }
         XCTAssertEqual(controller.writtenBytes, [input.bytes])
+        try owner.close()
+    }
+
+    func testOwnerRequestsOneProvedPaneRedrawBeforeCollectingAuthoritativeStart() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        controller.readResults = [
+            .wouldBlock,
+            .bytes(Data("authoritative".utf8)),
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let paneRedrawRequester = PaneRedrawRequesterProbe()
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover,
+            paneRedrawRequester: paneRedrawRequester
+        )
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(
+            paneRedrawRequester.requests,
+            [
+                TmuxInteractivePaneRedrawRequest(
+                    socket: route.socket,
+                    paneID: verifiedAttach.attachProof.paneID
+                ),
+            ]
+        )
+
+        _ = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(paneRedrawRequester.requests.count, 1)
         try owner.close()
     }
 

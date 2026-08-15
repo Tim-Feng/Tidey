@@ -738,6 +738,100 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         )
     }
 
+    func testSessionOwnerRequestsProvedPaneRedrawBeforePublishingCompleteFooter() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/clang") else {
+            throw XCTSkip("the isolated signal-aware TUI fixture requires clang")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithDelayedFooterTargetWindow()
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-footer",
+            panelID: "panel-footer",
+            carrierPanelID: "carrier-footer",
+            socket: .path(fixture.socketPath),
+            sessionID: target.sessionID,
+            sessionName: "pty-exact",
+            windowID: target.windowID,
+            windowIndex: 1,
+            activePaneID: target.paneID,
+            cwd: nil,
+            currentCommand: "sh"
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-footer",
+            generation: 12
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: TmuxInteractivePTYController(),
+            paneRedrawRequester: TmuxInteractivePaneRedrawRequester(
+                tmuxExecutablePath: tmuxPath
+            ),
+            postProofRedrawDelayNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionPostProofRedrawDelayNanoseconds,
+            authoritativeStartQuiescenceNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionAuthoritativeStartQuiescenceNanoseconds
+        )
+        var didClose = false
+        defer {
+            if didClose == false {
+                try? owner.close()
+            }
+        }
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: TmuxInteractiveSubscribe(
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    binding: binding,
+                    viewport: TmuxInteractiveViewport(columns: 80, rows: 24)
+                ),
+                route: route,
+                tmuxExecutablePath: tmuxPath
+            )
+        )
+        _ = try XCTUnwrap(
+            waitForSessionOwnerProof(owner: owner, timeout: 3)
+        )
+        try fixture.armDelayedFooterRedraw()
+
+        let startedAt = Date()
+        let start = try XCTUnwrap(
+            waitForSessionOwnerStart(owner: owner, timeout: 2)
+        )
+        let paneProcessSnapshot = try fixture.paneProcessSnapshot(
+            paneID: target.paneID
+        )
+
+        XCTAssertLessThan(Date().timeIntervalSince(startedAt), 2)
+        XCTAssertTrue(
+            String(decoding: start.initialBytes, as: UTF8.self)
+                .contains("gpt-5.6-sol xhigh"),
+            paneProcessSnapshot
+        )
+        XCTAssertEqual(
+            Array(try fixture.capturePaneLines(paneID: target.paneID).suffix(3)),
+            [
+                "> Summarize recent commits",
+                "",
+                "gpt-5.6-sol xhigh",
+            ],
+            paneProcessSnapshot
+        )
+
+        try owner.close()
+        didClose = true
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 2)
+    }
+
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -1144,6 +1238,7 @@ private final class InteractivePTYTmuxFixture {
 
     private let tmuxPath: String
     private let rootURL: URL
+    private var delayedFooterArmURL: URL?
     private var hasStartedServer = false
     private var isShutDown = false
 
@@ -1197,6 +1292,158 @@ private final class InteractivePTYTmuxFixture {
             windowID: String(targetFields[1]),
             paneID: String(targetFields[2])
         )
+    }
+
+    func startWithDelayedFooterTargetWindow() throws -> InteractivePTYTmuxTarget {
+        let first = try run([
+            "-f", "/dev/null",
+            "new-session", "-d",
+            "-P", "-F", "#{session_id}|#{window_id}",
+            "-s", "pty-exact",
+            "-x", "132",
+            "-y", "37",
+        ])
+        hasStartedServer = true
+        let firstFields = first.split(separator: "|", omittingEmptySubsequences: false)
+        guard firstFields.count == 2 else {
+            throw FixtureError.invalidRecord(first)
+        }
+
+        let armURL = rootURL.appendingPathComponent("footer-redraw-armed")
+        let sourceURL = rootURL.appendingPathComponent("delayed-footer.c")
+        let executableURL = rootURL.appendingPathComponent("delayed-footer")
+        let source = """
+        #include <signal.h>
+        #include <stddef.h>
+        #include <unistd.h>
+
+        static volatile sig_atomic_t redraw_requested = 0;
+        static const char collapsed[] =
+            "\\033[21;1H\\033[2K\\033[22;1H\\033[2K\\033[23;1H\\033[2K> Summarize recent commits";
+        static const char complete[] =
+            "\\033[21;1H\\033[2K> Summarize recent commits\\033[22;1H\\033[2K\\033[23;1H\\033[2Kgpt-5.6-sol xhigh";
+
+        static void handle_winch(int signal_number) {
+            (void)signal_number;
+            redraw_requested = 1;
+        }
+
+        int main(void) {
+            struct sigaction action = {0};
+            action.sa_handler = handle_winch;
+            sigemptyset(&action.sa_mask);
+            if (sigaction(SIGWINCH, &action, NULL) != 0) {
+                return 2;
+            }
+
+            sigset_t blocked;
+            sigset_t prior;
+            sigemptyset(&blocked);
+            sigaddset(&blocked, SIGWINCH);
+            if (sigprocmask(SIG_BLOCK, &blocked, &prior) != 0) {
+                return 3;
+            }
+            (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
+
+            for (;;) {
+                while (redraw_requested == 0) {
+                    (void)sigsuspend(&prior);
+                }
+                redraw_requested = 0;
+                if (access("\(armURL.path)", F_OK) == 0) {
+                    (void)write(STDOUT_FILENO, complete, sizeof(complete) - 1);
+                } else {
+                    (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
+                }
+            }
+        }
+        """
+        try Data(source.utf8).write(to: sourceURL, options: .atomic)
+        let compileArguments = [
+            "-std=c11", "-Wall", "-Wextra", "-Werror",
+            sourceURL.path,
+            "-o", executableURL.path,
+        ]
+        guard let compileResult = BoundedProcessRunner.run(
+            executablePath: "/usr/bin/clang",
+            arguments: compileArguments,
+            timeout: 3,
+            circuitBreakerCooldown: 0
+        ) else {
+            throw FixtureError.commandTimedOut(arguments: compileArguments)
+        }
+        guard compileResult.terminationStatus == 0 else {
+            throw FixtureError.commandFailed(
+                arguments: compileArguments,
+                status: compileResult.terminationStatus,
+                stderr: String(decoding: compileResult.standardError, as: UTF8.self)
+            )
+        }
+        delayedFooterArmURL = armURL
+
+        let sessionID = String(firstFields[0])
+        let target = try run([
+            "new-window", "-d",
+            "-P", "-F", "#{session_id}|#{window_id}|#{pane_id}",
+            "-t", sessionID,
+            "-n", "phone-target",
+            executableURL.path,
+        ])
+        let targetFields = target.split(separator: "|", omittingEmptySubsequences: false)
+        guard targetFields.count == 3,
+              targetFields[0] == Substring(sessionID) else {
+            throw FixtureError.invalidRecord(target)
+        }
+        return InteractivePTYTmuxTarget(
+            sessionID: sessionID,
+            windowID: String(targetFields[1]),
+            paneID: String(targetFields[2])
+        )
+    }
+
+    func armDelayedFooterRedraw() throws {
+        guard let delayedFooterArmURL else {
+            throw FixtureError.invalidRecord("delayed footer fixture is not active")
+        }
+        try Data().write(to: delayedFooterArmURL, options: .atomic)
+    }
+
+    func capturePaneLines(paneID: String) throws -> [String] {
+        let output = try run([
+            "capture-pane", "-p",
+            "-t", paneID,
+        ])
+        return output.split(
+            separator: "\n",
+            omittingEmptySubsequences: false
+        ).map(String.init)
+    }
+
+    func paneProcessSnapshot(paneID: String) throws -> String {
+        let paneRecord = try run([
+            "display-message", "-p",
+            "-t", paneID,
+            "#{pane_pid}|#{pane_tty}",
+        ])
+        let processID = paneRecord.split(separator: "|").first.map(String.init) ?? ""
+        let result = BoundedProcessRunner.run(
+            executablePath: "/bin/ps",
+            arguments: [
+                "-o", "pid=,ppid=,pgid=,tpgid=,tty=,state=,sigmask=,command=",
+                "-p", processID,
+            ],
+            timeout: 1,
+            circuitBreakerCooldown: 0
+        )
+        let processRecord = String(
+            decoding: result?.standardOutput ?? Data(),
+            as: UTF8.self
+        )
+        let armExists = delayedFooterArmURL.map {
+            FileManager.default.fileExists(atPath: $0.path)
+        } ?? false
+        let armPath = delayedFooterArmURL?.path ?? "nil"
+        return "\(paneRecord)\n\(processRecord)arm=\(armExists) path=\(armPath)"
     }
 
     func waitForClient(

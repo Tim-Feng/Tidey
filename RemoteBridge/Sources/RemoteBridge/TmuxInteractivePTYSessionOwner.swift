@@ -41,6 +41,8 @@ enum TmuxInteractivePTYSessionLivePollResult: Equatable, Sendable {
 final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     static let productionAuthoritativeStartQuiescenceNanoseconds: UInt64 =
         150_000_000
+    static let productionPostProofRedrawDelayNanoseconds: UInt64 =
+        150_000_000
 
     private final class ActiveResources {
         let handle: TmuxInteractivePTYHandle
@@ -50,6 +52,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
+        var provedAtUptimeNanoseconds: UInt64?
         var didRequestRedraw = false
         var authoritativeStartBytes = Data()
         var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
@@ -81,6 +84,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let paneRedrawRequester: TmuxInteractivePaneRedrawRequesting
     private let maximumPreProofBytes: Int
     private let maximumAuthoritativeStartBytes: Int
+    private let postProofRedrawDelayNanoseconds: UInt64
     private let authoritativeStartQuiescenceNanoseconds: UInt64
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
@@ -94,6 +98,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             DisabledTmuxInteractivePaneRedrawRequester(),
         maximumPreProofBytes: Int = 1_024 * 1_024,
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
+        postProofRedrawDelayNanoseconds: UInt64 = 0,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
@@ -105,6 +110,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.paneRedrawRequester = paneRedrawRequester
         self.maximumPreProofBytes = max(1, maximumPreProofBytes)
         self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
+        self.postProofRedrawDelayNanoseconds = postProofRedrawDelayNanoseconds
         self.authoritativeStartQuiescenceNanoseconds =
             authoritativeStartQuiescenceNanoseconds
         self.uptimeNanoseconds = uptimeNanoseconds
@@ -200,6 +206,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 }
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
+                resources.provedAtUptimeNanoseconds = uptimeNanoseconds()
                 state = .redrawing
                 return verified
             } catch {
@@ -246,9 +253,25 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             }
             do {
                 if resources.didRequestRedraw == false {
+                    guard let provedAtUptimeNanoseconds =
+                            resources.provedAtUptimeNanoseconds else {
+                        return nil
+                    }
+                    let currentUptimeNanoseconds = uptimeNanoseconds()
+                    guard currentUptimeNanoseconds >= provedAtUptimeNanoseconds,
+                          currentUptimeNanoseconds - provedAtUptimeNanoseconds >=
+                            postProofRedrawDelayNanoseconds else {
+                        return nil
+                    }
                     try controller.resize(
                         masterFileDescriptor: resources.handle.masterFileDescriptor,
                         to: resources.initialSize
+                    )
+                    try paneRedrawRequester.requestRedraw(
+                        TmuxInteractivePaneRedrawRequest(
+                            socket: resources.request.route.socket,
+                            paneID: verifiedAttach.attachProof.paneID
+                        )
                     )
                     resources.didRequestRedraw = true
                 }

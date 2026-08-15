@@ -41,6 +41,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
             attachProver: TmuxInteractiveAttachProver(
                 tmuxExecutablePath: tmuxExecutablePath
             ),
+            paneRedrawRequester: TmuxInteractivePaneRedrawRequester(
+                tmuxExecutablePath: tmuxExecutablePath
+            ),
             migrateWindow: { socket, windowID in
                 try migrator.migrateIfEligible(
                     socket: socket,
@@ -55,6 +58,8 @@ struct TmuxInteractivePTYRuntime: Sendable {
         tmuxExecutablePath: String,
         controller: TmuxInteractivePTYControlling,
         attachProver: TmuxInteractiveAttachProving,
+        paneRedrawRequester: TmuxInteractivePaneRedrawRequesting =
+            DisabledTmuxInteractivePaneRedrawRequester(),
         migrateWindow: @escaping
             TmuxInteractivePTYSessionCandidateBuilder.MigrateWindow
     ) -> TmuxInteractivePTYRuntime {
@@ -72,6 +77,10 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     admissionStore: projectionContext.inputSubmissionStore,
                     controller: controller,
                     attachProver: attachProver,
+                    paneRedrawRequester: paneRedrawRequester,
+                    postProofRedrawDelayNanoseconds:
+                        TmuxInteractivePTYSessionOwner
+                            .productionPostProofRedrawDelayNanoseconds,
                     authoritativeStartQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
                             .productionAuthoritativeStartQuiescenceNanoseconds
