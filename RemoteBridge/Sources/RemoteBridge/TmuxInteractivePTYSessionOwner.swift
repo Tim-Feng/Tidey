@@ -420,13 +420,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             initialBytes: resources.authoritativeStartBytes
                         )
                         resources.authoritativeStartBytes.removeAll(keepingCapacity: false)
-                        resources.resizeGate = TmuxInteractivePTYResizeGate(
-                            binding: subscribe.binding,
-                            masterFileDescriptor: resources.handle.masterFileDescriptor,
-                            initialSize: resources.initialSize,
-                            controller: controller
-                        )
-                        state = .live
+                        transitionToLive(resources)
                         return start
                     case .endOfFile:
                         throw TmuxInteractivePTYSessionOwnerError
@@ -542,6 +536,16 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             bytes,
             masterFileDescriptor: resources.handle.masterFileDescriptor
         )
+    }
+
+    private func transitionToLive(_ resources: ActiveResources) {
+        resources.resizeGate = TmuxInteractivePTYResizeGate(
+            binding: resources.request.subscribe.binding,
+            masterFileDescriptor: resources.handle.masterFileDescriptor,
+            initialSize: resources.initialSize,
+            controller: controller
+        )
+        state = .live
     }
 
     private func closeActiveResources(_ resources: ActiveResources) throws {
