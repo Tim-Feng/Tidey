@@ -907,6 +907,163 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 1)
     }
 
+    func testSessionOwnerRequiresSecondGenuineResizeForCompleteFooterAndRestoresSizingClientGeometry() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/clang") else {
+            throw XCTSkip("the isolated signal-aware TUI fixture requires clang")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithSecondResizeFooterTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let baselineHandle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: TmuxInteractivePTYSize(columns: 132, rows: 37)
+            )
+        )
+        var didCloseBaseline = false
+        var didReapBaseline = false
+        defer {
+            if didCloseBaseline == false {
+                try? controller.close(
+                    masterFileDescriptor: baselineHandle.masterFileDescriptor
+                )
+            }
+            if didReapBaseline == false {
+                reapForCleanup(
+                    controller: controller,
+                    childProcessID: baselineHandle.childProcessID
+                )
+            }
+        }
+        _ = try XCTUnwrap(
+            fixture.waitForClient(
+                processID: baselineHandle.childProcessID,
+                timeout: 3
+            )
+        )
+        try drainUntilQuiet(
+            controller: controller,
+            masterFileDescriptor: baselineHandle.masterFileDescriptor,
+            quietPeriod: 0.1,
+            timeout: 2
+        )
+
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-second-resize",
+            panelID: "panel-second-resize",
+            carrierPanelID: "carrier-second-resize",
+            socket: .path(fixture.socketPath),
+            sessionID: target.sessionID,
+            sessionName: "pty-exact",
+            windowID: target.windowID,
+            windowIndex: 0,
+            activePaneID: target.paneID,
+            cwd: nil,
+            currentCommand: "second-resize-footer"
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-second-resize",
+            generation: 13
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: TmuxInteractiveAttachProver(
+                tmuxExecutablePath: tmuxPath
+            ),
+            clientRefreshRequester: TmuxInteractiveClientRefreshRequester(
+                tmuxExecutablePath: tmuxPath
+            ),
+            authoritativeStartQuiescenceNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionAuthoritativeStartQuiescenceNanoseconds,
+            clientRefreshTimeoutNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionClientRefreshTimeoutNanoseconds
+        )
+        var didCloseOwner = false
+        defer {
+            if didCloseOwner == false {
+                try? owner.close()
+            }
+        }
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: TmuxInteractiveSubscribe(
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    binding: binding,
+                    viewport: TmuxInteractiveViewport(columns: 80, rows: 24)
+                ),
+                route: route,
+                tmuxExecutablePath: tmuxPath
+            )
+        )
+
+        let verifiedAttach = try XCTUnwrap(
+            waitForSessionOwnerProof(owner: owner, timeout: 3)
+        )
+        XCTAssertTrue(
+            fixture.waitForClientSize(
+                processID: verifiedAttach.childProcessID,
+                columns: 80,
+                rows: 24,
+                timeout: 2
+            )
+        )
+        let start = try XCTUnwrap(
+            waitForSessionOwnerStart(owner: owner, timeout: 3)
+        )
+        XCTAssertTrue(
+            String(decoding: start.initialBytes, as: UTF8.self)
+                .contains("gpt-5.6-sol xhigh")
+        )
+        XCTAssertEqual(
+            Array(try fixture.capturePaneLines(paneID: target.paneID).suffix(3)),
+            [
+                "> Summarize recent commits",
+                "",
+                "gpt-5.6-sol xhigh",
+            ]
+        )
+
+        try owner.close()
+        didCloseOwner = true
+        XCTAssertTrue(fixture.waitForClientCount(1, timeout: 2))
+        XCTAssertTrue(
+            fixture.waitForWindowGeometry(
+                windowID: target.windowID,
+                expected: "132|36",
+                timeout: 2
+            )
+        )
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 1)
+        XCTAssertTrue(
+            try fixture.capturePaneLines(paneID: target.paneID)
+                .contains("gpt-5.6-sol xhigh")
+        )
+
+        try controller.close(
+            masterFileDescriptor: baselineHandle.masterFileDescriptor
+        )
+        didCloseBaseline = true
+        let baselineExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: baselineHandle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(baselineExit)
+        didReapBaseline = baselineExit != nil
+    }
+
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -1534,6 +1691,125 @@ private final class InteractivePTYTmuxFixture {
             FileManager.default.fileExists(atPath: readyURL.path)
         }) else {
             throw FixtureError.invalidRecord("attach resize footer fixture did not become ready")
+        }
+        return InteractivePTYTmuxTarget(
+            sessionID: String(targetFields[0]),
+            windowID: String(targetFields[1]),
+            paneID: String(targetFields[2])
+        )
+    }
+
+    func startWithSecondResizeFooterTargetWindow() throws -> InteractivePTYTmuxTarget {
+        let sourceURL = rootURL.appendingPathComponent("second-resize-footer.c")
+        let executableURL = rootURL.appendingPathComponent("second-resize-footer")
+        let readyURL = rootURL.appendingPathComponent("second-resize-footer-ready")
+        let source = """
+        #include <fcntl.h>
+        #include <signal.h>
+        #include <stddef.h>
+        #include <sys/ioctl.h>
+        #include <termios.h>
+        #include <unistd.h>
+
+        static volatile sig_atomic_t redraw_requested = 0;
+        static const char collapsed[] =
+            "\\033[21;1H\\033[2K\\033[22;1H\\033[2K\\033[23;1H\\033[2K> Summarize recent commits";
+        static const char complete[] =
+            "\\033[21;1H\\033[2K> Summarize recent commits\\033[22;1H\\033[2K\\033[23;1H\\033[2Kgpt-5.6-sol xhigh";
+
+        static void handle_winch(int signal_number) {
+            (void)signal_number;
+            redraw_requested = 1;
+        }
+
+        int main(void) {
+            struct sigaction action = {0};
+            action.sa_handler = handle_winch;
+            sigemptyset(&action.sa_mask);
+            if (sigaction(SIGWINCH, &action, NULL) != 0) {
+                return 2;
+            }
+
+            sigset_t blocked;
+            sigset_t prior;
+            sigemptyset(&blocked);
+            sigaddset(&blocked, SIGWINCH);
+            if (sigprocmask(SIG_BLOCK, &blocked, &prior) != 0) {
+                return 3;
+            }
+            struct winsize last_size = {0};
+            if (ioctl(STDIN_FILENO, TIOCGWINSZ, &last_size) != 0) {
+                return 4;
+            }
+            (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
+            int ready_fd = open("\(readyURL.path)", O_CREAT | O_WRONLY, 0600);
+            if (ready_fd < 0 || close(ready_fd) != 0) {
+                return 6;
+            }
+
+            int changed_size_count = 0;
+            for (;;) {
+                while (redraw_requested == 0) {
+                    (void)sigsuspend(&prior);
+                }
+                redraw_requested = 0;
+                struct winsize current_size = {0};
+                if (ioctl(STDIN_FILENO, TIOCGWINSZ, &current_size) != 0) {
+                    return 5;
+                }
+                if (current_size.ws_col != last_size.ws_col ||
+                    current_size.ws_row != last_size.ws_row) {
+                    last_size = current_size;
+                    changed_size_count++;
+                    const char *frame = changed_size_count >= 2 ? complete : collapsed;
+                    size_t frame_size = changed_size_count >= 2
+                        ? sizeof(complete) - 1
+                        : sizeof(collapsed) - 1;
+                    (void)write(STDOUT_FILENO, frame, frame_size);
+                }
+            }
+        }
+        """
+        try Data(source.utf8).write(to: sourceURL, options: .atomic)
+        let compileArguments = [
+            "-std=c11", "-Wall", "-Wextra", "-Werror",
+            sourceURL.path,
+            "-o", executableURL.path,
+        ]
+        guard let compileResult = BoundedProcessRunner.run(
+            executablePath: "/usr/bin/clang",
+            arguments: compileArguments,
+            timeout: 3,
+            circuitBreakerCooldown: 0
+        ) else {
+            throw FixtureError.commandTimedOut(arguments: compileArguments)
+        }
+        guard compileResult.terminationStatus == 0 else {
+            throw FixtureError.commandFailed(
+                arguments: compileArguments,
+                status: compileResult.terminationStatus,
+                stderr: String(decoding: compileResult.standardError, as: UTF8.self)
+            )
+        }
+        let target = try run([
+            "-f", "/dev/null",
+            "new-session", "-d",
+            "-P", "-F", "#{session_id}|#{window_id}|#{pane_id}",
+            "-s", "pty-exact",
+            "-n", "phone-target",
+            "-x", "132",
+            "-y", "37",
+            executableURL.path,
+        ])
+        hasStartedServer = true
+        let targetFields = target.split(separator: "|", omittingEmptySubsequences: false)
+        guard targetFields.count == 3 else {
+            throw FixtureError.invalidRecord(target)
+        }
+        guard waitUntil(timeout: 2, predicate: {
+            FileManager.default.fileExists(atPath: readyURL.path)
+        }) else {
+            throw FixtureError.invalidRecord("second resize footer fixture did not become ready")
         }
         return InteractivePTYTmuxTarget(
             sessionID: String(targetFields[0]),
