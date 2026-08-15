@@ -4,6 +4,48 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractiveWireCodecTests: XCTestCase {
+    func testSubscribeStartupModeDefaultsLegacyAndAcceptsOnlyKnownStreamingMode() throws {
+        let common: [String: JSONValue] = [
+            "workspace_id": .string("workspace-1"),
+            "panel_id": .string("ordinary-tmux:path:$7:@11"),
+            "subscription_id": .string("interactive-7"),
+            "generation": .number(19),
+            "cols": .number(80),
+            "rows": .number(24),
+        ]
+        func decodeSubscribe(
+            mode: String?
+        ) throws -> TmuxInteractiveSubscribe {
+            var params = common
+            if let mode {
+                params["startup_mode"] = .string(mode)
+            }
+            guard case .subscribe(let subscribe) = try TmuxInteractiveWireCodec.decode(
+                BridgeRequest(
+                    id: "subscribe",
+                    action: TmuxInteractiveProtocolV1.subscribeAction,
+                    params: params
+                )
+            ) else {
+                throw TmuxInteractiveWireCodecError.invalidField("action")
+            }
+            return subscribe
+        }
+
+        XCTAssertEqual(try decodeSubscribe(mode: nil).startupMode, .legacy)
+        XCTAssertEqual(try decodeSubscribe(mode: "legacy").startupMode, .legacy)
+        XCTAssertEqual(
+            try decodeSubscribe(mode: "streaming_replies_v1").startupMode,
+            .streamingReplies
+        )
+        XCTAssertThrowsError(try decodeSubscribe(mode: "future_mode")) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractiveWireCodecError,
+                .invalidField("startup_mode")
+            )
+        }
+    }
+
     func testStreamingStartupEventsEncodeExactTypedEnvelopesWhileDormant() throws {
         let binding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-7",

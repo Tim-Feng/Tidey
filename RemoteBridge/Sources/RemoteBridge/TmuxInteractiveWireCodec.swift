@@ -134,7 +134,8 @@ enum TmuxInteractiveWireCodec {
                     workspaceID: try requiredString("workspace_id", in: params),
                     panelID: try requiredString("panel_id", in: params),
                     binding: try binding(in: params),
-                    viewport: try viewport(in: params)
+                    viewport: try viewport(in: params),
+                    startupMode: try startupMode(in: params)
                 )
             )
         case TmuxInteractiveProtocolV1.inputAction:
@@ -286,6 +287,19 @@ enum TmuxInteractiveWireCodec {
         let columns = try positiveUInt16Field("cols", in: params)
         let rows = try positiveUInt16Field("rows", in: params)
         return TmuxInteractiveViewport(columns: columns, rows: rows)
+    }
+
+    private static func startupMode(
+        in params: [String: JSONValue]
+    ) throws -> TmuxInteractiveStartupMode {
+        guard let value = params["startup_mode"] else {
+            return .legacy
+        }
+        guard let rawValue = value.stringValue,
+              let mode = TmuxInteractiveStartupMode(rawValue: rawValue) else {
+            throw TmuxInteractiveWireCodecError.invalidField("startup_mode")
+        }
+        return mode
     }
 
     private static func positiveUInt16Field(
