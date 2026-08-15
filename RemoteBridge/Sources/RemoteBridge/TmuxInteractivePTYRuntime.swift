@@ -83,7 +83,11 @@ struct TmuxInteractivePTYRuntime: Sendable {
                             .productionAuthoritativeStartQuiescenceNanoseconds,
                     clientRefreshTimeoutNanoseconds:
                         TmuxInteractivePTYSessionOwner
-                            .productionClientRefreshTimeoutNanoseconds
+                            .productionClientRefreshTimeoutNanoseconds,
+                    requiresVerificationClientRefresh: true,
+                    verificationClientRefreshQuiescenceNanoseconds:
+                        TmuxInteractivePTYSessionOwner
+                            .productionVerificationClientRefreshQuiescenceNanoseconds
                 )
                 try owner.begin(request)
                 return TmuxInteractivePTYConnectionSession(

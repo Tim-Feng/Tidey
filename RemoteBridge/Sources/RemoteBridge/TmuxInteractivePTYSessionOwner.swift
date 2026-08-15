@@ -42,6 +42,8 @@ enum TmuxInteractivePTYSessionLivePollResult: Equatable, Sendable {
 final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     static let productionAuthoritativeStartQuiescenceNanoseconds: UInt64 =
         150_000_000
+    static let productionVerificationClientRefreshQuiescenceNanoseconds: UInt64 =
+        500_000_000
     static let productionClientRefreshTimeoutNanoseconds: UInt64 =
         2_000_000_000
 
@@ -55,6 +57,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var authoritativeStartCollectionBeganAtUptimeNanoseconds: UInt64?
         var didRequestClientRefresh = false
+        var didReceiveClientRefreshOutput = false
         var clientRefreshRequestedAtUptimeNanoseconds: UInt64?
         var authoritativeStartBytes = Data()
         var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
@@ -89,6 +92,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let authoritativeStartQuiescenceNanoseconds: UInt64
     private let clientRefreshTimeoutNanoseconds: UInt64
     private let requiresVerificationClientRefresh: Bool
+    private let verificationClientRefreshQuiescenceNanoseconds: UInt64
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
@@ -104,6 +108,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
         clientRefreshTimeoutNanoseconds: UInt64 = .max,
         requiresVerificationClientRefresh: Bool = false,
+        verificationClientRefreshQuiescenceNanoseconds: UInt64? = nil,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
@@ -119,6 +124,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.clientRefreshTimeoutNanoseconds = clientRefreshTimeoutNanoseconds
         self.requiresVerificationClientRefresh =
             requiresVerificationClientRefresh
+        self.verificationClientRefreshQuiescenceNanoseconds =
+            verificationClientRefreshQuiescenceNanoseconds
+                ?? authoritativeStartQuiescenceNanoseconds
         self.uptimeNanoseconds = uptimeNanoseconds
     }
 
@@ -291,6 +299,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                                 )
                         }
                         resources.authoritativeStartBytes.append(bytes)
+                        if resources.didRequestClientRefresh {
+                            resources.didReceiveClientRefreshOutput = true
+                        }
                         resources.lastAuthoritativeOutputUptimeNanoseconds =
                             uptimeNanoseconds()
                         receivedBytesThisPoll = true
@@ -344,10 +355,43 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             return nil
                         }
                         let currentUptimeNanoseconds = uptimeNanoseconds()
+                        let requiredQuiescenceNanoseconds =
+                            resources.didRequestClientRefresh
+                                ? verificationClientRefreshQuiescenceNanoseconds
+                                : authoritativeStartQuiescenceNanoseconds
                         guard currentUptimeNanoseconds >= lastOutputUptimeNanoseconds,
                               currentUptimeNanoseconds - lastOutputUptimeNanoseconds >=
-                                authoritativeStartQuiescenceNanoseconds else {
+                                requiredQuiescenceNanoseconds else {
                             return nil
+                        }
+                        if requiresVerificationClientRefresh,
+                           resources.didRequestClientRefresh == false {
+                            try clientRefreshRequester.requestRefresh(
+                                TmuxInteractiveClientRefreshRequest(
+                                    socket: resources.request.route.socket,
+                                    clientTTY: verifiedAttach.clientTTY
+                                )
+                            )
+                            resources.didRequestClientRefresh = true
+                            resources.clientRefreshRequestedAtUptimeNanoseconds =
+                                currentUptimeNanoseconds
+                            return nil
+                        }
+                        if requiresVerificationClientRefresh,
+                           resources.didReceiveClientRefreshOutput == false {
+                            guard let requestedAtUptimeNanoseconds =
+                                    resources.clientRefreshRequestedAtUptimeNanoseconds else {
+                                return nil
+                            }
+                            guard currentUptimeNanoseconds >=
+                                    requestedAtUptimeNanoseconds,
+                                  currentUptimeNanoseconds -
+                                    requestedAtUptimeNanoseconds >=
+                                    clientRefreshTimeoutNanoseconds else {
+                                return nil
+                            }
+                            throw TmuxInteractivePTYSessionOwnerError
+                                .authoritativeStartTimedOut
                         }
                         let subscribe = resources.request.subscribe
                         let start = TmuxInteractiveAuthoritativeStart(

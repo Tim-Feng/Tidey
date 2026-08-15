@@ -550,7 +550,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerPublishesQuietProvedDirectAttachPrefixWithoutRedundantRefresh() throws {
+    func testOwnerRequiresExactClientRefreshAfterQuietDirectAttachPrefix() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -559,9 +559,11 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             "\u{1B}[?1049h\u{1B}[21;1H> Summarize recent commits\u{1B}[23;1Hgpt-5.6-sol xhigh"
                 .utf8
         )
+        let verifiedRefresh = Data(
+            "\u{1B}[2J\u{1B}[Hverified exact-client screen".utf8
+        )
         controller.readResults = [
             .bytes(attachPrefix),
-            .wouldBlock,
             .wouldBlock,
         ]
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
@@ -582,12 +584,17 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let quiescenceNanoseconds =
             TmuxInteractivePTYSessionOwner
                 .productionAuthoritativeStartQuiescenceNanoseconds
+        let verificationQuiescenceNanoseconds = quiescenceNanoseconds * 2
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: store,
             controller: controller,
             attachProver: prover,
             clientRefreshRequester: clientRefreshRequester,
             authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
+            clientRefreshTimeoutNanoseconds: 1_000_000_000,
+            requiresVerificationClientRefresh: true,
+            verificationClientRefreshQuiescenceNanoseconds:
+                verificationQuiescenceNanoseconds,
             uptimeNanoseconds: { uptime.now() }
         )
         try owner.begin(request)
@@ -596,10 +603,29 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertNil(try owner.pollAuthoritativeStart())
         uptime.advance(by: quiescenceNanoseconds)
 
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(
+            clientRefreshRequester.requests,
+            [
+                TmuxInteractiveClientRefreshRequest(
+                    socket: route.socket,
+                    clientTTY: verifiedAttach.clientTTY
+                ),
+            ]
+        )
+        XCTAssertEqual(owner.lifecycleState, .redrawing)
+
+        controller.readResults.append(.bytes(verifiedRefresh))
+        controller.readResults.append(.wouldBlock)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        uptime.advance(by: verificationQuiescenceNanoseconds - 1)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        uptime.advance(by: 1)
+
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertNil(start.bootstrapPhase)
-        XCTAssertEqual(start.initialBytes, attachPrefix)
-        XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
+        XCTAssertEqual(start.initialBytes, attachPrefix + verifiedRefresh)
+        XCTAssertEqual(clientRefreshRequester.requests.count, 1)
         XCTAssertEqual(owner.lifecycleState, .live)
         XCTAssertTrue(controller.resizedSizes.isEmpty)
         try owner.close()
@@ -701,6 +727,63 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(clientRefreshRequester.requests.count, 1)
         XCTAssertEqual(owner.lifecycleState, .closed)
         XCTAssertEqual(controller.closedFileDescriptors, [17])
+    }
+
+    func testOwnerClosesWhenRequiredVerificationRefreshIsSilentAfterAttachPrefix() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let controller = ControllerProbe()
+        controller.readResults = [
+            .bytes(Data("cached attach prefix".utf8)),
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let clientRefreshRequester = ClientRefreshRequesterProbe()
+        let uptime = UptimeProbe()
+        let quiescenceNanoseconds: UInt64 = 100
+        let timeoutNanoseconds: UInt64 = 200
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover,
+            clientRefreshRequester: clientRefreshRequester,
+            authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
+            clientRefreshTimeoutNanoseconds: timeoutNanoseconds,
+            requiresVerificationClientRefresh: true,
+            verificationClientRefreshQuiescenceNanoseconds:
+                quiescenceNanoseconds,
+            uptimeNanoseconds: { uptime.now() }
+        )
+        try owner.begin(makeRequest(route: route))
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        uptime.advance(by: quiescenceNanoseconds)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(clientRefreshRequester.requests.count, 1)
+
+        uptime.advance(by: timeoutNanoseconds)
+        XCTAssertThrowsError(try owner.pollAuthoritativeStart()) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .authoritativeStartTimedOut
+            )
+        }
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closedFileDescriptors, [17])
+        XCTAssertEqual(controller.reapCalls.count, 1)
     }
 
     func testOwnerWaitsForContinuousAuthoritativeRedrawQuiescenceBeforePublishingStart() throws {

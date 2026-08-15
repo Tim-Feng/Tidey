@@ -918,7 +918,11 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                     .productionAuthoritativeStartQuiescenceNanoseconds,
             clientRefreshTimeoutNanoseconds:
                 TmuxInteractivePTYSessionOwner
-                    .productionClientRefreshTimeoutNanoseconds
+                    .productionClientRefreshTimeoutNanoseconds,
+            requiresVerificationClientRefresh: true,
+            verificationClientRefreshQuiescenceNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionVerificationClientRefreshQuiescenceNanoseconds
         )
         var didCloseOwner = false
         defer {
@@ -1085,7 +1089,11 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                         .productionAuthoritativeStartQuiescenceNanoseconds,
                 clientRefreshTimeoutNanoseconds:
                     TmuxInteractivePTYSessionOwner
-                        .productionClientRefreshTimeoutNanoseconds
+                        .productionClientRefreshTimeoutNanoseconds,
+                requiresVerificationClientRefresh: true,
+                verificationClientRefreshQuiescenceNanoseconds:
+                    TmuxInteractivePTYSessionOwner
+                        .productionVerificationClientRefreshQuiescenceNanoseconds
             )
             var didCloseOwner = false
             defer {
@@ -1123,11 +1131,30 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 TmuxInteractiveViewport(columns: 50, rows: 45),
                 "wrong final viewport on generation \(generation)"
             )
+            let startText = String(decoding: start.initialBytes, as: UTF8.self)
+            let lastPrompt = startText.range(
+                of: "> Summarize recent commits",
+                options: .backwards
+            )
+            let lastFooter = startText.range(
+                of: "gpt-5.6-sol xhigh",
+                options: .backwards
+            )
             XCTAssertTrue(
-                String(decoding: start.initialBytes, as: UTF8.self)
-                    .contains("gpt-5.6-sol xhigh"),
-                "final footer absent on generation \(generation): "
+                lastPrompt.map { prompt in
+                    lastFooter.map { footer in prompt.lowerBound < footer.lowerBound }
+                        ?? false
+                } ?? false,
+                "last final-size frame lacks footer on generation \(generation): "
                     + start.initialBytes.base64EncodedString()
+            )
+            XCTAssertTrue(
+                fixture.waitForWindowGeometry(
+                    windowID: target.windowID,
+                    expected: "50|44",
+                    timeout: 2
+                ),
+                "phone-client geometry was not active on generation \(generation)"
             )
             XCTAssertEqual(
                 Array(try fixture.capturePaneLines(paneID: target.paneID).suffix(3)),
@@ -1149,6 +1176,201 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 fixture.waitForWindowGeometry(
                     windowID: target.windowID,
                     expected: "50|44",
+                    timeout: 2
+                ),
+                "persistent-client geometry was not restored on generation \(generation)"
+            )
+        }
+
+        try controller.close(
+            masterFileDescriptor: persistentHandle.masterFileDescriptor
+        )
+        didClosePersistent = true
+        let persistentExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: persistentHandle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(persistentExit)
+        didReapPersistent = persistentExit != nil
+    }
+
+    func testSessionOwnerRepeatedAttachFromDifferentSizeClientPublishesEveryFinalFooter() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/clang") else {
+            throw XCTSkip("the isolated viewport-sensitive TUI fixture requires clang")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithViewportSensitiveFooterTargetWindow(
+            redrawDelayMicroseconds: 250_000
+        )
+        let controller = TmuxInteractivePTYController()
+        let persistentHandle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: TmuxInteractivePTYSize(columns: 132, rows: 37)
+            )
+        )
+        var didClosePersistent = false
+        var didReapPersistent = false
+        defer {
+            if didClosePersistent == false {
+                try? controller.close(
+                    masterFileDescriptor: persistentHandle.masterFileDescriptor
+                )
+            }
+            if didReapPersistent == false {
+                reapForCleanup(
+                    controller: controller,
+                    childProcessID: persistentHandle.childProcessID
+                )
+            }
+        }
+        _ = try XCTUnwrap(
+            fixture.waitForClient(
+                processID: persistentHandle.childProcessID,
+                timeout: 3
+            )
+        )
+        try drainUntilQuiet(
+            controller: controller,
+            masterFileDescriptor: persistentHandle.masterFileDescriptor,
+            quietPeriod: 0.1,
+            timeout: 2
+        )
+        XCTAssertTrue(
+            fixture.waitForWindowGeometry(
+                windowID: target.windowID,
+                expected: "132|36",
+                timeout: 2
+            )
+        )
+
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-repeated-different-size",
+            panelID: "panel-repeated-different-size",
+            carrierPanelID: "carrier-repeated-different-size",
+            socket: .path(fixture.socketPath),
+            sessionID: target.sessionID,
+            sessionName: "pty-exact",
+            windowID: target.windowID,
+            windowIndex: 0,
+            activePaneID: target.paneID,
+            cwd: nil,
+            currentCommand: "viewport-sensitive-footer"
+        )
+        let store = OrdinaryTmuxInputSubmissionStore()
+
+        for generation in 1...7 {
+            let binding = TmuxInteractiveSubscriptionBinding(
+                subscriptionID: "interactive-repeated-different-size-\(generation)",
+                generation: UInt64(generation)
+            )
+            let owner = TmuxInteractivePTYSessionOwner(
+                admissionStore: store,
+                controller: controller,
+                attachProver: TmuxInteractiveAttachProver(
+                    tmuxExecutablePath: tmuxPath
+                ),
+                clientRefreshRequester: TmuxInteractiveClientRefreshRequester(
+                    tmuxExecutablePath: tmuxPath
+                ),
+                authoritativeStartQuiescenceNanoseconds:
+                    TmuxInteractivePTYSessionOwner
+                        .productionAuthoritativeStartQuiescenceNanoseconds,
+                clientRefreshTimeoutNanoseconds:
+                    TmuxInteractivePTYSessionOwner
+                        .productionClientRefreshTimeoutNanoseconds,
+                requiresVerificationClientRefresh: true,
+                verificationClientRefreshQuiescenceNanoseconds:
+                    TmuxInteractivePTYSessionOwner
+                        .productionVerificationClientRefreshQuiescenceNanoseconds
+            )
+            var didCloseOwner = false
+            defer {
+                if didCloseOwner == false {
+                    try? owner.close()
+                }
+            }
+            try owner.begin(
+                TmuxInteractivePTYSessionStartRequest(
+                    subscribe: TmuxInteractiveSubscribe(
+                        workspaceID: route.workspaceID,
+                        panelID: route.panelID,
+                        binding: binding,
+                        viewport: TmuxInteractiveViewport(columns: 50, rows: 45)
+                    ),
+                    route: route,
+                    tmuxExecutablePath: tmuxPath
+                )
+            )
+
+            _ = try XCTUnwrap(
+                waitForSessionOwnerProof(owner: owner, timeout: 3),
+                "attach proof missing on generation \(generation)"
+            )
+            let start = try XCTUnwrap(
+                waitForSessionOwnerStart(owner: owner, timeout: 3),
+                "authoritative start missing on generation \(generation)"
+            )
+            XCTAssertNil(start.bootstrapPhase)
+            XCTAssertEqual(
+                start.viewport,
+                TmuxInteractiveViewport(columns: 50, rows: 45),
+                "wrong final viewport on generation \(generation)"
+            )
+            let startText = String(decoding: start.initialBytes, as: UTF8.self)
+            let lastPrompt = startText.range(
+                of: "> Summarize recent commits",
+                options: .backwards
+            )
+            let lastFooter = startText.range(
+                of: "gpt-5.6-sol xhigh",
+                options: .backwards
+            )
+            XCTAssertTrue(
+                lastPrompt.map { prompt in
+                    lastFooter.map { footer in prompt.lowerBound < footer.lowerBound }
+                        ?? false
+                } ?? false,
+                "last final-size frame lacks footer on generation \(generation): "
+                    + start.initialBytes.base64EncodedString()
+            )
+            XCTAssertTrue(
+                fixture.waitForWindowGeometry(
+                    windowID: target.windowID,
+                    expected: "50|44",
+                    timeout: 2
+                ),
+                "phone-client geometry was not active on generation \(generation)"
+            )
+            XCTAssertEqual(
+                Array(try fixture.capturePaneLines(paneID: target.paneID).suffix(3)),
+                [
+                    "> Summarize recent commits",
+                    "",
+                    "gpt-5.6-sol xhigh",
+                ],
+                "pane footer incomplete on generation \(generation)"
+            )
+
+            try owner.close()
+            didCloseOwner = true
+            XCTAssertTrue(
+                fixture.waitForClientCount(1, timeout: 2),
+                "prior client did not fully detach on generation \(generation)"
+            )
+            XCTAssertTrue(
+                fixture.waitForWindowGeometry(
+                    windowID: target.windowID,
+                    expected: "132|36",
                     timeout: 2
                 ),
                 "persistent-client geometry was not restored on generation \(generation)"
@@ -1922,7 +2144,9 @@ private final class InteractivePTYTmuxFixture {
         )
     }
 
-    func startWithViewportSensitiveFooterTargetWindow() throws -> InteractivePTYTmuxTarget {
+    func startWithViewportSensitiveFooterTargetWindow(
+        redrawDelayMicroseconds: UInt32 = 0
+    ) throws -> InteractivePTYTmuxTarget {
         let sourceURL = rootURL.appendingPathComponent("viewport-sensitive-footer.c")
         let executableURL = rootURL.appendingPathComponent("viewport-sensitive-footer")
         let readyURL = rootURL.appendingPathComponent("viewport-sensitive-footer-ready")
@@ -1986,6 +2210,7 @@ private final class InteractivePTYTmuxFixture {
                     (void)sigsuspend(&prior);
                 }
                 redraw_requested = 0;
+                (void)usleep(\(redrawDelayMicroseconds));
                 if (draw_for_current_size() != 0) {
                     return 5;
                 }
