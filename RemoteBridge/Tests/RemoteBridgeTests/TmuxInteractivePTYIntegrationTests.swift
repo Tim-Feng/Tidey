@@ -919,10 +919,10 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             clientRefreshTimeoutNanoseconds:
                 TmuxInteractivePTYSessionOwner
                     .productionClientRefreshTimeoutNanoseconds,
-            requiresVerificationClientRefresh: true,
-            verificationClientRefreshQuiescenceNanoseconds:
+            requiresPostRefreshObservation: true,
+            postRefreshQuiescenceNanoseconds:
                 TmuxInteractivePTYSessionOwner
-                    .productionVerificationClientRefreshQuiescenceNanoseconds
+                    .productionPostRefreshQuiescenceNanoseconds
         )
         var didCloseOwner = false
         defer {
@@ -1090,10 +1090,10 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 clientRefreshTimeoutNanoseconds:
                     TmuxInteractivePTYSessionOwner
                         .productionClientRefreshTimeoutNanoseconds,
-                requiresVerificationClientRefresh: true,
-                verificationClientRefreshQuiescenceNanoseconds:
+                requiresPostRefreshObservation: true,
+                postRefreshQuiescenceNanoseconds:
                     TmuxInteractivePTYSessionOwner
-                        .productionVerificationClientRefreshQuiescenceNanoseconds
+                        .productionPostRefreshQuiescenceNanoseconds
             )
             var didCloseOwner = false
             defer {
@@ -1288,10 +1288,10 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 clientRefreshTimeoutNanoseconds:
                     TmuxInteractivePTYSessionOwner
                         .productionClientRefreshTimeoutNanoseconds,
-                requiresVerificationClientRefresh: true,
-                verificationClientRefreshQuiescenceNanoseconds:
+                requiresPostRefreshObservation: true,
+                postRefreshQuiescenceNanoseconds:
                     TmuxInteractivePTYSessionOwner
-                        .productionVerificationClientRefreshQuiescenceNanoseconds
+                        .productionPostRefreshQuiescenceNanoseconds
             )
             var didCloseOwner = false
             defer {

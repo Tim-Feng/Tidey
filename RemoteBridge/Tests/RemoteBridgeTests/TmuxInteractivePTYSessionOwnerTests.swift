@@ -559,7 +559,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             "\u{1B}[?1049h\u{1B}[21;1H> Summarize recent commits\u{1B}[23;1Hgpt-5.6-sol xhigh"
                 .utf8
         )
-        let verifiedRefresh = Data(
+        let postRefreshOutput = Data(
             "\u{1B}[2J\u{1B}[Hverified exact-client screen".utf8
         )
         controller.readResults = [
@@ -584,7 +584,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let quiescenceNanoseconds =
             TmuxInteractivePTYSessionOwner
                 .productionAuthoritativeStartQuiescenceNanoseconds
-        let verificationQuiescenceNanoseconds = quiescenceNanoseconds * 2
+        let postRefreshQuiescenceNanoseconds = quiescenceNanoseconds * 2
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: store,
             controller: controller,
@@ -592,9 +592,9 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             clientRefreshRequester: clientRefreshRequester,
             authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
             clientRefreshTimeoutNanoseconds: 1_000_000_000,
-            requiresVerificationClientRefresh: true,
-            verificationClientRefreshQuiescenceNanoseconds:
-                verificationQuiescenceNanoseconds,
+            requiresPostRefreshObservation: true,
+            postRefreshQuiescenceNanoseconds:
+                postRefreshQuiescenceNanoseconds,
             uptimeNanoseconds: { uptime.now() }
         )
         try owner.begin(request)
@@ -615,16 +615,16 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         XCTAssertEqual(owner.lifecycleState, .redrawing)
 
-        controller.readResults.append(.bytes(verifiedRefresh))
+        controller.readResults.append(.bytes(postRefreshOutput))
         controller.readResults.append(.wouldBlock)
         XCTAssertNil(try owner.pollAuthoritativeStart())
-        uptime.advance(by: verificationQuiescenceNanoseconds - 1)
+        uptime.advance(by: postRefreshQuiescenceNanoseconds - 1)
         XCTAssertNil(try owner.pollAuthoritativeStart())
         uptime.advance(by: 1)
 
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertNil(start.bootstrapPhase)
-        XCTAssertEqual(start.initialBytes, attachPrefix + verifiedRefresh)
+        XCTAssertEqual(start.initialBytes, attachPrefix + postRefreshOutput)
         XCTAssertEqual(clientRefreshRequester.requests.count, 1)
         XCTAssertEqual(owner.lifecycleState, .live)
         XCTAssertTrue(controller.resizedSizes.isEmpty)
@@ -761,8 +761,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             clientRefreshRequester: clientRefreshRequester,
             authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
             clientRefreshTimeoutNanoseconds: timeoutNanoseconds,
-            requiresVerificationClientRefresh: true,
-            verificationClientRefreshQuiescenceNanoseconds:
+            requiresPostRefreshObservation: true,
+            postRefreshQuiescenceNanoseconds:
                 quiescenceNanoseconds,
             uptimeNanoseconds: { uptime.now() }
         )
