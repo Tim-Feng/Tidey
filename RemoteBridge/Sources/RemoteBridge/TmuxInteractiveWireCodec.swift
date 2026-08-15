@@ -61,6 +61,50 @@ struct TmuxInteractiveOutputEnvelope: Codable, Equatable, Sendable {
     }
 }
 
+struct TmuxInteractiveAttachedEnvelope: Codable, Equatable, Sendable {
+    let type: String
+    let subscriptionID: String
+    let generation: UInt64
+    let workspaceID: String
+    let panelID: String
+    let sessionID: String
+    let windowID: String
+    let paneID: String
+    let columns: Int
+    let rows: Int
+    let dataBase64: String
+    let sequence: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case subscriptionID = "subscription_id"
+        case generation
+        case workspaceID = "workspace_id"
+        case panelID = "panel_id"
+        case sessionID = "session_id"
+        case windowID = "window_id"
+        case paneID = "pane_id"
+        case columns = "cols"
+        case rows
+        case dataBase64 = "data_base64"
+        case sequence
+    }
+}
+
+struct TmuxInteractiveReadyEnvelope: Codable, Equatable, Sendable {
+    let type: String
+    let subscriptionID: String
+    let generation: UInt64
+    let sequence: UInt64
+
+    enum CodingKeys: String, CodingKey {
+        case type
+        case subscriptionID = "subscription_id"
+        case generation
+        case sequence
+    }
+}
+
 struct TmuxInteractiveStateEnvelope: Codable, Equatable, Sendable {
     let type: String
     let subscriptionID: String
@@ -153,6 +197,37 @@ enum TmuxInteractiveWireCodec {
             generation: output.binding.generation,
             sequence: output.sequence,
             dataBase64: output.bytes.base64EncodedString()
+        )
+    }
+
+    static func envelope(
+        for attached: TmuxInteractiveAttached
+    ) -> TmuxInteractiveAttachedEnvelope {
+        let proof = attached.attachProof
+        return TmuxInteractiveAttachedEnvelope(
+            type: TmuxInteractiveProtocolV1.attachedEventType,
+            subscriptionID: attached.binding.subscriptionID,
+            generation: attached.binding.generation,
+            workspaceID: proof.workspaceID,
+            panelID: proof.panelID,
+            sessionID: proof.sessionID,
+            windowID: proof.windowID,
+            paneID: proof.paneID,
+            columns: attached.viewport.columns,
+            rows: attached.viewport.rows,
+            dataBase64: attached.initialBytes.base64EncodedString(),
+            sequence: attached.sequence
+        )
+    }
+
+    static func envelope(
+        for ready: TmuxInteractiveReady
+    ) -> TmuxInteractiveReadyEnvelope {
+        TmuxInteractiveReadyEnvelope(
+            type: TmuxInteractiveProtocolV1.readyEventType,
+            subscriptionID: ready.binding.subscriptionID,
+            generation: ready.binding.generation,
+            sequence: ready.sequence
         )
     }
 

@@ -4,6 +4,69 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractiveWireCodecTests: XCTestCase {
+    func testStreamingStartupEventsEncodeExactTypedEnvelopesWhileDormant() throws {
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-7",
+            generation: 19
+        )
+        let proof = TmuxInteractiveAttachProof(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:path:$7:@11",
+            sessionID: "$7",
+            windowID: "@11",
+            paneID: "%19"
+        )
+        let initialBytes = Data([0x1b, 0x5b, 0x3e, 0x63])
+        let attached = TmuxInteractiveAttached(
+            binding: binding,
+            attachProof: proof,
+            viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
+            initialBytes: initialBytes,
+            sequence: 1
+        )
+        let ready = TmuxInteractiveReady(binding: binding, sequence: 3)
+        let attachedEnvelope = TmuxInteractiveWireCodec.envelope(for: attached)
+        let readyEnvelope = TmuxInteractiveWireCodec.envelope(for: ready)
+        let encoder = JSONEncoder()
+        let decoder = JSONDecoder()
+
+        XCTAssertEqual(
+            try decoder.decode(
+                TmuxInteractiveAttachedEnvelope.self,
+                from: encoder.encode(attachedEnvelope)
+            ),
+            attachedEnvelope
+        )
+        XCTAssertEqual(
+            try decoder.decode(
+                TmuxInteractiveReadyEnvelope.self,
+                from: encoder.encode(readyEnvelope)
+            ),
+            readyEnvelope
+        )
+        let attachedObject = try XCTUnwrap(
+            JSONSerialization.jsonObject(
+                with: encoder.encode(attachedEnvelope)
+            ) as? [String: Any]
+        )
+        XCTAssertEqual(attachedObject["type"] as? String, "tmux_interactive_attached")
+        XCTAssertEqual(attachedObject["subscription_id"] as? String, binding.subscriptionID)
+        XCTAssertEqual(attachedObject["generation"] as? Int, Int(binding.generation))
+        XCTAssertEqual(attachedObject["workspace_id"] as? String, proof.workspaceID)
+        XCTAssertEqual(attachedObject["panel_id"] as? String, proof.panelID)
+        XCTAssertEqual(attachedObject["session_id"] as? String, proof.sessionID)
+        XCTAssertEqual(attachedObject["window_id"] as? String, proof.windowID)
+        XCTAssertEqual(attachedObject["pane_id"] as? String, proof.paneID)
+        XCTAssertEqual(attachedObject["cols"] as? Int, 80)
+        XCTAssertEqual(attachedObject["rows"] as? Int, 24)
+        XCTAssertEqual(attachedObject["data_base64"] as? String, initialBytes.base64EncodedString())
+        XCTAssertEqual(attachedObject["sequence"] as? Int, 1)
+        XCTAssertEqual(readyEnvelope.type, "tmux_interactive_ready")
+        XCTAssertEqual(readyEnvelope.subscriptionID, binding.subscriptionID)
+        XCTAssertEqual(readyEnvelope.generation, binding.generation)
+        XCTAssertEqual(readyEnvelope.sequence, 3)
+    }
+
     func testExactV1ActionsAndEventsRoundTripOpaqueBytesAndBinding() throws {
         let binding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-7",
