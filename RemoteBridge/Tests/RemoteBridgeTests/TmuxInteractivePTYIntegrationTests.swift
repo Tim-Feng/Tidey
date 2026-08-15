@@ -414,6 +414,75 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
+    func testRealPTYSameSizeResizeImmediatelyEmitsAuthoritativeRedrawWithoutUserInput() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let initialSize = TmuxInteractivePTYSize(columns: 80, rows: 24)
+        let handle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: initialSize
+            )
+        )
+        var didCloseMaster = false
+        var didReapChild = false
+        defer {
+            if didCloseMaster == false {
+                try? controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+            }
+            if didReapChild == false {
+                reapForCleanup(controller: controller, childProcessID: handle.childProcessID)
+            }
+        }
+
+        _ = try XCTUnwrap(
+            fixture.waitForClient(processID: handle.childProcessID, timeout: 3)
+        )
+        try drainUntilQuiet(
+            controller: controller,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            quietPeriod: 0.2,
+            timeout: 2
+        )
+
+        try controller.resize(
+            masterFileDescriptor: handle.masterFileDescriptor,
+            to: initialSize
+        )
+
+        let redraw = try readFirstBytes(
+            controller: controller,
+            masterFileDescriptor: handle.masterFileDescriptor,
+            timeout: 1
+        )
+        let redrawText = String(decoding: redraw, as: UTF8.self)
+        XCTAssertTrue(redrawText.contains("\u{1b}[1;\(initialSize.rows)r"))
+        XCTAssertGreaterThanOrEqual(
+            redrawText.components(separatedBy: "\u{1b}[K").count - 1,
+            Int(initialSize.rows) - 1
+        )
+
+        try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
+        didCloseMaster = true
+        let childExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: handle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(childExit)
+        didReapChild = childExit != nil
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
     func testLazyWindowSizeMigrationRestoresOnlyExactTargetOnIsolatedSocket() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -792,6 +861,37 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                 throw TestError.unexpectedEndOfFile
             }
         }
+    }
+
+    private func drainUntilQuiet(
+        controller: TmuxInteractivePTYControlling,
+        masterFileDescriptor: Int32,
+        quietPeriod: TimeInterval,
+        timeout: TimeInterval
+    ) throws {
+        let deadline = Date().addingTimeInterval(timeout)
+        var quietSince: Date?
+        repeat {
+            switch try controller.read(
+                masterFileDescriptor: masterFileDescriptor,
+                maximumBytes: 16 * 1_024
+            ) {
+            case .bytes:
+                quietSince = nil
+            case .wouldBlock:
+                if let quietSince,
+                   Date().timeIntervalSince(quietSince) >= quietPeriod {
+                    return
+                }
+                if quietSince == nil {
+                    quietSince = Date()
+                }
+                usleep(20_000)
+            case .endOfFile:
+                throw TestError.unexpectedEndOfFile
+            }
+        } while Date() < deadline
+        throw TestError.readTimedOut
     }
 
     private func writeAll(

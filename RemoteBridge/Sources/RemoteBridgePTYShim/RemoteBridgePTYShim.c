@@ -341,6 +341,10 @@ int32_t tidey_tmux_pty_resize(
     if (master_file_descriptor < 0 || columns == 0 || rows == 0) {
         return EINVAL;
     }
+    struct winsize previous_size;
+    if (ioctl(master_file_descriptor, TIOCGWINSZ, &previous_size) == -1) {
+        return errno;
+    }
     struct winsize size = {
         .ws_row = rows,
         .ws_col = columns,
@@ -349,6 +353,15 @@ int32_t tidey_tmux_pty_resize(
     };
     if (ioctl(master_file_descriptor, TIOCSWINSZ, &size) == -1) {
         return errno;
+    }
+    if (previous_size.ws_col == columns && previous_size.ws_row == rows) {
+        pid_t foreground_process_group = tcgetpgrp(master_file_descriptor);
+        if (foreground_process_group == -1) {
+            return errno;
+        }
+        if (kill(-foreground_process_group, SIGWINCH) == -1) {
+            return errno;
+        }
     }
     return 0;
 }
