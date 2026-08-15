@@ -339,6 +339,74 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
+    func testOwnerAcceptsTypedTerminalReplyOnlyAfterProofAndRejectsUserInputUntilReady() throws {
+        let route = makeRoute()
+        let request = makeRequest(route: route, startupMode: .streamingReplies)
+        let controller = ControllerProbe()
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover
+        )
+        let reply = TmuxInteractiveTerminalReply(
+            binding: request.subscribe.binding,
+            bytes: Data([0x1b, 0x5b, 0x3e, 0x36, 0x35, 0x3b, 0x63])
+        )
+        let input = TmuxInteractiveInput(
+            binding: request.subscribe.binding,
+            bytes: Data([0x02, 0x64])
+        )
+
+        try owner.begin(request)
+        XCTAssertThrowsError(try owner.sendTerminalReply(reply)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .terminalReplyNotEnabled(.proving)
+            )
+        }
+        XCTAssertTrue(controller.writtenBytes.isEmpty)
+
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        XCTAssertEqual(owner.lifecycleState, .settling)
+        XCTAssertEqual(try owner.sendTerminalReply(reply), .written(reply.bytes.count))
+        XCTAssertEqual(controller.writtenBytes, [reply.bytes])
+        XCTAssertThrowsError(try owner.sendInput(input)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .inputNotEnabled(.settling)
+            )
+        }
+
+        let staleReply = TmuxInteractiveTerminalReply(
+            binding: TmuxInteractiveSubscriptionBinding(
+                subscriptionID: reply.binding.subscriptionID,
+                generation: reply.binding.generation - 1
+            ),
+            bytes: Data([0x1b, 0x5b, 0x63])
+        )
+        XCTAssertThrowsError(try owner.sendTerminalReply(staleReply)) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .bindingMismatch
+            )
+        }
+        XCTAssertEqual(controller.writtenBytes, [reply.bytes])
+        try owner.close()
+    }
+
     func testOwnerPublishesProvedDirectAttachStreamAtExactViewport() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -1100,7 +1168,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
     }
 
     private func makeRequest(
-        route: OrdinaryTmuxPanelRoute
+        route: OrdinaryTmuxPanelRoute,
+        startupMode: TmuxInteractiveStartupMode = .legacy
     ) -> TmuxInteractivePTYSessionStartRequest {
         TmuxInteractivePTYSessionStartRequest(
             subscribe: TmuxInteractiveSubscribe(
@@ -1110,7 +1179,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                     subscriptionID: "interactive-1",
                     generation: 9
                 ),
-                viewport: TmuxInteractiveViewport(columns: 80, rows: 24)
+                viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
+                startupMode: startupMode
             ),
             route: route,
             tmuxExecutablePath: "/opt/homebrew/bin/tmux"

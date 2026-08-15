@@ -23,6 +23,7 @@ enum TmuxInteractivePTYSessionOwnerError: Error, Equatable {
     case admissionConflict
     case invalidState(TmuxInteractivePTYSessionLifecycleState)
     case inputNotEnabled(TmuxInteractivePTYSessionLifecycleState)
+    case terminalReplyNotEnabled(TmuxInteractivePTYSessionLifecycleState)
     case bindingMismatch
     case unexpectedEndBeforeProof
     case preProofBufferOverflow(limit: Int)
@@ -236,7 +237,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 resources.verifiedAttach = verified
                 resources.authoritativeStartCollectionBeganAtUptimeNanoseconds =
                     provedAtUptimeNanoseconds
-                state = .redrawing
+                state = subscribe.startupMode == .streamingReplies
+                    ? .settling
+                    : .redrawing
                 return verified
             } catch {
                 try closeActiveResources(resources)
@@ -256,6 +259,23 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             return try writeCurrentPTYBytes(
                 input.bytes,
                 binding: input.binding,
+                resources: resources
+            )
+        }
+    }
+
+    func sendTerminalReply(
+        _ reply: TmuxInteractiveTerminalReply
+    ) throws -> TmuxInteractivePTYWriteResult {
+        try queue.sync {
+            guard state == .settling || state == .live,
+                  let resources = activeResources else {
+                throw TmuxInteractivePTYSessionOwnerError
+                    .terminalReplyNotEnabled(state)
+            }
+            return try writeCurrentPTYBytes(
+                reply.bytes,
+                binding: reply.binding,
                 resources: resources
             )
         }
