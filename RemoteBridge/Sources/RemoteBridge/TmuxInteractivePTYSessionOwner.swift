@@ -41,6 +41,13 @@ enum TmuxInteractivePTYSessionLivePollResult: Equatable, Sendable {
     case terminal(TmuxInteractiveStateChange)
 }
 
+enum TmuxInteractivePTYSessionStartupPollResult: Equatable, Sendable {
+    case attached(TmuxInteractiveAttached)
+    case output(TmuxInteractiveOutputChunk)
+    case ready(TmuxInteractiveReady)
+    case wouldBlock
+}
+
 final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     static let productionAuthoritativeStartQuiescenceNanoseconds: UInt64 =
         150_000_000
@@ -62,6 +69,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var didObserveOutputAfterRefreshRequest = false
         var clientRefreshRequestedAtUptimeNanoseconds: UInt64?
         var authoritativeStartBytes = Data()
+        var streamingStartupByteCount = 0
+        var didPublishStreamingAttached = false
         var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
         var resizeGate: TmuxInteractivePTYResizeGate?
         var nextOutputSequence: UInt64 = 1
@@ -237,6 +246,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 resources.verifiedAttach = verified
                 resources.authoritativeStartCollectionBeganAtUptimeNanoseconds =
                     provedAtUptimeNanoseconds
+                resources.streamingStartupByteCount =
+                    resources.authoritativeStartBytes.count
                 state = subscribe.startupMode == .streamingReplies
                     ? .settling
                     : .redrawing
@@ -474,6 +485,90 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         message: nil
                     )
                 )
+            }
+        }
+    }
+
+    func pollStreamingStartup() throws -> TmuxInteractivePTYSessionStartupPollResult {
+        try queue.sync {
+            guard state == .settling,
+                  let resources = activeResources,
+                  let verifiedAttach = resources.verifiedAttach else {
+                throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
+            }
+
+            if resources.didPublishStreamingAttached == false {
+                let attached = TmuxInteractiveAttached(
+                    binding: resources.request.subscribe.binding,
+                    attachProof: verifiedAttach.attachProof,
+                    viewport: resources.request.subscribe.viewport,
+                    initialBytes: resources.authoritativeStartBytes,
+                    sequence: try takeNextOutputSequence(resources)
+                )
+                resources.authoritativeStartBytes.removeAll(keepingCapacity: false)
+                resources.didPublishStreamingAttached = true
+                return .attached(attached)
+            }
+
+            let readResult: TmuxInteractivePTYReadResult
+            do {
+                readResult = try controller.read(
+                    masterFileDescriptor: resources.handle.masterFileDescriptor,
+                    maximumBytes: 64 * 1_024
+                )
+            } catch {
+                try closeActiveResources(resources)
+                throw error
+            }
+
+            switch readResult {
+            case .bytes(let bytes):
+                guard bytes.isEmpty == false else {
+                    try closeActiveResources(resources)
+                    throw TmuxInteractivePTYSessionOwnerError
+                        .unexpectedEndBeforeAuthoritativeStart
+                }
+                guard bytes.count <= maximumAuthoritativeStartBytes -
+                        resources.streamingStartupByteCount else {
+                    try closeActiveResources(resources)
+                    throw TmuxInteractivePTYSessionOwnerError
+                        .authoritativeStartBufferOverflow(
+                            limit: maximumAuthoritativeStartBytes
+                        )
+                }
+                resources.streamingStartupByteCount += bytes.count
+                resources.lastAuthoritativeOutputUptimeNanoseconds =
+                    uptimeNanoseconds()
+                return .output(
+                    TmuxInteractiveOutputChunk(
+                        binding: resources.request.subscribe.binding,
+                        sequence: try takeNextOutputSequence(resources),
+                        bytes: bytes
+                    )
+                )
+            case .wouldBlock:
+                let quietBeganAtUptimeNanoseconds =
+                    resources.lastAuthoritativeOutputUptimeNanoseconds
+                    ?? resources.authoritativeStartCollectionBeganAtUptimeNanoseconds
+                guard let quietBeganAtUptimeNanoseconds else {
+                    return .wouldBlock
+                }
+                let currentUptimeNanoseconds = uptimeNanoseconds()
+                guard currentUptimeNanoseconds >= quietBeganAtUptimeNanoseconds,
+                      currentUptimeNanoseconds - quietBeganAtUptimeNanoseconds >=
+                        authoritativeStartQuiescenceNanoseconds else {
+                    return .wouldBlock
+                }
+                let ready = TmuxInteractiveReady(
+                    binding: resources.request.subscribe.binding,
+                    sequence: try takeNextOutputSequence(resources)
+                )
+                transitionToLive(resources)
+                return .ready(ready)
+            case .endOfFile:
+                try closeActiveResources(resources)
+                throw TmuxInteractivePTYSessionOwnerError
+                    .unexpectedEndBeforeAuthoritativeStart
             }
         }
     }

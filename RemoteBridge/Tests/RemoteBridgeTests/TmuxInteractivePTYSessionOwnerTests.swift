@@ -407,6 +407,136 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
+    func testOwnerStreamsAttachedOutputAndReadyBeforeLiveWithOneSequence() throws {
+        let route = makeRoute()
+        let request = makeRequest(route: route, startupMode: .streamingReplies)
+        let controller = ControllerProbe()
+        let provedPrefix = Data([0x1b, 0x5b, 0x3e, 0x63])
+        controller.readResults = [.bytes(provedPrefix), .wouldBlock]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let clientRefreshRequester = ClientRefreshRequesterProbe()
+        let uptime = UptimeProbe()
+        let quietNanoseconds: UInt64 = 100
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover,
+            clientRefreshRequester: clientRefreshRequester,
+            authoritativeStartQuiescenceNanoseconds: quietNanoseconds,
+            uptimeNanoseconds: { uptime.now() }
+        )
+
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .attached(
+                TmuxInteractiveAttached(
+                    binding: request.subscribe.binding,
+                    attachProof: verifiedAttach.attachProof,
+                    viewport: request.subscribe.viewport,
+                    initialBytes: provedPrefix,
+                    sequence: 1
+                )
+            )
+        )
+
+        let negotiatedOutput = Data([0x1b, 0x5b, 0x32, 0x4a])
+        controller.readResults.append(.bytes(negotiatedOutput))
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 2,
+                    bytes: negotiatedOutput
+                )
+            )
+        )
+        XCTAssertEqual(try owner.pollStreamingStartup(), .wouldBlock)
+        uptime.advance(by: quietNanoseconds)
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .ready(
+                TmuxInteractiveReady(
+                    binding: request.subscribe.binding,
+                    sequence: 3
+                )
+            )
+        )
+        XCTAssertEqual(owner.lifecycleState, .live)
+        XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
+
+        let liveBytes = Data([0x00, 0xff])
+        controller.readResults.append(.bytes(liveBytes))
+        XCTAssertEqual(
+            try owner.pollLiveOutput(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 4,
+                    bytes: liveBytes
+                )
+            )
+        )
+        try owner.close()
+    }
+
+    func testOwnerKeepsCumulativeStartupBoundAfterStreamingAttachedPrefix() throws {
+        let route = makeRoute()
+        let request = makeRequest(route: route, startupMode: .streamingReplies)
+        let controller = ControllerProbe()
+        controller.readResults = [.bytes(Data([0x01, 0x02, 0x03, 0x04])), .wouldBlock]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover,
+            maximumAuthoritativeStartBytes: 5
+        )
+
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        guard case .attached = try owner.pollStreamingStartup() else {
+            return XCTFail("Expected the bounded proved prefix")
+        }
+        controller.readResults.append(.bytes(Data([0x05, 0x06])))
+
+        XCTAssertThrowsError(try owner.pollStreamingStartup()) { error in
+            XCTAssertEqual(
+                error as? TmuxInteractivePTYSessionOwnerError,
+                .authoritativeStartBufferOverflow(limit: 5)
+            )
+        }
+        XCTAssertEqual(owner.lifecycleState, .closed)
+        XCTAssertEqual(controller.closedFileDescriptors, [17])
+        XCTAssertEqual(controller.reapCalls.count, 1)
+    }
+
     func testOwnerPublishesProvedDirectAttachStreamAtExactViewport() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)
