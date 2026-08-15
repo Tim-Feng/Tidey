@@ -414,7 +414,7 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
     }
 
-    func testRealPTYSameSizeResizeImmediatelyEmitsAuthoritativeRedrawWithoutUserInput() throws {
+    func testRealPTYSameSizeResizeDoesNotManufactureAuthoritativeRedraw() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
         }
@@ -459,17 +459,17 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
             to: initialSize
         )
 
-        let redraw = try readFirstBytes(
-            controller: controller,
-            masterFileDescriptor: handle.masterFileDescriptor,
-            timeout: 1
-        )
-        let redrawText = String(decoding: redraw, as: UTF8.self)
-        XCTAssertTrue(redrawText.contains("\u{1b}[1;\(initialSize.rows)r"))
-        XCTAssertGreaterThanOrEqual(
-            redrawText.components(separatedBy: "\u{1b}[K").count - 1,
-            Int(initialSize.rows) - 1
-        )
+        XCTAssertThrowsError(
+            try readFirstBytes(
+                controller: controller,
+                masterFileDescriptor: handle.masterFileDescriptor,
+                timeout: 0.3
+            )
+        ) { error in
+            guard case TestError.readTimedOut = error else {
+                return XCTFail("expected no manufactured redraw, got \(error)")
+            }
+        }
 
         try controller.close(masterFileDescriptor: handle.masterFileDescriptor)
         didCloseMaster = true

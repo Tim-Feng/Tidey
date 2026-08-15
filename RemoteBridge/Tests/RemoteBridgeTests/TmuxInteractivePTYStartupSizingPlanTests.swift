@@ -14,7 +14,6 @@ final class TmuxInteractivePTYStartupSizingPlanTests: XCTestCase {
             TmuxInteractivePTYSize(columns: 50, rows: 19)
         )
         XCTAssertEqual(plan.targetSize, target)
-        XCTAssertTrue(plan.requiresFinalResize)
     }
 
     func testPlanUsesOneColumnBootstrapOnlyWhenOneRowIsAllThatExists() throws {
@@ -28,7 +27,6 @@ final class TmuxInteractivePTYStartupSizingPlanTests: XCTestCase {
             TmuxInteractivePTYSize(columns: 1, rows: 1)
         )
         XCTAssertEqual(plan.targetSize, target)
-        XCTAssertTrue(plan.requiresFinalResize)
         XCTAssertNil(
             TmuxInteractivePTYStartupSizingPlan(
                 targetSize: TmuxInteractivePTYSize(columns: 1, rows: 1)
