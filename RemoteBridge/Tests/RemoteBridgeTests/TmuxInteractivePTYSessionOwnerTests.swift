@@ -157,7 +157,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                     socket: route.socket,
                     sessionID: route.sessionID,
                     windowID: route.windowID,
-                    initialSize: TmuxInteractivePTYSize(columns: 80, rows: 23)
+                    initialSize: TmuxInteractivePTYSize(columns: 80, rows: 24)
                 ),
             ]
         )
@@ -339,21 +339,15 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerCarriesHiddenBootstrapPhaseThenAppliesExactViewportOnlyAfterProof() throws {
+    func testOwnerPublishesProvedDirectAttachStreamAtExactViewport() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
-        let bootstrapBytes = Data("bootstrap-grid".utf8)
-        let finalViewportBytes = Data("exact-final-grid".utf8)
+        let attachBytes = Data("exact-final-grid".utf8)
         controller.readResults = [
-            .bytes(bootstrapBytes),
+            .bytes(attachBytes),
             .wouldBlock,
         ]
-        controller.onResize = {
-            controller.readResults.append(.bytes(finalViewportBytes))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-        }
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -379,49 +373,33 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
 
         XCTAssertEqual(
             controller.spawnCommands.map(\.initialSize),
-            [TmuxInteractivePTYSize(columns: 80, rows: 23)]
+            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
         )
         XCTAssertTrue(controller.resizedSizes.isEmpty)
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         XCTAssertEqual(owner.lifecycleState, .redrawing)
 
-        XCTAssertNil(try owner.pollAuthoritativeStart())
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertEqual(start.viewport, request.subscribe.viewport)
-        XCTAssertEqual(
-            start.bootstrapPhase,
-            TmuxInteractiveBootstrapPhase(
-                viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
-                bytes: bootstrapBytes
-            )
-        )
-        XCTAssertEqual(start.initialBytes, finalViewportBytes)
+        XCTAssertNil(start.bootstrapPhase)
+        XCTAssertEqual(start.initialBytes, attachBytes)
         XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
         XCTAssertEqual(owner.lifecycleState, .live)
 
         try owner.close()
     }
 
-    func testOwnerKeepsProofDurationBytesInHiddenBootstrapPhaseBeforeFinalResize() throws {
+    func testOwnerKeepsProofDurationBytesInSameDirectAttachStream() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
-        let bootstrapBytesBeforeProof = Data("initial-bootstrap-grid".utf8)
-        let bootstrapBytesDuringProof = Data("late-bootstrap-grid".utf8)
-        let finalViewportBytes = Data("exact-final-grid".utf8)
+        let attachBytesBeforeProof = Data("initial-attach-grid".utf8)
+        let attachBytesDuringProof = Data("late-attach-grid".utf8)
         controller.readResults = [
-            .bytes(bootstrapBytesBeforeProof),
+            .bytes(attachBytesBeforeProof),
             .wouldBlock,
         ]
-        controller.onResize = {
-            controller.readResults.append(.bytes(finalViewportBytes))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-        }
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -436,7 +414,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
         prover.onProve = {
-            controller.readResults.append(.bytes(bootstrapBytesDuringProof))
+            controller.readResults.append(.bytes(attachBytesDuringProof))
             controller.readResults.append(.wouldBlock)
         }
         let owner = TmuxInteractivePTYSessionOwner(
@@ -453,18 +431,12 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         }
         let start = try XCTUnwrap(observedStart)
 
+        XCTAssertNil(start.bootstrapPhase)
         XCTAssertEqual(
-            start.bootstrapPhase,
-            TmuxInteractiveBootstrapPhase(
-                viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
-                bytes: bootstrapBytesBeforeProof + bootstrapBytesDuringProof
-            )
+            start.initialBytes,
+            attachBytesBeforeProof + attachBytesDuringProof
         )
-        XCTAssertEqual(start.initialBytes, finalViewportBytes)
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         try owner.close()
     }
 
@@ -505,16 +477,11 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
         let preProofBytes = Data([0x70, 0x72, 0x65])
-        let redrawBytes = Data([0x1b, 0x5b, 0x32, 0x4a])
+        let provedAttachBytes = Data([0x1b, 0x5b, 0x32, 0x4a])
         controller.readResults = [
             .bytes(preProofBytes),
             .wouldBlock,
         ]
-        controller.onResize = {
-            controller.readResults.append(.bytes(redrawBytes))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-        }
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -528,6 +495,10 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
+        prover.onProve = {
+            controller.readResults.append(.bytes(provedAttachBytes))
+            controller.readResults.append(.wouldBlock)
+        }
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: store,
             controller: controller,
@@ -540,11 +511,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             bytes: Data([0x02, 0x63])
         )
 
-        XCTAssertNil(try owner.pollAuthoritativeStart())
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         XCTAssertThrowsError(try owner.sendInput(input)) { error in
             XCTAssertEqual(
                 error as? TmuxInteractivePTYSessionOwnerError,
@@ -558,12 +525,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             TmuxInteractiveAuthoritativeStart(
                 binding: request.subscribe.binding,
                 attachProof: verifiedAttach.attachProof,
-                bootstrapPhase: TmuxInteractiveBootstrapPhase(
-                    viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
-                    bytes: preProofBytes
-                ),
                 viewport: request.subscribe.viewport,
-                initialBytes: redrawBytes
+                initialBytes: preProofBytes + provedAttachBytes
             )
         )
         XCTAssertEqual(owner.lifecycleState, .live)
@@ -587,7 +550,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerNeverPublishesBootstrapPrefixWithoutFinalViewportOutput() throws {
+    func testOwnerPublishesQuietProvedDirectAttachPrefixWithoutRedundantRefresh() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -633,25 +596,16 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertNil(try owner.pollAuthoritativeStart())
         uptime.advance(by: quiescenceNanoseconds)
 
-        XCTAssertNil(try owner.pollAuthoritativeStart())
-        XCTAssertEqual(
-            clientRefreshRequester.requests,
-            [
-                TmuxInteractiveClientRefreshRequest(
-                    socket: route.socket,
-                    clientTTY: verifiedAttach.clientTTY
-                ),
-            ]
-        )
-        XCTAssertEqual(owner.lifecycleState, .redrawing)
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertNil(start.bootstrapPhase)
+        XCTAssertEqual(start.initialBytes, attachPrefix)
+        XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
+        XCTAssertEqual(owner.lifecycleState, .live)
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         try owner.close()
     }
 
-    func testOwnerPublishesFinalResizeOutputWithoutRedundantClientRefresh() throws {
+    func testOwnerPublishesProofDurationDirectAttachOutputWithoutRedundantClientRefresh() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -660,11 +614,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             "\u{1B}[2J\u{1B}[Hproved tmux client screen".utf8
         )
         controller.readResults = [.wouldBlock]
-        controller.onResize = {
-            controller.readResults.append(.bytes(authoritativeScreen))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-        }
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -678,6 +627,10 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
+        prover.onProve = {
+            controller.readResults.append(.bytes(authoritativeScreen))
+            controller.readResults.append(.wouldBlock)
+        }
         let clientRefreshRequester = ClientRefreshRequesterProbe()
         let uptime = UptimeProbe()
         let quiescenceNanoseconds =
@@ -695,12 +648,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.begin(request)
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
 
-        XCTAssertNil(try owner.pollAuthoritativeStart())
         XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         uptime.advance(by: quiescenceNanoseconds)
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertEqual(start.initialBytes, authoritativeScreen)
@@ -761,15 +710,11 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let controller = ControllerProbe()
         let tmuxCachedRedraw = Data([0x1b, 0x5b, 0x32, 0x4a])
         let paneTUIRedraw = Data([0x1b, 0x5b, 0x48, 0x66])
-        controller.readResults = [.wouldBlock]
-        controller.onResize = {
-            controller.readResults.append(.bytes(tmuxCachedRedraw))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.bytes(paneTUIRedraw))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-        }
+        controller.readResults = [
+            .bytes(tmuxCachedRedraw),
+            .wouldBlock,
+            .wouldBlock,
+        ]
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -799,6 +744,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
 
         XCTAssertNil(try owner.pollAuthoritativeStart())
         uptime.advance(by: 40_000_000)
+        controller.readResults.append(.bytes(paneTUIRedraw))
+        controller.readResults.append(.wouldBlock)
         XCTAssertNil(try owner.pollAuthoritativeStart())
         uptime.advance(by: quiescenceNanoseconds - 1)
         XCTAssertNil(try owner.pollAuthoritativeStart())
@@ -819,9 +766,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             .bytes(Data([0x01])),
             .wouldBlock,
         ]
-        controller.onResize = {
-            controller.readResults.append(.bytes(Data([0x02, 0x03])))
-        }
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -835,6 +779,9 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
+        prover.onProve = {
+            controller.readResults.append(.bytes(Data([0x02, 0x03])))
+        }
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: store,
             controller: controller,
@@ -842,19 +789,14 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             maximumAuthoritativeStartBytes: 2
         )
         try owner.begin(makeRequest(route: route))
-        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
-
-        XCTAssertThrowsError(try owner.pollAuthoritativeStart()) { error in
+        XCTAssertThrowsError(try owner.pollAttachProof()) { error in
             XCTAssertEqual(
                 error as? TmuxInteractivePTYSessionOwnerError,
                 .authoritativeStartBufferOverflow(limit: 2)
             )
         }
         XCTAssertEqual(owner.lifecycleState, .closed)
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         XCTAssertEqual(controller.closedFileDescriptors, [17])
         XCTAssertEqual(controller.reapCalls.count, 1)
     }
@@ -866,15 +808,15 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let controller = ControllerProbe()
         let firstOutput = Data([0x66, 0x69, 0x72, 0x73, 0x74])
         let secondOutput = Data([0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64])
-        controller.readResults = [.wouldBlock]
-        controller.onResize = {
-            controller.readResults.append(.bytes(Data([0x1b, 0x5b, 0x48])))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.bytes(firstOutput))
-            controller.readResults.append(.bytes(secondOutput))
-            controller.readResults.append(.endOfFile)
-        }
+        controller.readResults = [
+            .bytes(Data([0x1b, 0x5b, 0x48])),
+            .wouldBlock,
+            .wouldBlock,
+            .wouldBlock,
+            .bytes(firstOutput),
+            .bytes(secondOutput),
+            .endOfFile,
+        ]
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -895,7 +837,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         try owner.begin(request)
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
-        XCTAssertNil(try owner.pollAuthoritativeStart())
         _ = try XCTUnwrap(owner.pollAuthoritativeStart())
 
         XCTAssertEqual(
@@ -953,12 +894,11 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
-        controller.readResults = [.wouldBlock]
-        controller.onResize = {
-            controller.readResults.append(.bytes(Data([0x1b, 0x5b, 0x48])))
-            controller.readResults.append(.wouldBlock)
-            controller.readResults.append(.wouldBlock)
-        }
+        controller.readResults = [
+            .bytes(Data([0x1b, 0x5b, 0x48])),
+            .wouldBlock,
+            .wouldBlock,
+        ]
         let verifiedAttach = TmuxInteractiveVerifiedAttach(
             attachProof: TmuxInteractiveAttachProof(
                 workspaceID: route.workspaceID,
@@ -991,7 +931,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             )
         }
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
-        XCTAssertNil(try owner.pollAuthoritativeStart())
         _ = try XCTUnwrap(owner.pollAuthoritativeStart())
 
         let staleResize = TmuxInteractiveResize(
@@ -1029,7 +968,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(
             controller.resizedSizes,
             [
-                TmuxInteractivePTYSize(columns: 80, rows: 24),
                 TmuxInteractivePTYSize(columns: 100, rows: 30),
             ]
         )
@@ -1041,7 +979,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 .invalidState(.closed)
             )
         }
-        XCTAssertEqual(controller.resizedSizes.count, 2)
+        XCTAssertEqual(controller.resizedSizes.count, 1)
     }
 
     func testOwnerRejectsUnresolvedTargetBeforeAdmissionOrSpawn() throws {

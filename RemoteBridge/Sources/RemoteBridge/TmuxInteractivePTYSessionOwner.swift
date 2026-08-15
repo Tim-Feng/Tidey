@@ -50,12 +50,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let sessionKey: OrdinaryTmuxSessionKey
         let leaseToken: OrdinaryTmuxInteractiveLeaseToken
         let request: TmuxInteractivePTYSessionStartRequest
-        let bootstrapSize: TmuxInteractivePTYSize
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
-        var bootstrapPhase: TmuxInteractiveBootstrapPhase?
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
-        var finalStartupResizeAppliedAtUptimeNanoseconds: UInt64?
+        var authoritativeStartCollectionBeganAtUptimeNanoseconds: UInt64?
         var didRequestClientRefresh = false
         var clientRefreshRequestedAtUptimeNanoseconds: UInt64?
         var authoritativeStartBytes = Data()
@@ -69,14 +67,12 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             sessionKey: OrdinaryTmuxSessionKey,
             leaseToken: OrdinaryTmuxInteractiveLeaseToken,
             request: TmuxInteractivePTYSessionStartRequest,
-            bootstrapSize: TmuxInteractivePTYSize,
             initialSize: TmuxInteractivePTYSize
         ) {
             self.handle = handle
             self.sessionKey = sessionKey
             self.leaseToken = leaseToken
             self.request = request
-            self.bootstrapSize = bootstrapSize
             self.initialSize = initialSize
         }
     }
@@ -131,10 +127,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             guard state == .idle else {
                 throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
             }
-            guard let initialSize = Self.validatedInitialSize(request),
-                  let startupSizingPlan = TmuxInteractivePTYStartupSizingPlan(
-                    targetSize: initialSize
-                  ) else {
+            guard let initialSize = Self.validatedInitialSize(request) else {
                 throw TmuxInteractivePTYSessionOwnerError.invalidRequest
             }
 
@@ -162,7 +155,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         socket: request.route.socket,
                         sessionID: request.route.sessionID,
                         windowID: request.route.windowID,
-                        initialSize: startupSizingPlan.bootstrapSize
+                        initialSize: initialSize
                     )
                 )
                 activeResources = ActiveResources(
@@ -170,7 +163,6 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                     sessionKey: sessionKey,
                     leaseToken: leaseToken,
                     request: request,
-                    bootstrapSize: startupSizingPlan.bootstrapSize,
                     initialSize: initialSize
                 )
                 state = .proving
@@ -221,23 +213,16 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             limit: maximumAuthoritativeStartBytes
                         )
                 }
+                let provedAtUptimeNanoseconds = uptimeNanoseconds()
                 if resources.preProofBytes.isEmpty == false {
-                    resources.bootstrapPhase = TmuxInteractiveBootstrapPhase(
-                        viewport: TmuxInteractiveViewport(
-                            columns: Int(resources.bootstrapSize.columns),
-                            rows: Int(resources.bootstrapSize.rows)
-                        ),
-                        bytes: resources.preProofBytes
-                    )
+                    resources.authoritativeStartBytes.append(resources.preProofBytes)
+                    resources.lastAuthoritativeOutputUptimeNanoseconds =
+                        provedAtUptimeNanoseconds
                 }
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
-                try controller.resize(
-                    masterFileDescriptor: resources.handle.masterFileDescriptor,
-                    to: resources.initialSize
-                )
-                resources.finalStartupResizeAppliedAtUptimeNanoseconds =
-                    uptimeNanoseconds()
+                resources.authoritativeStartCollectionBeganAtUptimeNanoseconds =
+                    provedAtUptimeNanoseconds
                 state = .redrawing
                 return verified
             } catch {
@@ -294,9 +279,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             throw TmuxInteractivePTYSessionOwnerError
                                 .unexpectedEndBeforeAuthoritativeStart
                         }
-                        let bootstrapByteCount = resources.bootstrapPhase?.bytes.count ?? 0
                         guard bytes.count <= maximumAuthoritativeStartBytes -
-                                bootstrapByteCount -
                                 resources.authoritativeStartBytes.count else {
                             throw TmuxInteractivePTYSessionOwnerError
                                 .authoritativeStartBufferOverflow(
@@ -313,16 +296,16 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         }
                         if resources.authoritativeStartBytes.isEmpty {
                             if resources.didRequestClientRefresh == false {
-                                guard let resizeAppliedAtUptimeNanoseconds =
+                                guard let collectionBeganAtUptimeNanoseconds =
                                         resources
-                                            .finalStartupResizeAppliedAtUptimeNanoseconds else {
+                                            .authoritativeStartCollectionBeganAtUptimeNanoseconds else {
                                     return nil
                                 }
                                 let currentUptimeNanoseconds = uptimeNanoseconds()
                                 guard currentUptimeNanoseconds >=
-                                        resizeAppliedAtUptimeNanoseconds,
+                                        collectionBeganAtUptimeNanoseconds,
                                       currentUptimeNanoseconds -
-                                        resizeAppliedAtUptimeNanoseconds >=
+                                        collectionBeganAtUptimeNanoseconds >=
                                         authoritativeStartQuiescenceNanoseconds else {
                                     return nil
                                 }
@@ -366,7 +349,6 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         let start = TmuxInteractiveAuthoritativeStart(
                             binding: subscribe.binding,
                             attachProof: verifiedAttach.attachProof,
-                            bootstrapPhase: resources.bootstrapPhase,
                             viewport: subscribe.viewport,
                             initialBytes: resources.authoritativeStartBytes
                         )

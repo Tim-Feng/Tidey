@@ -995,6 +995,179 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         didReapBaseline = baselineExit != nil
     }
 
+    func testSessionOwnerRepeatedAttachWithPersistentSameSizeClientPublishesEveryFinalFooter() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        guard FileManager.default.isExecutableFile(atPath: "/usr/bin/clang") else {
+            throw XCTSkip("the isolated viewport-sensitive TUI fixture requires clang")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithViewportSensitiveFooterTargetWindow()
+        let controller = TmuxInteractivePTYController()
+        let persistentHandle = try controller.spawn(
+            TmuxInteractivePTYAttachCommand(
+                tmuxExecutablePath: tmuxPath,
+                socket: .path(fixture.socketPath),
+                sessionID: target.sessionID,
+                windowID: target.windowID,
+                initialSize: TmuxInteractivePTYSize(columns: 50, rows: 45)
+            )
+        )
+        var didClosePersistent = false
+        var didReapPersistent = false
+        defer {
+            if didClosePersistent == false {
+                try? controller.close(
+                    masterFileDescriptor: persistentHandle.masterFileDescriptor
+                )
+            }
+            if didReapPersistent == false {
+                reapForCleanup(
+                    controller: controller,
+                    childProcessID: persistentHandle.childProcessID
+                )
+            }
+        }
+        _ = try XCTUnwrap(
+            fixture.waitForClient(
+                processID: persistentHandle.childProcessID,
+                timeout: 3
+            )
+        )
+        try drainUntilQuiet(
+            controller: controller,
+            masterFileDescriptor: persistentHandle.masterFileDescriptor,
+            quietPeriod: 0.1,
+            timeout: 2
+        )
+        XCTAssertTrue(
+            fixture.waitForWindowGeometry(
+                windowID: target.windowID,
+                expected: "50|44",
+                timeout: 2
+            )
+        )
+
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-repeated-same-size",
+            panelID: "panel-repeated-same-size",
+            carrierPanelID: "carrier-repeated-same-size",
+            socket: .path(fixture.socketPath),
+            sessionID: target.sessionID,
+            sessionName: "pty-exact",
+            windowID: target.windowID,
+            windowIndex: 0,
+            activePaneID: target.paneID,
+            cwd: nil,
+            currentCommand: "viewport-sensitive-footer"
+        )
+        let store = OrdinaryTmuxInputSubmissionStore()
+
+        for generation in 1...6 {
+            let binding = TmuxInteractiveSubscriptionBinding(
+                subscriptionID: "interactive-repeated-\(generation)",
+                generation: UInt64(generation)
+            )
+            let owner = TmuxInteractivePTYSessionOwner(
+                admissionStore: store,
+                controller: controller,
+                attachProver: TmuxInteractiveAttachProver(
+                    tmuxExecutablePath: tmuxPath
+                ),
+                clientRefreshRequester: TmuxInteractiveClientRefreshRequester(
+                    tmuxExecutablePath: tmuxPath
+                ),
+                authoritativeStartQuiescenceNanoseconds:
+                    TmuxInteractivePTYSessionOwner
+                        .productionAuthoritativeStartQuiescenceNanoseconds,
+                clientRefreshTimeoutNanoseconds:
+                    TmuxInteractivePTYSessionOwner
+                        .productionClientRefreshTimeoutNanoseconds
+            )
+            var didCloseOwner = false
+            defer {
+                if didCloseOwner == false {
+                    try? owner.close()
+                }
+            }
+            try owner.begin(
+                TmuxInteractivePTYSessionStartRequest(
+                    subscribe: TmuxInteractiveSubscribe(
+                        workspaceID: route.workspaceID,
+                        panelID: route.panelID,
+                        binding: binding,
+                        viewport: TmuxInteractiveViewport(columns: 50, rows: 45)
+                    ),
+                    route: route,
+                    tmuxExecutablePath: tmuxPath
+                )
+            )
+
+            _ = try XCTUnwrap(
+                waitForSessionOwnerProof(owner: owner, timeout: 3),
+                "attach proof missing on generation \(generation)"
+            )
+            let start = try XCTUnwrap(
+                waitForSessionOwnerStart(owner: owner, timeout: 3),
+                "authoritative start missing on generation \(generation)"
+            )
+            XCTAssertNil(
+                start.bootstrapPhase,
+                "Termius-style direct attach must not manufacture a second startup resize on generation \(generation)"
+            )
+            XCTAssertEqual(
+                start.viewport,
+                TmuxInteractiveViewport(columns: 50, rows: 45),
+                "wrong final viewport on generation \(generation)"
+            )
+            XCTAssertTrue(
+                String(decoding: start.initialBytes, as: UTF8.self)
+                    .contains("gpt-5.6-sol xhigh"),
+                "final footer absent on generation \(generation): "
+                    + start.initialBytes.base64EncodedString()
+            )
+            XCTAssertEqual(
+                Array(try fixture.capturePaneLines(paneID: target.paneID).suffix(3)),
+                [
+                    "> Summarize recent commits",
+                    "",
+                    "gpt-5.6-sol xhigh",
+                ],
+                "pane footer incomplete on generation \(generation)"
+            )
+
+            try owner.close()
+            didCloseOwner = true
+            XCTAssertTrue(
+                fixture.waitForClientCount(1, timeout: 2),
+                "prior client did not fully detach on generation \(generation)"
+            )
+            XCTAssertTrue(
+                fixture.waitForWindowGeometry(
+                    windowID: target.windowID,
+                    expected: "50|44",
+                    timeout: 2
+                ),
+                "persistent-client geometry was not restored on generation \(generation)"
+            )
+        }
+
+        try controller.close(
+            masterFileDescriptor: persistentHandle.masterFileDescriptor
+        )
+        didClosePersistent = true
+        let persistentExit = try waitForChildExit(
+            controller: controller,
+            childProcessID: persistentHandle.childProcessID,
+            timeout: 3
+        )
+        XCTAssertNotNil(persistentExit)
+        didReapPersistent = persistentExit != nil
+    }
+
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
@@ -1741,6 +1914,124 @@ private final class InteractivePTYTmuxFixture {
             FileManager.default.fileExists(atPath: readyURL.path)
         }) else {
             throw FixtureError.invalidRecord("second resize footer fixture did not become ready")
+        }
+        return InteractivePTYTmuxTarget(
+            sessionID: String(targetFields[0]),
+            windowID: String(targetFields[1]),
+            paneID: String(targetFields[2])
+        )
+    }
+
+    func startWithViewportSensitiveFooterTargetWindow() throws -> InteractivePTYTmuxTarget {
+        let sourceURL = rootURL.appendingPathComponent("viewport-sensitive-footer.c")
+        let executableURL = rootURL.appendingPathComponent("viewport-sensitive-footer")
+        let readyURL = rootURL.appendingPathComponent("viewport-sensitive-footer-ready")
+        let source = """
+        #include <fcntl.h>
+        #include <signal.h>
+        #include <stddef.h>
+        #include <sys/ioctl.h>
+        #include <termios.h>
+        #include <unistd.h>
+
+        static volatile sig_atomic_t redraw_requested = 0;
+        static const char collapsed[] =
+            "\\033[42;1H\\033[2K\\033[43;1H\\033[2K> Summarize recent commits\\033[44;1H\\033[2K";
+        static const char complete[] =
+            "\\033[42;1H\\033[2K> Summarize recent commits\\033[43;1H\\033[2K\\033[44;1H\\033[2Kgpt-5.6-sol xhigh";
+
+        static void handle_winch(int signal_number) {
+            (void)signal_number;
+            redraw_requested = 1;
+        }
+
+        static int draw_for_current_size(void) {
+            struct winsize current_size = {0};
+            if (ioctl(STDIN_FILENO, TIOCGWINSZ, &current_size) != 0) {
+                return 5;
+            }
+            const char *frame = current_size.ws_row == 44 ? complete : collapsed;
+            size_t frame_size = current_size.ws_row == 44
+                ? sizeof(complete) - 1
+                : sizeof(collapsed) - 1;
+            (void)write(STDOUT_FILENO, frame, frame_size);
+            return 0;
+        }
+
+        int main(void) {
+            struct sigaction action = {0};
+            action.sa_handler = handle_winch;
+            sigemptyset(&action.sa_mask);
+            if (sigaction(SIGWINCH, &action, NULL) != 0) {
+                return 2;
+            }
+
+            sigset_t blocked;
+            sigset_t prior;
+            sigemptyset(&blocked);
+            sigaddset(&blocked, SIGWINCH);
+            if (sigprocmask(SIG_BLOCK, &blocked, &prior) != 0) {
+                return 3;
+            }
+            if (draw_for_current_size() != 0) {
+                return 4;
+            }
+            int ready_fd = open("\(readyURL.path)", O_CREAT | O_WRONLY, 0600);
+            if (ready_fd < 0 || close(ready_fd) != 0) {
+                return 6;
+            }
+
+            for (;;) {
+                while (redraw_requested == 0) {
+                    (void)sigsuspend(&prior);
+                }
+                redraw_requested = 0;
+                if (draw_for_current_size() != 0) {
+                    return 5;
+                }
+            }
+        }
+        """
+        try Data(source.utf8).write(to: sourceURL, options: .atomic)
+        let compileArguments = [
+            "-std=c11", "-Wall", "-Wextra", "-Werror",
+            sourceURL.path,
+            "-o", executableURL.path,
+        ]
+        guard let compileResult = BoundedProcessRunner.run(
+            executablePath: "/usr/bin/clang",
+            arguments: compileArguments,
+            timeout: 3,
+            circuitBreakerCooldown: 0
+        ) else {
+            throw FixtureError.commandTimedOut(arguments: compileArguments)
+        }
+        guard compileResult.terminationStatus == 0 else {
+            throw FixtureError.commandFailed(
+                arguments: compileArguments,
+                status: compileResult.terminationStatus,
+                stderr: String(decoding: compileResult.standardError, as: UTF8.self)
+            )
+        }
+        let target = try run([
+            "-f", "/dev/null",
+            "new-session", "-d",
+            "-P", "-F", "#{session_id}|#{window_id}|#{pane_id}",
+            "-s", "pty-exact",
+            "-n", "phone-target",
+            "-x", "132",
+            "-y", "37",
+            executableURL.path,
+        ])
+        hasStartedServer = true
+        let targetFields = target.split(separator: "|", omittingEmptySubsequences: false)
+        guard targetFields.count == 3 else {
+            throw FixtureError.invalidRecord(target)
+        }
+        guard waitUntil(timeout: 2, predicate: {
+            FileManager.default.fileExists(atPath: readyURL.path)
+        }) else {
+            throw FixtureError.invalidRecord("viewport-sensitive footer fixture did not become ready")
         }
         return InteractivePTYTmuxTarget(
             sessionID: String(targetFields[0]),

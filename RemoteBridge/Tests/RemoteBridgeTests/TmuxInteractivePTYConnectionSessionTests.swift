@@ -91,7 +91,6 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
             tmuxExecutablePath: "/opt/homebrew/bin/tmux"
         )
         let hiddenProofBytes = Data([0x70, 0x72, 0x6f, 0x6f, 0x66])
-        let startBytes = Data([0x1b, 0x5b, 0x48])
         let firstOutput = Data([0x66, 0x69, 0x72, 0x73, 0x74])
         let secondOutput = Data([0x73, 0x65, 0x63, 0x6f, 0x6e, 0x64])
         let controller = ControllerProbe()
@@ -99,9 +98,6 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
             .bytes(hiddenProofBytes),
             .wouldBlock,
             .wouldBlock,
-        ]
-        controller.readResultsAfterResize = [
-            .bytes(startBytes),
             .wouldBlock,
             .wouldBlock,
             .bytes(firstOutput),
@@ -134,22 +130,14 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
 
         XCTAssertEqual(try session.poll(), .wouldBlock)
         XCTAssertEqual(try session.poll(), .wouldBlock)
-        XCTAssertEqual(try session.poll(), .wouldBlock)
         XCTAssertEqual(
             try session.poll(),
             .start(
                 TmuxInteractiveAuthoritativeStart(
                     binding: binding,
                     attachProof: verifiedAttach.attachProof,
-                    bootstrapPhase: TmuxInteractiveBootstrapPhase(
-                        viewport: TmuxInteractiveViewport(
-                            columns: 80,
-                            rows: 23
-                        ),
-                        bytes: hiddenProofBytes
-                    ),
                     viewport: request.subscribe.viewport,
-                    initialBytes: startBytes
+                    initialBytes: hiddenProofBytes
                 )
             )
         )
