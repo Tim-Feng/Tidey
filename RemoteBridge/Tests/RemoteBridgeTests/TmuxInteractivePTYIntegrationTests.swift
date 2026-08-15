@@ -777,7 +777,8 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                     .productionPostProofRedrawDelayNanoseconds,
             authoritativeStartQuiescenceNanoseconds:
                 TmuxInteractivePTYSessionOwner
-                    .productionAuthoritativeStartQuiescenceNanoseconds
+                    .productionAuthoritativeStartQuiescenceNanoseconds,
+            requiresVerificationRedraw: true
         )
         var didClose = false
         defer {
@@ -1318,6 +1319,7 @@ private final class InteractivePTYTmuxFixture {
         #include <unistd.h>
 
         static volatile sig_atomic_t redraw_requested = 0;
+        static sig_atomic_t armed_redraw_count = 0;
         static const char collapsed[] =
             "\\033[21;1H\\033[2K\\033[22;1H\\033[2K\\033[23;1H\\033[2K> Summarize recent commits";
         static const char complete[] =
@@ -1351,7 +1353,12 @@ private final class InteractivePTYTmuxFixture {
                 }
                 redraw_requested = 0;
                 if (access("\(armURL.path)", F_OK) == 0) {
-                    (void)write(STDOUT_FILENO, complete, sizeof(complete) - 1);
+                    armed_redraw_count += 1;
+                    if (armed_redraw_count >= 2) {
+                        (void)write(STDOUT_FILENO, complete, sizeof(complete) - 1);
+                    } else {
+                        (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
+                    }
                 } else {
                     (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
                 }

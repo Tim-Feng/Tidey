@@ -435,14 +435,20 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
-    func testOwnerRequestsOneProvedPaneRedrawBeforeCollectingAuthoritativeStart() throws {
+    func testOwnerRequiresSecondProvedPaneRedrawBeforePublishingAuthoritativeStart() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
         let controller = ControllerProbe()
+        let firstRedraw = Data("collapsed".utf8)
+        let verificationRedraw = Data("complete-footer".utf8)
         controller.readResults = [
             .wouldBlock,
-            .bytes(Data("authoritative".utf8)),
+            .bytes(firstRedraw),
+            .wouldBlock,
+            .wouldBlock,
+            .wouldBlock,
+            .bytes(verificationRedraw),
             .wouldBlock,
             .wouldBlock,
         ]
@@ -464,7 +470,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             admissionStore: store,
             controller: controller,
             attachProver: prover,
-            paneRedrawRequester: paneRedrawRequester
+            paneRedrawRequester: paneRedrawRequester,
+            requiresVerificationRedraw: true
         )
         try owner.begin(request)
         XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
@@ -480,8 +487,28 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             ]
         )
 
-        _ = try XCTUnwrap(owner.pollAuthoritativeStart())
-        XCTAssertEqual(paneRedrawRequester.requests.count, 1)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertEqual(
+            paneRedrawRequester.requests,
+            [
+                TmuxInteractivePaneRedrawRequest(
+                    socket: route.socket,
+                    paneID: verifiedAttach.attachProof.paneID
+                ),
+                TmuxInteractivePaneRedrawRequest(
+                    socket: route.socket,
+                    paneID: verifiedAttach.attachProof.paneID
+                ),
+            ]
+        )
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        XCTAssertNil(
+            try owner.pollAuthoritativeStart(),
+            "a second redraw request cannot publish until it produces output"
+        )
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(start.initialBytes, firstRedraw + verificationRedraw)
+        XCTAssertEqual(paneRedrawRequester.requests.count, 2)
         try owner.close()
     }
 

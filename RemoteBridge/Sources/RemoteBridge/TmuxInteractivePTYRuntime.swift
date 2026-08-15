@@ -83,7 +83,8 @@ struct TmuxInteractivePTYRuntime: Sendable {
                             .productionPostProofRedrawDelayNanoseconds,
                     authoritativeStartQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
-                            .productionAuthoritativeStartQuiescenceNanoseconds
+                            .productionAuthoritativeStartQuiescenceNanoseconds,
+                    requiresVerificationRedraw: true
                 )
                 try owner.begin(request)
                 return TmuxInteractivePTYConnectionSession(

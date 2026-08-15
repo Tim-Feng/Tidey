@@ -54,6 +54,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var provedAtUptimeNanoseconds: UInt64?
         var didRequestRedraw = false
+        var didRequestVerificationRedraw = false
+        var didReceiveVerificationRedrawOutput = false
         var authoritativeStartBytes = Data()
         var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
         var resizeGate: TmuxInteractivePTYResizeGate?
@@ -86,6 +88,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let maximumAuthoritativeStartBytes: Int
     private let postProofRedrawDelayNanoseconds: UInt64
     private let authoritativeStartQuiescenceNanoseconds: UInt64
+    private let requiresVerificationRedraw: Bool
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
@@ -100,6 +103,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
         postProofRedrawDelayNanoseconds: UInt64 = 0,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
+        requiresVerificationRedraw: Bool = false,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
@@ -113,6 +117,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.postProofRedrawDelayNanoseconds = postProofRedrawDelayNanoseconds
         self.authoritativeStartQuiescenceNanoseconds =
             authoritativeStartQuiescenceNanoseconds
+        self.requiresVerificationRedraw = requiresVerificationRedraw
         self.uptimeNanoseconds = uptimeNanoseconds
     }
 
@@ -295,6 +300,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                                 )
                         }
                         resources.authoritativeStartBytes.append(bytes)
+                        if resources.didRequestVerificationRedraw {
+                            resources.didReceiveVerificationRedrawOutput = true
+                        }
                         resources.lastAuthoritativeOutputUptimeNanoseconds =
                             uptimeNanoseconds()
                         receivedBytesThisPoll = true
@@ -311,6 +319,22 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         guard currentUptimeNanoseconds >= lastOutputUptimeNanoseconds,
                               currentUptimeNanoseconds - lastOutputUptimeNanoseconds >=
                                 authoritativeStartQuiescenceNanoseconds else {
+                            return nil
+                        }
+                        if requiresVerificationRedraw,
+                           resources.didRequestVerificationRedraw == false {
+                            try paneRedrawRequester.requestRedraw(
+                                TmuxInteractivePaneRedrawRequest(
+                                    socket: resources.request.route.socket,
+                                    paneID: verifiedAttach.attachProof.paneID
+                                )
+                            )
+                            resources.didRequestVerificationRedraw = true
+                            resources.lastAuthoritativeOutputUptimeNanoseconds = nil
+                            return nil
+                        }
+                        guard requiresVerificationRedraw == false
+                                || resources.didReceiveVerificationRedrawOutput else {
                             return nil
                         }
                         let subscribe = resources.request.subscribe
