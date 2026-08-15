@@ -44,9 +44,6 @@ struct TmuxInteractivePTYRuntime: Sendable {
             clientRefreshRequester: TmuxInteractiveClientRefreshRequester(
                 tmuxExecutablePath: tmuxExecutablePath
             ),
-            paneRedrawRequester: TmuxInteractivePaneRedrawRequester(
-                tmuxExecutablePath: tmuxExecutablePath
-            ),
             migrateWindow: { socket, windowID in
                 try migrator.migrateIfEligible(
                     socket: socket,
@@ -63,8 +60,6 @@ struct TmuxInteractivePTYRuntime: Sendable {
         attachProver: TmuxInteractiveAttachProving,
         clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
             DisabledTmuxInteractiveClientRefreshRequester(),
-        paneRedrawRequester: TmuxInteractivePaneRedrawRequesting =
-            DisabledTmuxInteractivePaneRedrawRequester(),
         migrateWindow: @escaping
             TmuxInteractivePTYSessionCandidateBuilder.MigrateWindow
     ) -> TmuxInteractivePTYRuntime {
@@ -83,17 +78,12 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     controller: controller,
                     attachProver: attachProver,
                     clientRefreshRequester: clientRefreshRequester,
-                    paneRedrawRequester: paneRedrawRequester,
-                    postProofRedrawDelayNanoseconds:
-                        TmuxInteractivePTYSessionOwner
-                            .productionPostProofRedrawDelayNanoseconds,
                     authoritativeStartQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
                             .productionAuthoritativeStartQuiescenceNanoseconds,
                     clientRefreshTimeoutNanoseconds:
                         TmuxInteractivePTYSessionOwner
-                            .productionClientRefreshTimeoutNanoseconds,
-                    requiresVerificationRedraw: true
+                            .productionClientRefreshTimeoutNanoseconds
                 )
                 try owner.begin(request)
                 return TmuxInteractivePTYConnectionSession(

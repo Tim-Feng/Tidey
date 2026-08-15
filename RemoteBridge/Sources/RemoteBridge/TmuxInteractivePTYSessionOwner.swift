@@ -42,8 +42,6 @@ enum TmuxInteractivePTYSessionLivePollResult: Equatable, Sendable {
 final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     static let productionAuthoritativeStartQuiescenceNanoseconds: UInt64 =
         150_000_000
-    static let productionPostProofRedrawDelayNanoseconds: UInt64 =
-        150_000_000
     static let productionClientRefreshTimeoutNanoseconds: UInt64 =
         2_000_000_000
 
@@ -55,13 +53,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
-        var provedAtUptimeNanoseconds: UInt64?
         var didCaptureProvedAttachPrefix = false
         var didRequestClientRefresh = false
         var clientRefreshRequestedAtUptimeNanoseconds: UInt64?
-        var didRequestRedraw = false
-        var didRequestVerificationRedraw = false
-        var didReceiveVerificationRedrawOutput = false
         var authoritativeStartBytes = Data()
         var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
         var resizeGate: TmuxInteractivePTYResizeGate?
@@ -90,13 +84,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let controller: TmuxInteractivePTYControlling
     private let attachProver: TmuxInteractiveAttachProving
     private let clientRefreshRequester: TmuxInteractiveClientRefreshRequesting
-    private let paneRedrawRequester: TmuxInteractivePaneRedrawRequesting
     private let maximumPreProofBytes: Int
     private let maximumAuthoritativeStartBytes: Int
-    private let postProofRedrawDelayNanoseconds: UInt64
     private let authoritativeStartQuiescenceNanoseconds: UInt64
     private let clientRefreshTimeoutNanoseconds: UInt64
-    private let requiresVerificationRedraw: Bool
     private let uptimeNanoseconds: @Sendable () -> UInt64
     private var state = TmuxInteractivePTYSessionLifecycleState.idle
     private var activeResources: ActiveResources?
@@ -107,14 +98,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         attachProver: TmuxInteractiveAttachProving = TmuxInteractiveAttachProver(),
         clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
             DisabledTmuxInteractiveClientRefreshRequester(),
-        paneRedrawRequester: TmuxInteractivePaneRedrawRequesting =
-            DisabledTmuxInteractivePaneRedrawRequester(),
         maximumPreProofBytes: Int = 1_024 * 1_024,
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
-        postProofRedrawDelayNanoseconds: UInt64 = 0,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
         clientRefreshTimeoutNanoseconds: UInt64 = .max,
-        requiresVerificationRedraw: Bool = false,
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         }
@@ -123,14 +110,11 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.controller = controller
         self.attachProver = attachProver
         self.clientRefreshRequester = clientRefreshRequester
-        self.paneRedrawRequester = paneRedrawRequester
         self.maximumPreProofBytes = max(1, maximumPreProofBytes)
         self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
-        self.postProofRedrawDelayNanoseconds = postProofRedrawDelayNanoseconds
         self.authoritativeStartQuiescenceNanoseconds =
             authoritativeStartQuiescenceNanoseconds
         self.clientRefreshTimeoutNanoseconds = clientRefreshTimeoutNanoseconds
-        self.requiresVerificationRedraw = requiresVerificationRedraw
         self.uptimeNanoseconds = uptimeNanoseconds
     }
 
@@ -234,7 +218,6 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
                 let provedAtUptimeNanoseconds = uptimeNanoseconds()
-                resources.provedAtUptimeNanoseconds = provedAtUptimeNanoseconds
                 if resources.authoritativeStartBytes.isEmpty == false {
                     resources.didCaptureProvedAttachPrefix = true
                     resources.lastAuthoritativeOutputUptimeNanoseconds =
@@ -318,9 +301,6 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                                 )
                         }
                         resources.authoritativeStartBytes.append(bytes)
-                        if resources.didRequestVerificationRedraw {
-                            resources.didReceiveVerificationRedrawOutput = true
-                        }
                         resources.lastAuthoritativeOutputUptimeNanoseconds =
                             uptimeNanoseconds()
                         receivedBytesThisPoll = true

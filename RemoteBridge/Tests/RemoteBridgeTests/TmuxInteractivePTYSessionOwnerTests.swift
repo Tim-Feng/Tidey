@@ -77,19 +77,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         }
     }
 
-    private final class PaneRedrawRequesterProbe:
-        TmuxInteractivePaneRedrawRequesting,
-        @unchecked Sendable
-    {
-        private(set) var requests = [TmuxInteractivePaneRedrawRequest]()
-
-        func requestRedraw(
-            _ request: TmuxInteractivePaneRedrawRequest
-        ) throws {
-            requests.append(request)
-        }
-    }
-
     private final class ClientRefreshRequesterProbe:
         TmuxInteractiveClientRefreshRequesting,
         @unchecked Sendable
@@ -485,7 +472,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
-        let paneRedrawRequester = PaneRedrawRequesterProbe()
         let uptime = UptimeProbe()
         let quiescenceNanoseconds =
             TmuxInteractivePTYSessionOwner
@@ -494,9 +480,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             admissionStore: store,
             controller: controller,
             attachProver: prover,
-            paneRedrawRequester: paneRedrawRequester,
             authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
-            requiresVerificationRedraw: true,
             uptimeNanoseconds: { uptime.now() }
         )
         try owner.begin(request)
@@ -509,7 +493,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(start.initialBytes, attachPrefix)
         XCTAssertEqual(owner.lifecycleState, .live)
         XCTAssertTrue(controller.resizedSizes.isEmpty)
-        XCTAssertTrue(paneRedrawRequester.requests.isEmpty)
         try owner.close()
     }
 
@@ -540,7 +523,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
-        let paneRedrawRequester = PaneRedrawRequesterProbe()
         let clientRefreshRequester = ClientRefreshRequesterProbe()
         let uptime = UptimeProbe()
         let quiescenceNanoseconds =
@@ -551,10 +533,8 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             controller: controller,
             attachProver: prover,
             clientRefreshRequester: clientRefreshRequester,
-            paneRedrawRequester: paneRedrawRequester,
             authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
             clientRefreshTimeoutNanoseconds: 1_000_000_000,
-            requiresVerificationRedraw: true,
             uptimeNanoseconds: { uptime.now() }
         )
         try owner.begin(request)
@@ -571,7 +551,6 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             ]
         )
         XCTAssertTrue(controller.resizedSizes.isEmpty)
-        XCTAssertTrue(paneRedrawRequester.requests.isEmpty)
         uptime.advance(by: quiescenceNanoseconds)
         let start = try XCTUnwrap(owner.pollAuthoritativeStart())
         XCTAssertEqual(start.initialBytes, authoritativeScreen)

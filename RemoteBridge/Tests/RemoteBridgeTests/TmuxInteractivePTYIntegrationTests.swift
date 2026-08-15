@@ -851,13 +851,9 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
                     tmuxExecutablePath: tmuxPath
                 )
             ),
-            postProofRedrawDelayNanoseconds:
-                TmuxInteractivePTYSessionOwner
-                    .productionPostProofRedrawDelayNanoseconds,
             authoritativeStartQuiescenceNanoseconds:
                 TmuxInteractivePTYSessionOwner
-                    .productionAuthoritativeStartQuiescenceNanoseconds,
-            requiresVerificationRedraw: true
+                    .productionAuthoritativeStartQuiescenceNanoseconds
         )
         var didClose = false
         defer {
