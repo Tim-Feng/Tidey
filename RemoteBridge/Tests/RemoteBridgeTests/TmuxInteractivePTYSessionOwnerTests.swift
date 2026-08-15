@@ -90,6 +90,19 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         }
     }
 
+    private final class ClientRefreshRequesterProbe:
+        TmuxInteractiveClientRefreshRequesting,
+        @unchecked Sendable
+    {
+        private(set) var requests = [TmuxInteractiveClientRefreshRequest]()
+
+        func requestRefresh(
+            _ request: TmuxInteractiveClientRefreshRequest
+        ) throws {
+            requests.append(request)
+        }
+    }
+
     private final class UptimeProbe: @unchecked Sendable {
         private let lock = NSLock()
         private var value: UInt64 = 1_000
@@ -198,6 +211,19 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 sessionKey: sessionKey
             )
         )
+    }
+
+    func testOwnerClientRefreshInjectionSeamCompiles() throws {
+        let requester = ClientRefreshRequesterProbe()
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: ControllerProbe(),
+            clientRefreshRequester: requester
+        )
+
+        try owner.close()
+
+        XCTAssertTrue(requester.requests.isEmpty)
     }
 
     func testOwnerRetainsLeaseUntilCleanupCanReapChild() throws {

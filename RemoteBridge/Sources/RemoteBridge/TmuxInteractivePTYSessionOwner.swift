@@ -84,6 +84,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let admissionStore: OrdinaryTmuxInputSubmissionStore
     private let controller: TmuxInteractivePTYControlling
     private let attachProver: TmuxInteractiveAttachProving
+    private let clientRefreshRequester: TmuxInteractiveClientRefreshRequesting
     private let paneRedrawRequester: TmuxInteractivePaneRedrawRequesting
     private let maximumPreProofBytes: Int
     private let maximumAuthoritativeStartBytes: Int
@@ -98,6 +99,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         admissionStore: OrdinaryTmuxInputSubmissionStore,
         controller: TmuxInteractivePTYControlling,
         attachProver: TmuxInteractiveAttachProving = TmuxInteractiveAttachProver(),
+        clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
+            DisabledTmuxInteractiveClientRefreshRequester(),
         paneRedrawRequester: TmuxInteractivePaneRedrawRequesting =
             DisabledTmuxInteractivePaneRedrawRequester(),
         maximumPreProofBytes: Int = 1_024 * 1_024,
@@ -112,6 +115,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.admissionStore = admissionStore
         self.controller = controller
         self.attachProver = attachProver
+        self.clientRefreshRequester = clientRefreshRequester
         self.paneRedrawRequester = paneRedrawRequester
         self.maximumPreProofBytes = max(1, maximumPreProofBytes)
         self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
