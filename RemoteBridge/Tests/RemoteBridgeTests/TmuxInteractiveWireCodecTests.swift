@@ -4,6 +4,53 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractiveWireCodecTests: XCTestCase {
+    func testTerminalReplyDecodesExactBoundedOpaqueBytes() throws {
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-7",
+            generation: 19
+        )
+        let bytes = Data([0x1b, 0x5b, 0x3e, 0x36, 0x35, 0x3b, 0x63])
+        let common: [String: JSONValue] = [
+            "subscription_id": .string(binding.subscriptionID),
+            "generation": .number(Double(binding.generation)),
+        ]
+        func request(_ encoded: String) -> BridgeRequest {
+            BridgeRequest(
+                id: "reply",
+                action: TmuxInteractiveProtocolV1.replyAction,
+                params: common.merging([
+                    "data_base64": .string(encoded),
+                ]) { _, new in new }
+            )
+        }
+
+        XCTAssertEqual(
+            try TmuxInteractiveWireCodec.decode(
+                request(bytes.base64EncodedString())
+            ),
+            .reply(
+                TmuxInteractiveTerminalReply(binding: binding, bytes: bytes)
+            )
+        )
+        for invalid in [
+            "",
+            "%%%",
+            Data(
+                repeating: 0x61,
+                count: TmuxInteractiveWireCodec.maximumReplyBytes + 1
+            ).base64EncodedString(),
+        ] {
+            XCTAssertThrowsError(
+                try TmuxInteractiveWireCodec.decode(request(invalid))
+            ) { error in
+                XCTAssertEqual(
+                    error as? TmuxInteractiveWireCodecError,
+                    .invalidField("data_base64")
+                )
+            }
+        }
+    }
+
     func testSubscribeStartupModeDefaultsLegacyAndAcceptsOnlyKnownStreamingMode() throws {
         let common: [String: JSONValue] = [
             "workspace_id": .string("workspace-1"),

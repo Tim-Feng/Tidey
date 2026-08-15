@@ -3,6 +3,7 @@ import Foundation
 enum TmuxInteractiveWireAction: Equatable, Sendable {
     case subscribe(TmuxInteractiveSubscribe)
     case input(TmuxInteractiveInput)
+    case reply(TmuxInteractiveTerminalReply)
     case resize(TmuxInteractiveResize)
     case unsubscribe(TmuxInteractiveUnsubscribe)
 }
@@ -124,6 +125,9 @@ struct TmuxInteractiveStateEnvelope: Codable, Equatable, Sendable {
 enum TmuxInteractiveWireCodec {
     static let maximumSafeJSONInteger = 9_007_199_254_740_991
     static let maximumInputBytes = 1_024 * 1_024
+    static let maximumReplyBytes = 4 * 1_024
+    static let maximumPendingReplyBytes = 64 * 1_024
+    static let maximumStartupReplyBytes = 64 * 1_024
 
     static func decode(_ request: BridgeRequest) throws -> TmuxInteractiveWireAction? {
         switch request.action {
@@ -148,6 +152,20 @@ enum TmuxInteractiveWireCodec {
             }
             return .input(
                 TmuxInteractiveInput(binding: try binding(in: params), bytes: bytes)
+            )
+        case TmuxInteractiveProtocolV1.replyAction:
+            let params = try requiredParams(request)
+            let encoded = try requiredString("data_base64", in: params)
+            guard let bytes = Data(base64Encoded: encoded),
+                  bytes.isEmpty == false,
+                  bytes.count <= maximumReplyBytes else {
+                throw TmuxInteractiveWireCodecError.invalidField("data_base64")
+            }
+            return .reply(
+                TmuxInteractiveTerminalReply(
+                    binding: try binding(in: params),
+                    bytes: bytes
+                )
             )
         case TmuxInteractiveProtocolV1.resizeAction:
             let params = try requiredParams(request)
