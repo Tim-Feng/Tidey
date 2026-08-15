@@ -253,12 +253,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                   let resources = activeResources else {
                 throw TmuxInteractivePTYSessionOwnerError.inputNotEnabled(state)
             }
-            guard input.binding == resources.request.subscribe.binding else {
-                throw TmuxInteractivePTYSessionOwnerError.bindingMismatch
-            }
-            return try controller.write(
+            return try writeCurrentPTYBytes(
                 input.bytes,
-                masterFileDescriptor: resources.handle.masterFileDescriptor
+                binding: input.binding,
+                resources: resources
             )
         }
     }
@@ -510,6 +508,20 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 throw TmuxInteractivePTYSessionOwnerError.unexpectedEndBeforeProof
             }
         }
+    }
+
+    private func writeCurrentPTYBytes(
+        _ bytes: Data,
+        binding: TmuxInteractiveSubscriptionBinding,
+        resources: ActiveResources
+    ) throws -> TmuxInteractivePTYWriteResult {
+        guard binding == resources.request.subscribe.binding else {
+            throw TmuxInteractivePTYSessionOwnerError.bindingMismatch
+        }
+        return try controller.write(
+            bytes,
+            masterFileDescriptor: resources.handle.masterFileDescriptor
+        )
     }
 
     private func closeActiveResources(_ resources: ActiveResources) throws {
