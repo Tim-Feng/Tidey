@@ -4,6 +4,30 @@ import XCTest
 @testable import RemoteBridge
 
 final class TmuxInteractiveProtocolV1Tests: XCTestCase {
+    func testSubscribeDefaultsLegacyAndCanCarryDormantStreamingStartupMode() {
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-7",
+            generation: 19
+        )
+        let viewport = TmuxInteractiveViewport(columns: 80, rows: 24)
+        let legacy = TmuxInteractiveSubscribe(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:/private/tmp/tmux-501/default:$7:@11",
+            binding: binding,
+            viewport: viewport
+        )
+        let streaming = TmuxInteractiveSubscribe(
+            workspaceID: legacy.workspaceID,
+            panelID: legacy.panelID,
+            binding: binding,
+            viewport: viewport,
+            startupMode: .streamingReplies
+        )
+
+        XCTAssertEqual(legacy.startupMode, .legacy)
+        XCTAssertEqual(streaming.startupMode, .streamingReplies)
+    }
+
     func testStreamingStartupProtocolValuesRemainTypedAndDormant() {
         let binding = TmuxInteractiveSubscriptionBinding(
             subscriptionID: "interactive-7",

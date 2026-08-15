@@ -34,6 +34,21 @@ struct TmuxInteractiveSubscribe: Equatable, Sendable {
     let panelID: String
     let binding: TmuxInteractiveSubscriptionBinding
     let viewport: TmuxInteractiveViewport
+    let startupMode: TmuxInteractiveStartupMode
+
+    init(
+        workspaceID: String,
+        panelID: String,
+        binding: TmuxInteractiveSubscriptionBinding,
+        viewport: TmuxInteractiveViewport,
+        startupMode: TmuxInteractiveStartupMode = .legacy
+    ) {
+        self.workspaceID = workspaceID
+        self.panelID = panelID
+        self.binding = binding
+        self.viewport = viewport
+        self.startupMode = startupMode
+    }
 }
 
 struct TmuxInteractiveInput: Equatable, Sendable {
