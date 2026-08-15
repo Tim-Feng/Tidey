@@ -291,11 +291,18 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 throw TmuxInteractivePTYSessionOwnerError
                     .terminalReplyNotEnabled(state)
             }
-            return try writeCurrentPTYBytes(
+            let writeResult = try writeCurrentPTYBytes(
                 reply.bytes,
                 binding: reply.binding,
                 resources: resources
             )
+            if state == .settling,
+               case .written(let count) = writeResult,
+               count > 0 {
+                resources.lastAuthoritativeOutputUptimeNanoseconds =
+                    uptimeNanoseconds()
+            }
+            return writeResult
         }
     }
 

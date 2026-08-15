@@ -407,6 +407,66 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         try owner.close()
     }
 
+    func testSettlingTerminalReplyRestartsQuietBarrierBeforeReady() throws {
+        let route = makeRoute()
+        let request = makeRequest(route: route, startupMode: .streamingReplies)
+        let controller = ControllerProbe()
+        let query = Data([0x1b, 0x5b, 0x3e, 0x63])
+        controller.readResults = [.bytes(query), .wouldBlock]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let uptime = UptimeProbe()
+        let quietNanoseconds: UInt64 = 100
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover,
+            authoritativeStartQuiescenceNanoseconds: quietNanoseconds,
+            uptimeNanoseconds: { uptime.now() }
+        )
+
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        guard case .attached = try owner.pollStreamingStartup() else {
+            return XCTFail("Expected the proved query prefix")
+        }
+
+        uptime.advance(by: quietNanoseconds)
+        let reply = TmuxInteractiveTerminalReply(
+            binding: request.subscribe.binding,
+            bytes: Data("\u{1b}[>65;20;1c".utf8)
+        )
+        XCTAssertEqual(
+            try owner.sendTerminalReply(reply),
+            .written(reply.bytes.count)
+        )
+        XCTAssertEqual(try owner.pollStreamingStartup(), .wouldBlock)
+        uptime.advance(by: quietNanoseconds - 1)
+        XCTAssertEqual(try owner.pollStreamingStartup(), .wouldBlock)
+        uptime.advance(by: 1)
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .ready(
+                TmuxInteractiveReady(
+                    binding: request.subscribe.binding,
+                    sequence: 2
+                )
+            )
+        )
+        try owner.close()
+    }
+
     func testOwnerStreamsAttachedOutputAndReadyBeforeLiveWithOneSequence() throws {
         let route = makeRoute()
         let request = makeRequest(route: route, startupMode: .streamingReplies)

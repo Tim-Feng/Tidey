@@ -838,6 +838,138 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 1)
     }
 
+    func testStreamingOwnerAnswersRealTmuxDA2BeforeReadyUnderOneSecond() throws {
+        guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
+            throw XCTSkip("tmux is unavailable")
+        }
+
+        let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
+        defer { fixture.shutdown() }
+        let target = try fixture.startWithNonCurrentTargetWindow()
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-streaming-reply",
+            panelID: "panel-streaming-reply",
+            carrierPanelID: "carrier-streaming-reply",
+            socket: .path(fixture.socketPath),
+            sessionID: target.sessionID,
+            sessionName: "pty-exact",
+            windowID: target.windowID,
+            windowIndex: 0,
+            activePaneID: target.paneID,
+            cwd: nil,
+            currentCommand: "zsh"
+        )
+        let binding = TmuxInteractiveSubscriptionBinding(
+            subscriptionID: "interactive-streaming-reply",
+            generation: 19
+        )
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: TmuxInteractivePTYController(),
+            authoritativeStartQuiescenceNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionAuthoritativeStartQuiescenceNanoseconds,
+            streamingStartupDeadlineNanoseconds:
+                TmuxInteractivePTYSessionOwner
+                    .productionStreamingStartupDeadlineNanoseconds
+        )
+        var didClose = false
+        defer {
+            if didClose == false {
+                try? owner.close()
+            }
+        }
+        try owner.begin(
+            TmuxInteractivePTYSessionStartRequest(
+                subscribe: TmuxInteractiveSubscribe(
+                    workspaceID: route.workspaceID,
+                    panelID: route.panelID,
+                    binding: binding,
+                    viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
+                    startupMode: .streamingReplies
+                ),
+                route: route,
+                tmuxExecutablePath: tmuxPath
+            )
+        )
+        _ = try XCTUnwrap(waitForSessionOwnerProof(owner: owner, timeout: 3))
+
+        let query = Data([0x1b, 0x5b, 0x3e, 0x63])
+        let reply = Data("\u{1b}[>65;20;1c".utf8)
+        let startedAt = Date()
+        let deadline = startedAt.addingTimeInterval(1)
+        var streamedBytes = Data()
+        var sequences: [UInt64] = []
+        var didSendReply = false
+        var didBecomeReady = false
+        var readyElapsed: TimeInterval?
+
+        while Date() < deadline, didBecomeReady == false {
+            switch try owner.pollStreamingStartup() {
+            case .attached(let attached):
+                sequences.append(attached.sequence)
+                streamedBytes.append(attached.initialBytes)
+            case .output(let chunk):
+                sequences.append(chunk.sequence)
+                streamedBytes.append(chunk.bytes)
+            case .ready(let ready):
+                sequences.append(ready.sequence)
+                readyElapsed = Date().timeIntervalSince(startedAt)
+                didBecomeReady = true
+            case .wouldBlock:
+                usleep(10_000)
+            }
+
+            if didSendReply == false,
+               streamedBytes.range(of: query) != nil {
+                XCTAssertEqual(
+                    try owner.sendTerminalReply(
+                        TmuxInteractiveTerminalReply(
+                            binding: binding,
+                            bytes: reply
+                        )
+                    ),
+                    .written(reply.count)
+                )
+                didSendReply = true
+            }
+        }
+
+        XCTAssertTrue(didSendReply, "the proved tmux stream never emitted its DA2 query")
+        XCTAssertTrue(didBecomeReady)
+        XCTAssertLessThan(try XCTUnwrap(readyElapsed), 1)
+        XCTAssertTrue(
+            String(decoding: streamedBytes, as: UTF8.self).contains("[pty-exact"),
+            "the initial real-tmux draw did not contain its status line"
+        )
+
+        let lateRefreshThreshold = startedAt.addingTimeInterval(4.5)
+        let observationDeadline = startedAt.addingTimeInterval(5.3)
+        var lateOutput = Data()
+        while Date() < observationDeadline {
+            switch try owner.pollLiveOutput() {
+            case .output(let chunk):
+                sequences.append(chunk.sequence)
+                if Date() >= lateRefreshThreshold {
+                    lateOutput.append(chunk.bytes)
+                }
+            case .wouldBlock:
+                usleep(20_000)
+            case .terminal(let state):
+                return XCTFail("tmux detached during negotiation observation: \(state)")
+            }
+        }
+        XCTAssertTrue(
+            lateOutput.isEmpty,
+            "the answered DA2 still produced tmux's five-second timeout redraw"
+        )
+        XCTAssertEqual(sequences, sequences.indices.map { UInt64($0 + 1) })
+
+        try owner.close()
+        didClose = true
+        XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
+    }
+
     func testSessionOwnerRequiresSecondGenuineResizeForCompleteFooterAndRestoresSizingClientGeometry() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
