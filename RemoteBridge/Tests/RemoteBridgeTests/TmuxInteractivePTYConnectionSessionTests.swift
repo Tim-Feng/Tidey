@@ -136,7 +136,7 @@ final class TmuxInteractivePTYConnectionSessionTests: XCTestCase {
                     binding: binding,
                     attachProof: verifiedAttach.attachProof,
                     viewport: request.subscribe.viewport,
-                    initialBytes: startBytes
+                    initialBytes: hiddenProofBytes + startBytes
                 )
             )
         )

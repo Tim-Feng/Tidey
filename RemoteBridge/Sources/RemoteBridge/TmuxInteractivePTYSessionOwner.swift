@@ -53,6 +53,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var preProofBytes = Data()
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
         var provedAtUptimeNanoseconds: UInt64?
+        var didCaptureProvedAttachPrefix = false
         var didRequestRedraw = false
         var didRequestVerificationRedraw = false
         var didReceiveVerificationRedrawOutput = false
@@ -209,9 +210,23 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                       verified.attachProof.windowID == route.windowID else {
                     throw TmuxInteractivePTYSessionOwnerError.attachProofMismatch
                 }
+                guard resources.preProofBytes.count <=
+                        maximumAuthoritativeStartBytes else {
+                    throw TmuxInteractivePTYSessionOwnerError
+                        .authoritativeStartBufferOverflow(
+                            limit: maximumAuthoritativeStartBytes
+                        )
+                }
+                resources.authoritativeStartBytes.append(resources.preProofBytes)
                 resources.preProofBytes.removeAll(keepingCapacity: false)
                 resources.verifiedAttach = verified
-                resources.provedAtUptimeNanoseconds = uptimeNanoseconds()
+                let provedAtUptimeNanoseconds = uptimeNanoseconds()
+                resources.provedAtUptimeNanoseconds = provedAtUptimeNanoseconds
+                if resources.authoritativeStartBytes.isEmpty == false {
+                    resources.didCaptureProvedAttachPrefix = true
+                    resources.lastAuthoritativeOutputUptimeNanoseconds =
+                        provedAtUptimeNanoseconds
+                }
                 state = .redrawing
                 return verified
             } catch {
@@ -257,7 +272,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 throw TmuxInteractivePTYSessionOwnerError.invalidState(state)
             }
             do {
-                if resources.didRequestRedraw == false {
+                if resources.didCaptureProvedAttachPrefix == false,
+                   resources.didRequestRedraw == false {
                     guard let provedAtUptimeNanoseconds =
                             resources.provedAtUptimeNanoseconds else {
                         return nil
@@ -322,6 +338,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             return nil
                         }
                         if requiresVerificationRedraw,
+                           resources.didCaptureProvedAttachPrefix == false,
                            resources.didRequestVerificationRedraw == false {
                             try paneRedrawRequester.requestRedraw(
                                 TmuxInteractivePaneRedrawRequest(
@@ -333,7 +350,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                             resources.lastAuthoritativeOutputUptimeNanoseconds = nil
                             return nil
                         }
-                        guard requiresVerificationRedraw == false
+                        guard resources.didCaptureProvedAttachPrefix
+                                || requiresVerificationRedraw == false
                                 || resources.didReceiveVerificationRedrawOutput else {
                             return nil
                         }

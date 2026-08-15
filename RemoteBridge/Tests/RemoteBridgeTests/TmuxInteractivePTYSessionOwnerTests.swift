@@ -353,7 +353,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         store.releaseInteractiveLease(token: token, sessionKey: sessionKey)
     }
 
-    func testOwnerPublishesOnlyPostSizeQuietFrameBeforeEnablingInput() throws {
+    func testOwnerPublishesOnlyProvedSameEpochQuietStreamBeforeEnablingInput() throws {
         let store = OrdinaryTmuxInputSubmissionStore()
         let route = makeRoute()
         let request = makeRequest(route: route)
@@ -393,10 +393,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         )
 
         XCTAssertNil(try owner.pollAuthoritativeStart())
-        XCTAssertEqual(
-            controller.resizedSizes,
-            [TmuxInteractivePTYSize(columns: 80, rows: 24)]
-        )
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
         XCTAssertThrowsError(try owner.sendInput(input)) { error in
             XCTAssertEqual(
                 error as? TmuxInteractivePTYSessionOwnerError,
@@ -411,7 +408,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
                 binding: request.subscribe.binding,
                 attachProof: verifiedAttach.attachProof,
                 viewport: request.subscribe.viewport,
-                initialBytes: redrawBytes
+                initialBytes: preProofBytes + redrawBytes
             )
         )
         XCTAssertEqual(owner.lifecycleState, .live)
@@ -432,6 +429,61 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
             )
         }
         XCTAssertEqual(controller.writtenBytes, [input.bytes])
+        try owner.close()
+    }
+
+    func testOwnerPublishesProvedSameEpochAttachPrefixWithoutWaitingForSyntheticRedraw() throws {
+        let store = OrdinaryTmuxInputSubmissionStore()
+        let route = makeRoute()
+        let request = makeRequest(route: route)
+        let controller = ControllerProbe()
+        let attachPrefix = Data(
+            "\u{1B}[?1049h\u{1B}[21;1H> Summarize recent commits\u{1B}[23;1Hgpt-5.6-sol xhigh"
+                .utf8
+        )
+        controller.readResults = [
+            .bytes(attachPrefix),
+            .wouldBlock,
+            .wouldBlock,
+        ]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let paneRedrawRequester = PaneRedrawRequesterProbe()
+        let uptime = UptimeProbe()
+        let quiescenceNanoseconds =
+            TmuxInteractivePTYSessionOwner
+                .productionAuthoritativeStartQuiescenceNanoseconds
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: store,
+            controller: controller,
+            attachProver: prover,
+            paneRedrawRequester: paneRedrawRequester,
+            authoritativeStartQuiescenceNanoseconds: quiescenceNanoseconds,
+            requiresVerificationRedraw: true,
+            uptimeNanoseconds: { uptime.now() }
+        )
+        try owner.begin(request)
+
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        XCTAssertNil(try owner.pollAuthoritativeStart())
+        uptime.advance(by: quiescenceNanoseconds)
+
+        let start = try XCTUnwrap(owner.pollAuthoritativeStart())
+        XCTAssertEqual(start.initialBytes, attachPrefix)
+        XCTAssertEqual(owner.lifecycleState, .live)
+        XCTAssertTrue(controller.resizedSizes.isEmpty)
+        XCTAssertTrue(paneRedrawRequester.requests.isEmpty)
         try owner.close()
     }
 

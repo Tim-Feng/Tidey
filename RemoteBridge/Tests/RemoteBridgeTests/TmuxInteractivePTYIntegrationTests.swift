@@ -738,7 +738,7 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         )
     }
 
-    func testSessionOwnerRequestsProvedPaneRedrawBeforePublishingCompleteFooter() throws {
+    func testSessionOwnerPublishesCompleteFooterFromProvedAttachStream() throws {
         guard let tmuxPath = TmuxStateResolver.discoverTmuxBinaryPath() else {
             throw XCTSkip("tmux is unavailable")
         }
@@ -748,7 +748,7 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
 
         let fixture = try InteractivePTYTmuxFixture(tmuxPath: tmuxPath)
         defer { fixture.shutdown() }
-        let target = try fixture.startWithDelayedFooterTargetWindow()
+        let target = try fixture.startWithAttachResizeFooterTargetWindow()
         let route = OrdinaryTmuxPanelRoute(
             workspaceID: "workspace-footer",
             panelID: "panel-footer",
@@ -769,8 +769,10 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: OrdinaryTmuxInputSubmissionStore(),
             controller: TmuxInteractivePTYController(),
-            paneRedrawRequester: TmuxInteractivePaneRedrawRequester(
-                tmuxExecutablePath: tmuxPath
+            attachProver: OneCycleDeferredAttachProver(
+                underlying: TmuxInteractiveAttachProver(
+                    tmuxExecutablePath: tmuxPath
+                )
             ),
             postProofRedrawDelayNanoseconds:
                 TmuxInteractivePTYSessionOwner
@@ -801,7 +803,6 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         _ = try XCTUnwrap(
             waitForSessionOwnerProof(owner: owner, timeout: 3)
         )
-        try fixture.armDelayedFooterRedraw()
 
         let startedAt = Date()
         let start = try XCTUnwrap(
@@ -830,7 +831,7 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
         try owner.close()
         didClose = true
         XCTAssertTrue(fixture.waitForClientCount(0, timeout: 2))
-        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 2)
+        XCTAssertEqual(try fixture.windowCount(sessionID: target.sessionID), 1)
     }
 
     func testRealPTYForwardsOpaqueBytesThroughTmuxKeyTableAndDetachesNormally() throws {
@@ -1145,6 +1146,33 @@ final class TmuxInteractivePTYIntegrationTests: XCTestCase {
     }
 }
 
+private final class OneCycleDeferredAttachProver:
+    TmuxInteractiveAttachProving,
+    @unchecked Sendable
+{
+    private let underlying: TmuxInteractiveAttachProving
+    private var heldVerification: TmuxInteractiveVerifiedAttach?
+
+    init(underlying: TmuxInteractiveAttachProving) {
+        self.underlying = underlying
+    }
+
+    func prove(
+        _ claim: TmuxInteractiveAttachClaim
+    ) throws -> TmuxInteractiveVerifiedAttach? {
+        if let heldVerification {
+            self.heldVerification = nil
+            return heldVerification
+        }
+        guard let verification = try underlying.prove(claim) else {
+            return nil
+        }
+        usleep(100_000)
+        heldVerification = verification
+        return nil
+    }
+}
+
 private struct InteractivePTYTmuxTarget {
     let sessionID: String
     let windowID: String
@@ -1239,7 +1267,6 @@ private final class InteractivePTYTmuxFixture {
 
     private let tmuxPath: String
     private let rootURL: URL
-    private var delayedFooterArmURL: URL?
     private var hasStartedServer = false
     private var isShutDown = false
 
@@ -1295,31 +1322,19 @@ private final class InteractivePTYTmuxFixture {
         )
     }
 
-    func startWithDelayedFooterTargetWindow() throws -> InteractivePTYTmuxTarget {
-        let first = try run([
-            "-f", "/dev/null",
-            "new-session", "-d",
-            "-P", "-F", "#{session_id}|#{window_id}",
-            "-s", "pty-exact",
-            "-x", "132",
-            "-y", "37",
-        ])
-        hasStartedServer = true
-        let firstFields = first.split(separator: "|", omittingEmptySubsequences: false)
-        guard firstFields.count == 2 else {
-            throw FixtureError.invalidRecord(first)
-        }
-
-        let armURL = rootURL.appendingPathComponent("footer-redraw-armed")
-        let sourceURL = rootURL.appendingPathComponent("delayed-footer.c")
-        let executableURL = rootURL.appendingPathComponent("delayed-footer")
+    func startWithAttachResizeFooterTargetWindow() throws -> InteractivePTYTmuxTarget {
+        let sourceURL = rootURL.appendingPathComponent("attach-resize-footer.c")
+        let executableURL = rootURL.appendingPathComponent("attach-resize-footer")
+        let readyURL = rootURL.appendingPathComponent("attach-resize-footer-ready")
         let source = """
+        #include <fcntl.h>
         #include <signal.h>
         #include <stddef.h>
+        #include <sys/ioctl.h>
+        #include <termios.h>
         #include <unistd.h>
 
         static volatile sig_atomic_t redraw_requested = 0;
-        static sig_atomic_t armed_redraw_count = 0;
         static const char collapsed[] =
             "\\033[21;1H\\033[2K\\033[22;1H\\033[2K\\033[23;1H\\033[2K> Summarize recent commits";
         static const char complete[] =
@@ -1345,22 +1360,29 @@ private final class InteractivePTYTmuxFixture {
             if (sigprocmask(SIG_BLOCK, &blocked, &prior) != 0) {
                 return 3;
             }
+            struct winsize last_size = {0};
+            if (ioctl(STDIN_FILENO, TIOCGWINSZ, &last_size) != 0) {
+                return 4;
+            }
             (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
+            int ready_fd = open("\(readyURL.path)", O_CREAT | O_WRONLY, 0600);
+            if (ready_fd < 0 || close(ready_fd) != 0) {
+                return 6;
+            }
 
             for (;;) {
                 while (redraw_requested == 0) {
                     (void)sigsuspend(&prior);
                 }
                 redraw_requested = 0;
-                if (access("\(armURL.path)", F_OK) == 0) {
-                    armed_redraw_count += 1;
-                    if (armed_redraw_count >= 2) {
-                        (void)write(STDOUT_FILENO, complete, sizeof(complete) - 1);
-                    } else {
-                        (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
-                    }
-                } else {
-                    (void)write(STDOUT_FILENO, collapsed, sizeof(collapsed) - 1);
+                struct winsize current_size = {0};
+                if (ioctl(STDIN_FILENO, TIOCGWINSZ, &current_size) != 0) {
+                    return 5;
+                }
+                if (current_size.ws_col != last_size.ws_col ||
+                    current_size.ws_row != last_size.ws_row) {
+                    last_size = current_size;
+                    (void)write(STDOUT_FILENO, complete, sizeof(complete) - 1);
                 }
             }
         }
@@ -1386,33 +1408,31 @@ private final class InteractivePTYTmuxFixture {
                 stderr: String(decoding: compileResult.standardError, as: UTF8.self)
             )
         }
-        delayedFooterArmURL = armURL
-
-        let sessionID = String(firstFields[0])
         let target = try run([
-            "new-window", "-d",
+            "-f", "/dev/null",
+            "new-session", "-d",
             "-P", "-F", "#{session_id}|#{window_id}|#{pane_id}",
-            "-t", sessionID,
+            "-s", "pty-exact",
             "-n", "phone-target",
+            "-x", "132",
+            "-y", "37",
             executableURL.path,
         ])
+        hasStartedServer = true
         let targetFields = target.split(separator: "|", omittingEmptySubsequences: false)
-        guard targetFields.count == 3,
-              targetFields[0] == Substring(sessionID) else {
+        guard targetFields.count == 3 else {
             throw FixtureError.invalidRecord(target)
         }
+        guard waitUntil(timeout: 2, predicate: {
+            FileManager.default.fileExists(atPath: readyURL.path)
+        }) else {
+            throw FixtureError.invalidRecord("attach resize footer fixture did not become ready")
+        }
         return InteractivePTYTmuxTarget(
-            sessionID: sessionID,
+            sessionID: String(targetFields[0]),
             windowID: String(targetFields[1]),
             paneID: String(targetFields[2])
         )
-    }
-
-    func armDelayedFooterRedraw() throws {
-        guard let delayedFooterArmURL else {
-            throw FixtureError.invalidRecord("delayed footer fixture is not active")
-        }
-        try Data().write(to: delayedFooterArmURL, options: .atomic)
     }
 
     func capturePaneLines(paneID: String) throws -> [String] {
@@ -1446,11 +1466,7 @@ private final class InteractivePTYTmuxFixture {
             decoding: result?.standardOutput ?? Data(),
             as: UTF8.self
         )
-        let armExists = delayedFooterArmURL.map {
-            FileManager.default.fileExists(atPath: $0.path)
-        } ?? false
-        let armPath = delayedFooterArmURL?.path ?? "nil"
-        return "\(paneRecord)\n\(processRecord)arm=\(armExists) path=\(armPath)"
+        return "\(paneRecord)\n\(processRecord)"
     }
 
     func waitForClient(
