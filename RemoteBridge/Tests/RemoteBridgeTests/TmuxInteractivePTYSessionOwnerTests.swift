@@ -537,6 +537,96 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(controller.reapCalls.count, 1)
     }
 
+    func testStreamingStartupPublishesReadyAtAbsoluteDeadlineWithoutDroppingContinuousOutput() throws {
+        let route = makeRoute()
+        let request = makeRequest(route: route, startupMode: .streamingReplies)
+        let controller = ControllerProbe()
+        let provedPrefix = Data("prefix".utf8)
+        controller.readResults = [.bytes(provedPrefix), .wouldBlock]
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let prover = ProverProbe()
+        prover.results = [verifiedAttach]
+        let uptime = UptimeProbe()
+        let deadlineNanoseconds: UInt64 = 100
+        let owner = TmuxInteractivePTYSessionOwner(
+            admissionStore: OrdinaryTmuxInputSubmissionStore(),
+            controller: controller,
+            attachProver: prover,
+            authoritativeStartQuiescenceNanoseconds: 1_000,
+            streamingStartupDeadlineNanoseconds: deadlineNanoseconds,
+            uptimeNanoseconds: { uptime.now() }
+        )
+
+        try owner.begin(request)
+        XCTAssertEqual(try owner.pollAttachProof(), verifiedAttach)
+        guard case .attached(let attached) = try owner.pollStreamingStartup() else {
+            return XCTFail("Expected attached before streaming output")
+        }
+        XCTAssertEqual(attached.initialBytes, provedPrefix)
+        XCTAssertEqual(attached.sequence, 1)
+
+        let beforeDeadline = Data("before-deadline".utf8)
+        uptime.advance(by: deadlineNanoseconds - 1)
+        controller.readResults.append(.bytes(beforeDeadline))
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 2,
+                    bytes: beforeDeadline
+                )
+            )
+        )
+
+        let atDeadline = Data("at-deadline".utf8)
+        let afterReady = Data("after-ready".utf8)
+        uptime.advance(by: 1)
+        controller.readResults.append(.bytes(atDeadline))
+        controller.readResults.append(.bytes(afterReady))
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 3,
+                    bytes: atDeadline
+                )
+            )
+        )
+        XCTAssertEqual(
+            try owner.pollStreamingStartup(),
+            .ready(
+                TmuxInteractiveReady(
+                    binding: request.subscribe.binding,
+                    sequence: 4
+                )
+            )
+        )
+        XCTAssertEqual(owner.lifecycleState, .live)
+        XCTAssertEqual(
+            try owner.pollLiveOutput(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: request.subscribe.binding,
+                    sequence: 5,
+                    bytes: afterReady
+                )
+            )
+        )
+        try owner.close()
+    }
+
     func testOwnerPublishesProvedDirectAttachStreamAtExactViewport() throws {
         let route = makeRoute()
         let request = makeRequest(route: route)

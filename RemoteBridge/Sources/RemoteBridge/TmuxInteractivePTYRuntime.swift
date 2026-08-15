@@ -84,6 +84,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     authoritativeStartQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
                             .productionAuthoritativeStartQuiescenceNanoseconds,
+                    streamingStartupDeadlineNanoseconds:
+                        TmuxInteractivePTYSessionOwner
+                            .productionStreamingStartupDeadlineNanoseconds,
                     clientRefreshTimeoutNanoseconds:
                         TmuxInteractivePTYSessionOwner
                             .productionClientRefreshTimeoutNanoseconds,

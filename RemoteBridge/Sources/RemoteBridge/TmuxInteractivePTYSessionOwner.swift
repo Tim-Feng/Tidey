@@ -55,6 +55,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         500_000_000
     static let productionClientRefreshTimeoutNanoseconds: UInt64 =
         2_000_000_000
+    static let productionStreamingStartupDeadlineNanoseconds: UInt64 =
+        2_000_000_000
 
     private final class ActiveResources {
         let handle: TmuxInteractivePTYHandle
@@ -71,6 +73,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         var authoritativeStartBytes = Data()
         var streamingStartupByteCount = 0
         var didPublishStreamingAttached = false
+        var shouldPublishStreamingReady = false
         var lastAuthoritativeOutputUptimeNanoseconds: UInt64?
         var resizeGate: TmuxInteractivePTYResizeGate?
         var nextOutputSequence: UInt64 = 1
@@ -101,6 +104,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let maximumPreProofBytes: Int
     private let maximumAuthoritativeStartBytes: Int
     private let authoritativeStartQuiescenceNanoseconds: UInt64
+    private let streamingStartupDeadlineNanoseconds: UInt64
     private let clientRefreshTimeoutNanoseconds: UInt64
     private let requiresPostRefreshObservation: Bool
     private let postRefreshQuiescenceNanoseconds: UInt64
@@ -117,6 +121,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         maximumPreProofBytes: Int = 1_024 * 1_024,
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
+        streamingStartupDeadlineNanoseconds: UInt64 = .max,
         clientRefreshTimeoutNanoseconds: UInt64 = .max,
         requiresPostRefreshObservation: Bool = false,
         postRefreshQuiescenceNanoseconds: UInt64? = nil,
@@ -132,6 +137,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
         self.authoritativeStartQuiescenceNanoseconds =
             authoritativeStartQuiescenceNanoseconds
+        self.streamingStartupDeadlineNanoseconds =
+            streamingStartupDeadlineNanoseconds
         self.clientRefreshTimeoutNanoseconds = clientRefreshTimeoutNanoseconds
         self.requiresPostRefreshObservation =
             requiresPostRefreshObservation
@@ -510,6 +517,10 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 return .attached(attached)
             }
 
+            if resources.shouldPublishStreamingReady {
+                return try publishStreamingReady(resources)
+            }
+
             let readResult: TmuxInteractivePTYReadResult
             do {
                 readResult = try controller.read(
@@ -539,6 +550,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 resources.streamingStartupByteCount += bytes.count
                 resources.lastAuthoritativeOutputUptimeNanoseconds =
                     uptimeNanoseconds()
+                if hasReachedStreamingStartupDeadline(resources) {
+                    resources.shouldPublishStreamingReady = true
+                }
                 return .output(
                     TmuxInteractiveOutputChunk(
                         binding: resources.request.subscribe.binding,
@@ -554,23 +568,47 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                     return .wouldBlock
                 }
                 let currentUptimeNanoseconds = uptimeNanoseconds()
-                guard currentUptimeNanoseconds >= quietBeganAtUptimeNanoseconds,
-                      currentUptimeNanoseconds - quietBeganAtUptimeNanoseconds >=
-                        authoritativeStartQuiescenceNanoseconds else {
+                let isQuiet = currentUptimeNanoseconds >=
+                    quietBeganAtUptimeNanoseconds &&
+                    currentUptimeNanoseconds - quietBeganAtUptimeNanoseconds >=
+                        authoritativeStartQuiescenceNanoseconds
+                guard isQuiet || hasReachedStreamingStartupDeadline(
+                    resources,
+                    currentUptimeNanoseconds: currentUptimeNanoseconds
+                ) else {
                     return .wouldBlock
                 }
-                let ready = TmuxInteractiveReady(
-                    binding: resources.request.subscribe.binding,
-                    sequence: try takeNextOutputSequence(resources)
-                )
-                transitionToLive(resources)
-                return .ready(ready)
+                return try publishStreamingReady(resources)
             case .endOfFile:
                 try closeActiveResources(resources)
                 throw TmuxInteractivePTYSessionOwnerError
                     .unexpectedEndBeforeAuthoritativeStart
             }
         }
+    }
+
+    private func hasReachedStreamingStartupDeadline(
+        _ resources: ActiveResources,
+        currentUptimeNanoseconds: UInt64? = nil
+    ) -> Bool {
+        guard let beganAt = resources
+            .authoritativeStartCollectionBeganAtUptimeNanoseconds else {
+            return false
+        }
+        let current = currentUptimeNanoseconds ?? uptimeNanoseconds()
+        return current >= beganAt &&
+            current - beganAt >= streamingStartupDeadlineNanoseconds
+    }
+
+    private func publishStreamingReady(
+        _ resources: ActiveResources
+    ) throws -> TmuxInteractivePTYSessionStartupPollResult {
+        let ready = TmuxInteractiveReady(
+            binding: resources.request.subscribe.binding,
+            sequence: try takeNextOutputSequence(resources)
+        )
+        transitionToLive(resources)
+        return .ready(ready)
     }
 
     func close() throws {

@@ -298,6 +298,106 @@ final class TmuxInteractivePTYRuntimeTests: XCTestCase {
         )
     }
 
+    func testEnabledRuntimeAppliesProductionStreamingStartupDeadline() throws {
+        let controller = ControllerProbe()
+        let prefix = Data("streaming-prefix".utf8)
+        controller.setReadResults([.bytes(prefix), .wouldBlock])
+        let route = OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-runtime-streaming-deadline",
+            panelID: "ordinary-tmux:path:$1:@2",
+            carrierPanelID: "carrier-runtime-streaming-deadline",
+            socket: .path("/private/tmp/tmux-501/default"),
+            sessionID: "$1",
+            sessionName: "session-runtime-streaming-deadline",
+            windowID: "@2",
+            windowIndex: 1,
+            activePaneID: "%3",
+            cwd: nil,
+            currentCommand: "zsh"
+        )
+        let verifiedAttach = TmuxInteractiveVerifiedAttach(
+            attachProof: TmuxInteractiveAttachProof(
+                workspaceID: route.workspaceID,
+                panelID: route.panelID,
+                sessionID: route.sessionID,
+                windowID: route.windowID,
+                paneID: route.activePaneID
+            ),
+            childProcessID: 23,
+            clientTTY: "/dev/ttys001"
+        )
+        let uptime = UptimeProbe()
+        let runtime = TmuxInteractivePTYRuntime.enabled(
+            tmuxExecutablePath: "/opt/homebrew/bin/tmux",
+            controller: controller,
+            attachProver: ProverStub(verifiedAttach: verifiedAttach),
+            uptimeNanoseconds: { uptime.now() },
+            migrateWindow: { _, _ in
+                .notEligible(.currentPolicyNotOwned("latest"))
+            }
+        )
+        runtime.ordinaryTmuxProjectionContext.registry.replaceRoutes(
+            workspaceID: route.workspaceID,
+            routes: [route]
+        )
+        let subscribe = TmuxInteractiveSubscribe(
+            workspaceID: route.workspaceID,
+            panelID: route.panelID,
+            binding: TmuxInteractiveSubscriptionBinding(
+                subscriptionID: "interactive-runtime-streaming-deadline",
+                generation: 1
+            ),
+            viewport: TmuxInteractiveViewport(columns: 50, rows: 45),
+            startupMode: .streamingReplies
+        )
+        let session = try XCTUnwrap(
+            runtime.activation.candidateBuilder?.build(subscribe)
+        )
+        defer { try? session.close() }
+
+        XCTAssertEqual(try session.poll(), .wouldBlock)
+        guard case .attached(let attached) = try session.poll() else {
+            return XCTFail("Expected streaming attached event")
+        }
+        XCTAssertEqual(attached.initialBytes, prefix)
+        XCTAssertEqual(attached.sequence, 1)
+
+        let deadlineOutput = Data("deadline-output".utf8)
+        let liveOutput = Data("live-output".utf8)
+        uptime.advance(
+            by: TmuxInteractivePTYSessionOwner
+                .productionStreamingStartupDeadlineNanoseconds
+        )
+        controller.setReadResults([
+            .bytes(deadlineOutput),
+            .bytes(liveOutput),
+        ])
+        guard case .output(let output) = try session.poll() else {
+            return XCTFail("Expected the deadline output before ready")
+        }
+        XCTAssertEqual(output.bytes, deadlineOutput)
+        XCTAssertEqual(output.sequence, 2)
+        XCTAssertEqual(
+            try session.poll(),
+            .ready(
+                TmuxInteractiveReady(
+                    binding: subscribe.binding,
+                    sequence: 3
+                )
+            )
+        )
+        XCTAssertEqual(
+            try session.poll(),
+            .output(
+                TmuxInteractiveOutputChunk(
+                    binding: subscribe.binding,
+                    sequence: 4,
+                    bytes: liveOutput
+                )
+            )
+        )
+    }
+
     func testProductionRuntimeEnablesOnlyWithDiscoveredTmuxPath() {
         let enabled = TmuxInteractivePTYRuntime.production(
             tmuxExecutablePath: "/opt/homebrew/bin/tmux"
