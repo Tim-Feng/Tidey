@@ -456,16 +456,11 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 guard bytes.isEmpty == false else {
                     return .wouldBlock
                 }
-                guard resources.nextOutputSequence < UInt64.max else {
-                    try closeActiveResources(resources)
-                    throw TmuxInteractivePTYSessionOwnerError.outputSequenceExhausted
-                }
                 let chunk = TmuxInteractiveOutputChunk(
                     binding: resources.request.subscribe.binding,
-                    sequence: resources.nextOutputSequence,
+                    sequence: try takeNextOutputSequence(resources),
                     bytes: bytes
                 )
-                resources.nextOutputSequence += 1
                 return .output(chunk)
             case .wouldBlock:
                 return .wouldBlock
@@ -546,6 +541,18 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             controller: controller
         )
         state = .live
+    }
+
+    private func takeNextOutputSequence(
+        _ resources: ActiveResources
+    ) throws -> UInt64 {
+        guard resources.nextOutputSequence < UInt64.max else {
+            try closeActiveResources(resources)
+            throw TmuxInteractivePTYSessionOwnerError.outputSequenceExhausted
+        }
+        let sequence = resources.nextOutputSequence
+        resources.nextOutputSequence += 1
+        return sequence
     }
 
     private func closeActiveResources(_ resources: ActiveResources) throws {
