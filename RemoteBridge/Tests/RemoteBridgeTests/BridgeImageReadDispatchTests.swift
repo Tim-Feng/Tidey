@@ -44,6 +44,9 @@ final class BridgeImageReadDispatchTests: XCTestCase {
         XCTAssertTrue(capabilities.compactMap(\.stringValue).contains(
             BridgeProtocolCapability.terminalStreamSubscriptionOwnership
         ))
+        XCTAssertTrue(capabilities.compactMap(\.stringValue).contains(
+            BridgeNativeSplitProtocolV1.capability
+        ))
     }
 
     private static func makeHandler() -> WebSocketFrameHandler {

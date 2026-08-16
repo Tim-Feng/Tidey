@@ -726,6 +726,7 @@ enum BridgeProtocolCapability {
     static let terminalStreamSubscriptionOwnership = "terminal_stream_subscription_ownership_v1"
     static let tmuxInteractive = TmuxInteractiveProtocolV1.capability
     static let videoPreview = BridgeVideoPreviewProtocolV1.capability
+    static let nativeSplitSessions = BridgeNativeSplitProtocolV1.capability
 }
 
 enum TmuxInteractivePTYActivation: Sendable {
@@ -1563,6 +1564,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 .string("image_read_v1"),
                 .string(BridgeProtocolCapability.terminalStreamSubscriptionOwnership),
                 .string(BridgeProtocolCapability.videoPreview),
+                .string(BridgeProtocolCapability.nativeSplitSessions),
             ] + interactivePTYActivation.protocolCapabilities.map(JSONValue.string)
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
