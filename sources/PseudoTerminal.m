@@ -1491,6 +1491,13 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (TideyNativeTerminalSizeLease *)leaseForSessionGUID:(NSString *)sessionGUID;
 - (TideyNativeTerminalSizeLease *)takeLeaseForSessionGUID:(NSString *)sessionGUID
                                                     token:(NSString *)token;
+- (TideyNativeTerminalSizeLease *)updateLeasedGrid:(VT100GridSize)leasedGrid
+                                       sessionGUID:(NSString *)sessionGUID
+                                             token:(NSString *)token
+                                               now:(NSTimeInterval)now;
+- (TideyNativeTerminalSizeLease *)heartbeatSessionGUID:(NSString *)sessionGUID
+                                                 token:(NSString *)token
+                                                   now:(NSTimeInterval)now;
 
 @end
 
@@ -1554,6 +1561,35 @@ static NSString *TideyRuntimeAgentExecutablePath(
     }
     [[self leaseStore] removeObjectForKey:sessionGUID];
     return [lease autorelease];
+}
+
+- (TideyNativeTerminalSizeLease *)updateLeasedGrid:(VT100GridSize)leasedGrid
+                                       sessionGUID:(NSString *)sessionGUID
+                                             token:(NSString *)token
+                                               now:(NSTimeInterval)now {
+    TideyNativeTerminalSizeLease *lease =
+        [[self leaseStore] objectForKey:sessionGUID];
+    if (!lease || ![lease.token isEqualToString:token]) {
+        return nil;
+    }
+    TideyNativeTerminalSizeLease *updated =
+        [lease leaseByUpdatingLeasedGrid:leasedGrid heartbeatAt:now];
+    [self leaseStore][sessionGUID] = updated;
+    return updated;
+}
+
+- (TideyNativeTerminalSizeLease *)heartbeatSessionGUID:(NSString *)sessionGUID
+                                                 token:(NSString *)token
+                                                   now:(NSTimeInterval)now {
+    TideyNativeTerminalSizeLease *lease =
+        [[self leaseStore] objectForKey:sessionGUID];
+    if (!lease || ![lease.token isEqualToString:token]) {
+        return nil;
+    }
+    TideyNativeTerminalSizeLease *updated =
+        [lease leaseByHeartbeatingAt:now];
+    [self leaseStore][sessionGUID] = updated;
+    return updated;
 }
 
 @end

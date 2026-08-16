@@ -72,8 +72,10 @@ static id TideySocketTestAutorelease(id object) {
 @end
 
 @interface TideyNativeTerminalSizeLease : NSObject
+@property(nonatomic, readonly, copy) NSString *token;
 @property(nonatomic, readonly) VT100GridSize leasedGrid;
 @property(nonatomic, readonly) VT100GridSize savedMacGrid;
+@property(nonatomic, readonly) NSTimeInterval lastHeartbeatAt;
 @end
 
 @interface TideyNativeTerminalSizeLeaseStore : NSObject
@@ -87,6 +89,13 @@ static id TideySocketTestAutorelease(id object) {
 - (TideyNativeTerminalSizeLease *)leaseForSessionGUID:(NSString *)sessionGUID;
 - (TideyNativeTerminalSizeLease *)takeLeaseForSessionGUID:(NSString *)sessionGUID
                                                     token:(NSString *)token;
+- (TideyNativeTerminalSizeLease *)updateLeasedGrid:(VT100GridSize)leasedGrid
+                                       sessionGUID:(NSString *)sessionGUID
+                                             token:(NSString *)token
+                                               now:(NSTimeInterval)now;
+- (TideyNativeTerminalSizeLease *)heartbeatSessionGUID:(NSString *)sessionGUID
+                                                 token:(NSString *)token
+                                                   now:(NSTimeInterval)now;
 @end
 
 @interface TideyNativeSessionRestartProbeTerminal : PseudoTerminal {
@@ -186,6 +195,47 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertTrue(VT100GridSizeEquals(released.savedMacGrid, latestMacGrid));
     XCTAssertNil([store takeLeaseForSessionGUID:@"session-1" token:@"token-1"]);
     XCTAssertTrue([store shouldApplyGrid:originalMacGrid toSessionGUID:@"session-1"]);
+}
+
+- (void)testNativeTerminalSizeLeaseSupersedeCarriesMacGridAndRejectsStaleToken {
+    TideyNativeTerminalSizeLeaseStore *store = TideySocketTestAutorelease(
+        [[TideyNativeTerminalSizeLeaseStore alloc] init]);
+    const VT100GridSize firstPhoneGrid = VT100GridSizeMake(42, 20);
+    const VT100GridSize secondPhoneGrid = VT100GridSizeMake(50, 22);
+    const VT100GridSize latestMacGrid = VT100GridSizeMake(118, 44);
+
+    [store acquireWithToken:@"token-1"
+     carrierPanelIdentifier:@"carrier-1"
+                sessionGUID:@"session-1"
+                 leasedGrid:firstPhoneGrid
+               savedMacGrid:VT100GridSizeMake(132, 48)
+                        now:100];
+    XCTAssertFalse([store shouldApplyGrid:latestMacGrid toSessionGUID:@"session-1"]);
+
+    TideyNativeTerminalSizeLease *superseding =
+        [store acquireWithToken:@"token-2"
+         carrierPanelIdentifier:@"carrier-1"
+                    sessionGUID:@"session-1"
+                     leasedGrid:secondPhoneGrid
+                   savedMacGrid:firstPhoneGrid
+                            now:101];
+    XCTAssertTrue(VT100GridSizeEquals(superseding.savedMacGrid, latestMacGrid));
+    XCTAssertNil([store updateLeasedGrid:VT100GridSizeMake(60, 24)
+                              sessionGUID:@"session-1"
+                                    token:@"token-1"
+                                      now:102]);
+    XCTAssertNil([store heartbeatSessionGUID:@"session-1" token:@"token-1" now:102]);
+
+    TideyNativeTerminalSizeLease *updated =
+        [store updateLeasedGrid:VT100GridSizeMake(52, 23)
+                    sessionGUID:@"session-1"
+                          token:@"token-2"
+                            now:103];
+    XCTAssertTrue(VT100GridSizeEquals(updated.leasedGrid, VT100GridSizeMake(52, 23)));
+    XCTAssertEqual(updated.lastHeartbeatAt, 103);
+    XCTAssertEqual([store heartbeatSessionGUID:@"session-1"
+                                          token:@"token-2"
+                                            now:104].lastHeartbeatAt, 104);
 }
 
 - (void)testNativeSessionProjectionFlattensTwoLeaves {
