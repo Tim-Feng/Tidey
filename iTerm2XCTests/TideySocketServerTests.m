@@ -54,6 +54,8 @@ static id TideySocketTestAutorelease(id object) {
 + (NSDictionary<NSString *, NSString *> *)tideyNativeSessionPanelIdentityFromPanelIdentifier:(NSString *)panelIdentifier;
 + (NSArray<NSDictionary *> *)tideyNativeSessionPanelSummariesForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
                                                                     basePanelSummaries:(NSArray<NSDictionary *> *)basePanelSummaries;
++ (NSString *)tideyValidatedNativeSessionIdentifierForPanelIdentifier:(NSString *)panelIdentifier
+                                         actualCarrierPanelIdentifier:(NSString *)actualCarrierPanelIdentifier;
 @end
 
 @interface PseudoTerminalTests : XCTestCase
@@ -94,6 +96,21 @@ static id TideySocketTestAutorelease(id object) {
     XCTAssertEqualObjects(projected[0][@"title"], @"Claude");
     XCTAssertEqualObjects(projected[1][@"panel_id"], @"native-session:carrier-1:session-2");
     XCTAssertEqualObjects(projected[1][@"title"], @"Codex");
+}
+
+- (void)testNativeSessionResolverRejectsCarrierMismatch {
+    NSString *panelID = @"native-session:carrier-1:session-1";
+
+    XCTAssertEqualObjects(
+        [PseudoTerminal tideyValidatedNativeSessionIdentifierForPanelIdentifier:panelID
+                                                  actualCarrierPanelIdentifier:@"carrier-1"],
+        @"session-1");
+    XCTAssertNil(
+        [PseudoTerminal tideyValidatedNativeSessionIdentifierForPanelIdentifier:panelID
+                                                  actualCarrierPanelIdentifier:@"carrier-2"]);
+    XCTAssertNil(
+        [PseudoTerminal tideyValidatedNativeSessionIdentifierForPanelIdentifier:@"carrier-1"
+                                                  actualCarrierPanelIdentifier:@"carrier-1"]);
 }
 
 - (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
