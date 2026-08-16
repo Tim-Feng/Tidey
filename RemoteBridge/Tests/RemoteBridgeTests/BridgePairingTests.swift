@@ -189,6 +189,20 @@ final class BridgePairingTests: XCTestCase {
         XCTAssertFalse(authenticator.isAuthorized(authorizationHeader: nil))
     }
 
+    func testBridgeAuthenticatorResolvesTypedPrincipal() throws {
+        let fixture = try PairingFixture()
+        _ = try fixture.deviceCredentialStore.issueCredential(deviceID: "device-1",
+                                                              deviceName: "Tim's iPhone")
+        let authenticator = BridgeAuthenticator(legacyPairToken: "legacy-token",
+                                                deviceCredentialStore: fixture.deviceCredentialStore)
+
+        XCTAssertEqual(authenticator.principal(authorizationHeader: "Bearer legacy-token"), .legacy)
+        XCTAssertEqual(authenticator.principal(authorizationHeader: "Bearer device-token-1"),
+                       .device(id: "device-1"))
+        XCTAssertNil(authenticator.principal(authorizationHeader: "Bearer unknown-token"))
+        XCTAssertNil(authenticator.principal(authorizationHeader: nil))
+    }
+
     func testDeviceCredentialStoreListsTouchesAndRevokesPairedDevices() throws {
         let fixture = try PairingFixture()
         let credential = try fixture.deviceCredentialStore.issueCredential(deviceID: "device-1",

@@ -485,14 +485,18 @@ final class BridgeDeviceCredentialStore {
     }
 
     func isValidCredential(_ token: String) throws -> Bool {
+        try deviceID(forCredential: token) != nil
+    }
+
+    func deviceID(forCredential token: String) throws -> String? {
         let tokenHash = Self.hash(token)
         var record = try loadRecord()
         guard let index = record.devices.firstIndex(where: { $0.tokenHash == tokenHash }) else {
-            return false
+            return nil
         }
         record.devices[index].lastConnectedAt = nowProvider()
         try save(record)
-        return true
+        return record.devices[index].deviceID
     }
 
     func listDevices() throws -> [BridgePairedDevice] {
@@ -588,6 +592,11 @@ final class BridgePairingController {
     }
 }
 
+enum BridgeAuthenticatedPrincipal: Equatable, Sendable {
+    case legacy
+    case device(id: String)
+}
+
 final class BridgeAuthenticator {
     private let legacyPairToken: String
     private let deviceCredentialStore: BridgeDeviceCredentialStore
@@ -599,13 +608,20 @@ final class BridgeAuthenticator {
     }
 
     func isAuthorized(authorizationHeader: String?) -> Bool {
+        principal(authorizationHeader: authorizationHeader) != nil
+    }
+
+    func principal(authorizationHeader: String?) -> BridgeAuthenticatedPrincipal? {
         guard let token = bearerToken(from: authorizationHeader) else {
-            return false
+            return nil
         }
         if token == legacyPairToken {
-            return true
+            return .legacy
         }
-        return (try? deviceCredentialStore.isValidCredential(token)) == true
+        guard let deviceID = try? deviceCredentialStore.deviceID(forCredential: token) else {
+            return nil
+        }
+        return .device(id: deviceID)
     }
 
     func isLegacyTokenAuthorized(authorizationHeader: String?) -> Bool {
