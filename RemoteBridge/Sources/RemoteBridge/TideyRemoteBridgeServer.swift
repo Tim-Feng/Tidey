@@ -727,6 +727,7 @@ enum BridgeProtocolCapability {
     static let tmuxInteractive = TmuxInteractiveProtocolV1.capability
     static let videoPreview = BridgeVideoPreviewProtocolV1.capability
     static let nativeSplitSessions = BridgeNativeSplitProtocolV1.capability
+    static let nativeTerminalSizing = "native_terminal_sizing_v1"
 }
 
 enum TmuxInteractivePTYActivation: Sendable {
@@ -1565,6 +1566,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                 .string(BridgeProtocolCapability.terminalStreamSubscriptionOwnership),
                 .string(BridgeProtocolCapability.videoPreview),
                 .string(BridgeProtocolCapability.nativeSplitSessions),
+                .string(BridgeProtocolCapability.nativeTerminalSizing),
             ] + interactivePTYActivation.protocolCapabilities.map(JSONValue.string)
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
