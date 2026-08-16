@@ -96,6 +96,8 @@ static id TideySocketTestAutorelease(id object) {
 - (TideyNativeTerminalSizeLease *)heartbeatSessionGUID:(NSString *)sessionGUID
                                                  token:(NSString *)token
                                                    now:(NSTimeInterval)now;
+- (NSArray<TideyNativeTerminalSizeLease *> *)takeExpiredLeasesAt:(NSTimeInterval)now
+                                                         timeout:(NSTimeInterval)timeout;
 @end
 
 @interface TideyNativeSessionRestartProbeTerminal : PseudoTerminal {
@@ -236,6 +238,29 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertEqual([store heartbeatSessionGUID:@"session-1"
                                           token:@"token-2"
                                             now:104].lastHeartbeatAt, 104);
+}
+
+- (void)testNativeTerminalSizeLeaseTimeoutRestoresOnceAndRejectsLateHeartbeat {
+    TideyNativeTerminalSizeLeaseStore *store = TideySocketTestAutorelease(
+        [[TideyNativeTerminalSizeLeaseStore alloc] init]);
+    const VT100GridSize macGrid = VT100GridSizeMake(132, 48);
+
+    [store acquireWithToken:@"token-1"
+     carrierPanelIdentifier:@"carrier-1"
+                sessionGUID:@"session-1"
+                 leasedGrid:VT100GridSizeMake(42, 20)
+               savedMacGrid:macGrid
+                        now:100];
+    [store heartbeatSessionGUID:@"session-1" token:@"token-1" now:103];
+
+    XCTAssertEqual([store takeExpiredLeasesAt:107 timeout:5].count, 0u);
+    NSArray<TideyNativeTerminalSizeLease *> *expired =
+        [store takeExpiredLeasesAt:109 timeout:5];
+    XCTAssertEqual(expired.count, 1u);
+    XCTAssertTrue(VT100GridSizeEquals(expired[0].savedMacGrid, macGrid));
+    XCTAssertNil([store leaseForSessionGUID:@"session-1"]);
+    XCTAssertNil([store heartbeatSessionGUID:@"session-1" token:@"token-1" now:110]);
+    XCTAssertEqual([store takeExpiredLeasesAt:120 timeout:5].count, 0u);
 }
 
 - (void)testNativeSessionProjectionFlattensTwoLeaves {

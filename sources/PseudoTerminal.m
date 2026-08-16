@@ -1498,6 +1498,8 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (TideyNativeTerminalSizeLease *)heartbeatSessionGUID:(NSString *)sessionGUID
                                                  token:(NSString *)token
                                                    now:(NSTimeInterval)now;
+- (NSArray<TideyNativeTerminalSizeLease *> *)takeExpiredLeasesAt:(NSTimeInterval)now
+                                                         timeout:(NSTimeInterval)timeout;
 
 @end
 
@@ -1590,6 +1592,23 @@ static NSString *TideyRuntimeAgentExecutablePath(
         [lease leaseByHeartbeatingAt:now];
     [self leaseStore][sessionGUID] = updated;
     return updated;
+}
+
+- (NSArray<TideyNativeTerminalSizeLease *> *)takeExpiredLeasesAt:(NSTimeInterval)now
+                                                         timeout:(NSTimeInterval)timeout {
+    NSArray<TideyNativeTerminalSizeLease *> *leases =
+        [[[self leaseStore] allValues] copy];
+    NSMutableArray<TideyNativeTerminalSizeLease *> *expired =
+        [NSMutableArray array];
+    for (TideyNativeTerminalSizeLease *lease in leases) {
+        if (now - lease.lastHeartbeatAt < timeout) {
+            continue;
+        }
+        [expired addObject:lease];
+        [[self leaseStore] removeObjectForKey:lease.sessionGUID];
+    }
+    [leases release];
+    return expired;
 }
 
 @end
