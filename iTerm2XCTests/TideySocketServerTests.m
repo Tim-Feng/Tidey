@@ -60,6 +60,9 @@ static id TideySocketTestAutorelease(id object) {
                                          actualCarrierPanelIdentifier:(NSString *)actualCarrierPanelIdentifier;
 + (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffFromPreviousSummaries:(NSArray<NSDictionary *> *)previousSummaries
                                                                                                currentSummaries:(NSArray<NSDictionary *> *)currentSummaries;
++ (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                                                                                      summaryCache:(NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *)summaryCache
+                                                                                                  currentSummaries:(NSArray<NSDictionary *> *)currentSummaries;
 + (BOOL)tideyRemoteSelectionShouldMutateMacForPanelIdentifier:(NSString *)panelIdentifier;
 + (BOOL)tideyCloseShouldUseCarrierForPanelIdentifier:(NSString *)panelIdentifier
                                nativeSessionAvailable:(BOOL)nativeSessionAvailable;

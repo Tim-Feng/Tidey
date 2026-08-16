@@ -2727,6 +2727,18 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
++ (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                                                                                      summaryCache:(NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *)summaryCache
+                                                                                                  currentSummaries:(NSArray<NSDictionary *> *)currentSummaries {
+    NSArray<NSDictionary *> *previousSummaries = summaryCache[carrierPanelIdentifier];
+    summaryCache[carrierPanelIdentifier] = currentSummaries;
+    if (!previousSummaries) {
+        return nil;
+    }
+    return [self tideyNativeSessionPanelEventDiffFromPreviousSummaries:previousSummaries
+                                                      currentSummaries:currentSummaries];
+}
+
 - (NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelSummaryCache {
     if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
         _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
@@ -18382,16 +18394,13 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
                                      startingPanelIndex:startingPanelIndex];
     NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *summaryCache =
         [self tideyNativeSessionPanelSummaryCache];
-    NSArray<NSDictionary *> *previousSummaries =
-        summaryCache[carrierPanelIdentifier];
-    summaryCache[carrierPanelIdentifier] = currentSummaries;
-    if (!previousSummaries) {
+    NSDictionary<NSString *, NSArray<NSDictionary *> *> *diff = [[self class]
+        tideyNativeSessionPanelEventDiffForCarrierPanelIdentifier:carrierPanelIdentifier
+                                                     summaryCache:summaryCache
+                                                 currentSummaries:currentSummaries];
+    if (!diff) {
         return;
     }
-
-    NSDictionary<NSString *, NSArray<NSDictionary *> *> *diff = [[self class]
-        tideyNativeSessionPanelEventDiffFromPreviousSummaries:previousSummaries
-                                             currentSummaries:currentSummaries];
     NSDictionary *workspaceSummary =
         [self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex];
     NSString *workspaceIdentifier = [self tideyWorkspaceIdentifierForWorkspace:workspace];
