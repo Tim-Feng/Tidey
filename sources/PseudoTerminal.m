@@ -2975,6 +2975,27 @@ ITERM_WEAKLY_REFERENCEABLE
     return _tideyNativeTerminalSizeLeaseStore;
 }
 
+- (BOOL)tideySession:(PTYSession *)session
+    shouldApplyNativeTerminalSize:(VT100GridSize)size {
+    if (!_tideyNativeTerminalSizeLeaseStore || session.guid.length == 0) {
+        return YES;
+    }
+    return [_tideyNativeTerminalSizeLeaseStore shouldApplyGrid:size
+                                                 toSessionGUID:session.guid];
+}
+
+- (void)tideySessionWillReplaceGUID:(PTYSession *)session {
+    if (!_tideyNativeTerminalSizeLeaseStore || session.guid.length == 0) {
+        return;
+    }
+    TideyNativeTerminalSizeLease *lease =
+        [_tideyNativeTerminalSizeLeaseStore takeLeaseForSessionGUID:session.guid
+                                                              token:nil];
+    if (lease) {
+        [session setSize:lease.savedMacGrid];
+    }
+}
+
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {
     if (!panel) {
         return nil;

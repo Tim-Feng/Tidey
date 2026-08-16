@@ -1,6 +1,7 @@
 #import <XCTest/XCTest.h>
 
 #import "PseudoTerminal.h"
+#import "PTYSession.h"
 #import "PTYTextViewDataSource.h"
 #import "ScreenChar.h"
 #import "TideySocketServer.h"
@@ -68,6 +69,12 @@ static id TideySocketTestAutorelease(id object) {
                                nativeSessionAvailable:(BOOL)nativeSessionAvailable;
 @end
 
+@interface PseudoTerminal (TideyNativeTerminalSizeLeaseTesting)
+- (BOOL)tideySession:(PTYSession *)session
+    shouldApplyNativeTerminalSize:(VT100GridSize)size;
+- (void)tideySessionWillReplaceGUID:(PTYSession *)session;
+@end
+
 @interface PseudoTerminalTests : XCTestCase
 @end
 
@@ -98,6 +105,27 @@ static id TideySocketTestAutorelease(id object) {
                                                    now:(NSTimeInterval)now;
 - (NSArray<TideyNativeTerminalSizeLease *> *)takeExpiredLeasesAt:(NSTimeInterval)now
                                                          timeout:(NSTimeInterval)timeout;
+@end
+
+@interface TideyNativeTerminalSizeProbeSession : NSObject
+@property(nonatomic, copy) NSString *guid;
+@property(nonatomic) VT100GridSize appliedGrid;
+@property(nonatomic) NSUInteger applyCount;
+- (void)setSize:(VT100GridSize)size;
+@end
+
+@implementation TideyNativeTerminalSizeProbeSession
+
+- (void)dealloc {
+    [_guid release];
+    [super dealloc];
+}
+
+- (void)setSize:(VT100GridSize)size {
+    self.appliedGrid = size;
+    self.applyCount += 1;
+}
+
 @end
 
 @interface TideyNativeSessionRestartProbeTerminal : PseudoTerminal {
@@ -261,6 +289,38 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertNil([store leaseForSessionGUID:@"session-1"]);
     XCTAssertNil([store heartbeatSessionGUID:@"session-1" token:@"token-1" now:110]);
     XCTAssertEqual([store takeExpiredLeasesAt:120 timeout:5].count, 0u);
+}
+
+- (void)testNativeTerminalSizeLeaseGatesApplyAndRestoresBeforeGUIDReplacement {
+    TideyNativeTerminalSizeLeaseStore *store = TideySocketTestAutorelease(
+        [[TideyNativeTerminalSizeLeaseStore alloc] init]);
+    PseudoTerminal *terminal = TideySocketTestAutorelease(
+        class_createInstance([PseudoTerminal class], 0));
+    [terminal setValue:store forKey:@"tideyNativeTerminalSizeLeaseStore"];
+    TideyNativeTerminalSizeProbeSession *probe = TideySocketTestAutorelease(
+        [[TideyNativeTerminalSizeProbeSession alloc] init]);
+    probe.guid = @"session-1";
+    const VT100GridSize phoneGrid = VT100GridSizeMake(42, 20);
+    const VT100GridSize latestMacGrid = VT100GridSizeMake(118, 44);
+
+    [store acquireWithToken:@"token-1"
+     carrierPanelIdentifier:@"carrier-1"
+                sessionGUID:probe.guid
+                 leasedGrid:phoneGrid
+               savedMacGrid:VT100GridSizeMake(132, 48)
+                        now:100];
+
+    XCTAssertTrue([terminal tideySession:(PTYSession *)probe
+           shouldApplyNativeTerminalSize:phoneGrid]);
+    XCTAssertFalse([terminal tideySession:(PTYSession *)probe
+            shouldApplyNativeTerminalSize:latestMacGrid]);
+    [terminal tideySessionWillReplaceGUID:(PTYSession *)probe];
+
+    XCTAssertEqual(probe.applyCount, 1u);
+    XCTAssertTrue(VT100GridSizeEquals(probe.appliedGrid, latestMacGrid));
+    XCTAssertNil([store leaseForSessionGUID:probe.guid]);
+    [terminal tideySessionWillReplaceGUID:(PTYSession *)probe];
+    XCTAssertEqual(probe.applyCount, 1u);
 }
 
 - (void)testNativeSessionProjectionFlattensTwoLeaves {

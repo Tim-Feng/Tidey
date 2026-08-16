@@ -2812,6 +2812,12 @@ ITERM_WEAKLY_REFERENCEABLE
     if (size.height <= 0) {
         size.height = 1;
     }
+    PseudoTerminal *terminal =
+        [PseudoTerminal castFrom:self.delegate.realParentWindow];
+    if (terminal &&
+        ![terminal tideySession:self shouldApplyNativeTerminalSize:size]) {
+        return;
+    }
     _savedGridSize = size;
     self.lastResize = [NSDate timeIntervalSinceReferenceDate];
     DLog(@"Set session %@ to %@", self, VT100GridSizeDescription(size));
@@ -4771,6 +4777,8 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     _shell = nil;
     [_logging stop];
 
+    [[PseudoTerminal castFrom:self.delegate.realParentWindow]
+        tideySessionWillReplaceGUID:self];
     self.guid = [NSString uuid];
     _shell = [[PTYTask alloc] init];
     [_shell setDelegate:self];
@@ -6298,6 +6306,8 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 }
 
 - (void)tideyPrepareForManagedRestoreRelaunch {
+    [[PseudoTerminal castFrom:self.delegate.realParentWindow]
+        tideySessionWillReplaceGUID:self];
     [self setExited:NO];
     [_logging stop];
     [_shell autorelease];

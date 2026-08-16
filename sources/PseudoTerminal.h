@@ -291,6 +291,9 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 
 // Sends terminal input to the selected session for the given panel. Returns YES on success.
 - (BOOL)tideySendInput:(NSString *)input toPanelWithIdentifier:(NSString *)panelIdentifier;
+- (BOOL)tideySession:(PTYSession *)session
+    shouldApplyNativeTerminalSize:(VT100GridSize)size;
+- (void)tideySessionWillReplaceGUID:(PTYSession *)session;
 
 // Sends a terminal key press to the selected session for the given panel. Returns YES on success.
 - (BOOL)tideySendKey:(NSString *)key toPanelWithIdentifier:(NSString *)panelIdentifier;
