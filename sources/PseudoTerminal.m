@@ -1481,6 +1481,16 @@ static NSString *TideyRuntimeAgentExecutablePath(
 }
 
 - (NSMutableDictionary<NSString *, TideyNativeTerminalSizeLease *> *)leaseStore;
+- (TideyNativeTerminalSizeLease *)acquireWithToken:(NSString *)token
+                            carrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                       sessionGUID:(NSString *)sessionGUID
+                                        leasedGrid:(VT100GridSize)leasedGrid
+                                      savedMacGrid:(VT100GridSize)savedMacGrid
+                                               now:(NSTimeInterval)now;
+- (BOOL)shouldApplyGrid:(VT100GridSize)grid toSessionGUID:(NSString *)sessionGUID;
+- (TideyNativeTerminalSizeLease *)leaseForSessionGUID:(NSString *)sessionGUID;
+- (TideyNativeTerminalSizeLease *)takeLeaseForSessionGUID:(NSString *)sessionGUID
+                                                    token:(NSString *)token;
 
 @end
 
@@ -1497,6 +1507,53 @@ static NSString *TideyRuntimeAgentExecutablePath(
         _leasesBySessionGUID = [[NSMutableDictionary alloc] init];
     }
     return _leasesBySessionGUID;
+}
+
+- (TideyNativeTerminalSizeLease *)acquireWithToken:(NSString *)token
+                            carrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                       sessionGUID:(NSString *)sessionGUID
+                                        leasedGrid:(VT100GridSize)leasedGrid
+                                      savedMacGrid:(VT100GridSize)savedMacGrid
+                                               now:(NSTimeInterval)now {
+    TideyNativeTerminalSizeLease *previous =
+        [[self leaseStore] objectForKey:sessionGUID];
+    const VT100GridSize restoreGrid = previous ? previous.savedMacGrid : savedMacGrid;
+    TideyNativeTerminalSizeLease *lease =
+        [[TideyNativeTerminalSizeLease alloc]
+            initWithToken:token
+            carrierPanelIdentifier:carrierPanelIdentifier
+            sessionGUID:sessionGUID
+            leasedGrid:leasedGrid
+            savedMacGrid:restoreGrid
+            lastHeartbeatAt:now];
+    [self leaseStore][sessionGUID] = lease;
+    return [lease autorelease];
+}
+
+- (BOOL)shouldApplyGrid:(VT100GridSize)grid toSessionGUID:(NSString *)sessionGUID {
+    TideyNativeTerminalSizeLease *lease =
+        [[self leaseStore] objectForKey:sessionGUID];
+    if (!lease || VT100GridSizeEquals(grid, lease.leasedGrid)) {
+        return YES;
+    }
+    [self leaseStore][sessionGUID] = [lease leaseBySavingMacGrid:grid];
+    return NO;
+}
+
+- (TideyNativeTerminalSizeLease *)leaseForSessionGUID:(NSString *)sessionGUID {
+    return [[self leaseStore] objectForKey:sessionGUID];
+}
+
+- (TideyNativeTerminalSizeLease *)takeLeaseForSessionGUID:(NSString *)sessionGUID
+                                                    token:(NSString *)token {
+    TideyNativeTerminalSizeLease *lease =
+        [[[self leaseStore] objectForKey:sessionGUID] retain];
+    if (!lease || (token && ![lease.token isEqualToString:token])) {
+        [lease release];
+        return nil;
+    }
+    [[self leaseStore] removeObjectForKey:sessionGUID];
+    return [lease autorelease];
 }
 
 @end
