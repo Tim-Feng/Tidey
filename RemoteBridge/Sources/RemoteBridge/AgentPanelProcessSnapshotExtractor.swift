@@ -23,11 +23,17 @@ enum AgentPanelProcessSnapshotExtractor {
         let tmuxPaneID = ordinaryTmux?["active_pane_id"]?.stringValue
         let tmuxSocketPath = ordinaryTmux?["socket_path"]?.stringValue
         let cwd = panel["cwd"]?.stringValue
+        let logicalKind = panel["logical_kind"]?.stringValue.flatMap(BridgePanelLogicalKind.init(rawValue:))
+        let carrierPanelID = panel["carrier_panel_id"]?.stringValue
+        let nativeSessionID = panel["native_session_id"]?.stringValue
         return AgentPanelProcessSnapshot(workspaceID: workspaceID,
                                          panelID: panelID,
                                          effectiveShellPID: effectiveShellPID,
                                          tmuxPaneID: tmuxPaneID,
                                          tmuxSocketPath: tmuxSocketPath,
-                                         cwd: cwd)
+                                         cwd: cwd,
+                                         logicalKind: logicalKind,
+                                         carrierPanelID: carrierPanelID,
+                                         nativeSessionID: nativeSessionID)
     }
 }

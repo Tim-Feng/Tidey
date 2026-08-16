@@ -190,19 +190,28 @@ struct AgentPanelProcessSnapshot: Sendable {
     let tmuxPaneID: String?
     let tmuxSocketPath: String?
     let cwd: String?
+    let logicalKind: BridgePanelLogicalKind?
+    let carrierPanelID: String?
+    let nativeSessionID: String?
 
     init(workspaceID: String,
          panelID: String,
          effectiveShellPID: Int32?,
          tmuxPaneID: String? = nil,
          tmuxSocketPath: String? = nil,
-         cwd: String? = nil) {
+         cwd: String? = nil,
+         logicalKind: BridgePanelLogicalKind? = nil,
+         carrierPanelID: String? = nil,
+         nativeSessionID: String? = nil) {
         self.workspaceID = workspaceID
         self.panelID = panelID
         self.effectiveShellPID = effectiveShellPID
         self.tmuxPaneID = tmuxPaneID
         self.tmuxSocketPath = tmuxSocketPath
         self.cwd = cwd
+        self.logicalKind = logicalKind
+        self.carrierPanelID = carrierPanelID
+        self.nativeSessionID = nativeSessionID
     }
 }
 
