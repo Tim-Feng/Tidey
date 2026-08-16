@@ -1482,6 +1482,12 @@ static NSString *TideyRuntimeAgentExecutablePath(
                                         workspace:(Workspace *)workspace
                                    workspaceIndex:(NSInteger)workspaceIndex
                                        panelIndex:(NSInteger)panelIndex;
+- (NSDictionary *)tideySocketPanelSummaryForSession:(PTYSession *)session
+                                               panel:(PTYTab *)panel
+                                           workspace:(Workspace *)workspace
+                                      workspaceIndex:(NSInteger)workspaceIndex
+                                          panelIndex:(NSInteger)panelIndex
+                                     panelIdentifier:(NSString *)panelIdentifier;
 + (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
                               ordinaryTmuxMetadata:(NSDictionary<NSString *, NSString *> *)metadata;
 - (PTYSession *)tideySelectedSessionForPanelIdentifier:(NSString *)panelIdentifier;
@@ -3276,6 +3282,20 @@ ITERM_WEAKLY_REFERENCEABLE
                                    workspaceIndex:(NSInteger)workspaceIndex
                                        panelIndex:(NSInteger)panelIndex {
     PTYSession *session = [[panel.activeSession retain] autorelease];
+    return [self tideySocketPanelSummaryForSession:session
+                                             panel:panel
+                                         workspace:workspace
+                                    workspaceIndex:workspaceIndex
+                                        panelIndex:panelIndex
+                                   panelIdentifier:[self tideyPanelIdentifierForPanel:panel] ?: @""];
+}
+
+- (NSDictionary *)tideySocketPanelSummaryForSession:(PTYSession *)session
+                                               panel:(PTYTab *)panel
+                                           workspace:(Workspace *)workspace
+                                      workspaceIndex:(NSInteger)workspaceIndex
+                                          panelIndex:(NSInteger)panelIndex
+                                     panelIdentifier:(NSString *)panelIdentifier {
     NSString *workspaceID = [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
     NSDictionary<NSString *, NSString *> *ordinaryTmuxMetadata = session.tideyOrdinaryTmuxAttachMetadata;
     NSString *title = session ? [self tideySidebarDisplayTitleForSession:session] : nil;
@@ -3288,9 +3308,8 @@ ITERM_WEAKLY_REFERENCEABLE
     title = [[self class] tideySocketPanelTitleForDisplayTitle:title ordinaryTmuxMetadata:ordinaryTmuxMetadata];
     NSString *subtitle = session ? ([self tideySidebarDisplaySubtitleForSession:session panel:panel] ?: @"") : @"";
     NSString *state = panel.isProcessing ? @"running" : @"idle";
-    NSString *panelID = [self tideyPanelIdentifierForPanel:panel] ?: @"";
     NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:@{
-        @"panel_id": panelID,
+        @"panel_id": panelIdentifier,
         @"workspace_id": workspaceID,
         @"window_guid": self.terminalGuid ?: @"",
         @"title": title,
