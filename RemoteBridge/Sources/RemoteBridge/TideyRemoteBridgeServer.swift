@@ -21,6 +21,7 @@ final class TideyRemoteBridgeServer {
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
+    private let mediaLeaseRegistry: BridgeMediaLeaseRegistry
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
     private let interactivePTYRuntime: TmuxInteractivePTYRuntime
@@ -47,6 +48,7 @@ final class TideyRemoteBridgeServer {
          uploadGarbageCollector: BridgeUploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: BridgePaths().uploadsDirectory),
          startRegistryMonitor: Bool = true,
          startCloudflaredSupervisor: Bool = true,
+         mediaLeaseRegistry: BridgeMediaLeaseRegistry = BridgeMediaLeaseRegistry(),
          interactivePTYRuntime: TmuxInteractivePTYRuntime = .disabled(),
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
          terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry()) {
@@ -63,6 +65,7 @@ final class TideyRemoteBridgeServer {
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
+        self.mediaLeaseRegistry = mediaLeaseRegistry
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
         self.interactivePTYRuntime = interactivePTYRuntime
@@ -113,7 +116,7 @@ final class TideyRemoteBridgeServer {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager, uploadGarbageCollector] channel in
+            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager, uploadGarbageCollector, mediaLeaseRegistry] channel in
                 let httpHandler = HTTPHandler(legacyPairToken: token,
                                               authenticator: authenticator,
                                               pairingController: pairingController,
@@ -122,7 +125,8 @@ final class TideyRemoteBridgeServer {
                                               eventHub: eventHub,
                                               observability: observability,
                                               cloudflaredManager: cloudflaredManager,
-                                              uploadGarbageCollector: uploadGarbageCollector)
+                                              uploadGarbageCollector: uploadGarbageCollector,
+                                              mediaLeaseRegistry: mediaLeaseRegistry)
                 return channel.pipeline.configureHTTPServerPipeline(
                     withServerUpgrade: (
                         upgraders: [upgrader],
@@ -199,6 +203,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     private let observability: BridgeObservabilityCenter
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
+    private let mediaLeaseRegistry: BridgeMediaLeaseRegistry
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var pendingHead: HTTPRequestHead?
@@ -212,7 +217,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
          eventHub: AgentEventHub,
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager,
-         uploadGarbageCollector: BridgeUploadGarbageCollector) {
+         uploadGarbageCollector: BridgeUploadGarbageCollector,
+         mediaLeaseRegistry: BridgeMediaLeaseRegistry) {
         self.legacyPairToken = legacyPairToken
         self.authenticator = authenticator
         self.pairingController = pairingController
@@ -222,6 +228,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         self.observability = observability
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
+        self.mediaLeaseRegistry = mediaLeaseRegistry
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         decoder.dateDecodingStrategy = .iso8601
@@ -251,7 +258,16 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     }
 
     private func handleHTTP(head: HTTPRequestHead, body: ByteBuffer?, context: ChannelHandlerContext) {
-        switch requestPath(from: head.uri) {
+        let path = requestPath(from: head.uri)
+        if path.hasPrefix("/media/") {
+            guard let opaqueToken = mediaToken(from: path) else {
+                respond(status: .notFound, data: Data(), context: context, version: head.version)
+                return
+            }
+            respondToMedia(head: head, opaqueToken: opaqueToken, context: context)
+            return
+        }
+        switch path {
         case "/admin/pair_payload":
             respondToPairPayload(head: head, context: context)
         case "/admin/tunnel_status":
@@ -270,6 +286,92 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
             respondToWebSocketHTTPFallback(head: head, context: context)
         default:
             respond(status: .notFound, data: Data(), context: context, version: head.version)
+        }
+    }
+
+    private func respondToMedia(head: HTTPRequestHead,
+                                opaqueToken: String,
+                                context: ChannelHandlerContext) {
+        guard head.method == .GET || head.method == .HEAD else {
+            var headers = HTTPHeaders()
+            headers.add(name: "allow", value: "GET, HEAD")
+            respond(status: .methodNotAllowed,
+                    data: Data(),
+                    context: context,
+                    version: head.version,
+                    additionalHeaders: headers)
+            return
+        }
+        guard let authority = mediaLeaseRegistry.checkout(opaqueToken: opaqueToken) else {
+            respond(status: .notFound, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        let selection: BridgeMediaRangeSelection
+        do {
+            let rangeValues = head.headers["range"]
+            guard rangeValues.count <= 1 else {
+                throw BridgeMediaRangeError(contentRange: "bytes */\(authority.size)")
+            }
+            selection = try BridgeMediaRangeParser.parse(rangeValues.first, size: authority.size)
+        } catch let error as BridgeMediaRangeError {
+            try? authority.fileHandle.close()
+            var headers = HTTPHeaders()
+            headers.add(name: "content-range", value: error.contentRange)
+            respond(status: .rangeNotSatisfiable,
+                    data: Data(),
+                    context: context,
+                    version: head.version,
+                    additionalHeaders: headers)
+            return
+        } catch {
+            try? authority.fileHandle.close()
+            respond(status: .rangeNotSatisfiable, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        let status: HTTPResponseStatus
+        let start: UInt64
+        let endExclusive: UInt64
+        var headers = HTTPHeaders()
+        switch selection {
+        case .full(let size):
+            status = .ok
+            start = 0
+            endExclusive = size
+        case .partial(let range, let size):
+            status = .partialContent
+            start = range.lowerBound
+            endExclusive = range.upperBound + 1
+            headers.add(name: "content-range",
+                        value: "bytes \(range.lowerBound)-\(range.upperBound)/\(size)")
+        }
+        let contentLength = endExclusive - start
+        headers.add(name: "content-type", value: authority.mime)
+        headers.add(name: "content-length", value: "\(contentLength)")
+        headers.add(name: "accept-ranges", value: "bytes")
+        headers.add(name: "cache-control", value: "no-store")
+        headers.add(name: "x-content-type-options", value: "nosniff")
+
+        let responseHead = HTTPResponseHead(version: head.version, status: status, headers: headers)
+        if head.method == .HEAD {
+            try? authority.fileHandle.close()
+            respondHeadersOnly(responseHead, context: context)
+            return
+        }
+        guard let readerIndex = Int(exactly: start),
+              let endIndex = Int(exactly: endExclusive) else {
+            try? authority.fileHandle.close()
+            respond(status: .rangeNotSatisfiable, data: Data(), context: context, version: head.version)
+            return
+        }
+
+        let response = BridgeHTTPFileRegionResponse(head: responseHead,
+                                                    fileHandle: authority.fileHandle,
+                                                    readerIndex: readerIndex,
+                                                    endIndex: endIndex)
+        BridgeHTTPFileRegionResponseWriter().write(response, to: context.channel).whenFailure { _ in
+            context.close(promise: nil)
         }
     }
 
@@ -550,10 +652,11 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
                          data: Data,
                          context: ChannelHandlerContext,
                          version: HTTPVersion,
-                         contentType: String? = nil) {
+                         contentType: String? = nil,
+                         additionalHeaders: HTTPHeaders = HTTPHeaders()) {
         var buffer = context.channel.allocator.buffer(capacity: data.count)
         buffer.writeBytes(data)
-        var headers = HTTPHeaders()
+        var headers = additionalHeaders
         if let contentType {
             headers.add(name: "content-type", value: contentType)
         }
@@ -566,6 +669,12 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
     }
 
+    private func respondHeadersOnly(_ response: HTTPResponseHead,
+                                    context: ChannelHandlerContext) {
+        context.write(wrapOutboundOut(.head(response)), promise: nil)
+        context.writeAndFlush(wrapOutboundOut(.end(nil)), promise: nil)
+    }
+
     private func clearPendingRequest() {
         pendingHead = nil
         pendingBody = nil
@@ -573,6 +682,14 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
 
     private func requestPath(from uri: String) -> String {
         String(uri.split(separator: "?", maxSplits: 1, omittingEmptySubsequences: false).first ?? "")
+    }
+
+    private func mediaToken(from path: String) -> String? {
+        let prefix = "/media/"
+        guard path.hasPrefix(prefix) else { return nil }
+        let token = String(path.dropFirst(prefix.count))
+        guard !token.isEmpty, !token.contains("/") else { return nil }
+        return token
     }
 }
 
