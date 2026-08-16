@@ -2730,13 +2730,17 @@ ITERM_WEAKLY_REFERENCEABLE
 + (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
                                                                                                       summaryCache:(NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *)summaryCache
                                                                                                   currentSummaries:(NSArray<NSDictionary *> *)currentSummaries {
-    NSArray<NSDictionary *> *previousSummaries = summaryCache[carrierPanelIdentifier];
+    NSArray<NSDictionary *> *previousSummaries =
+        [summaryCache[carrierPanelIdentifier] retain];
     summaryCache[carrierPanelIdentifier] = currentSummaries;
     if (!previousSummaries) {
         return nil;
     }
-    return [self tideyNativeSessionPanelEventDiffFromPreviousSummaries:previousSummaries
-                                                      currentSummaries:currentSummaries];
+    NSDictionary<NSString *, NSArray<NSDictionary *> *> *diff =
+        [self tideyNativeSessionPanelEventDiffFromPreviousSummaries:previousSummaries
+                                                   currentSummaries:currentSummaries];
+    [previousSummaries release];
+    return diff;
 }
 
 - (NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelSummaryCache {

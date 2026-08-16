@@ -90,6 +90,39 @@ static id TideySocketTestAutorelease(id object) {
 
 @end
 
+static BOOL sTideyNativeSessionPreviousSummaryDidDeallocate;
+static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
+
+@interface TideyNativeSessionPreviousSummaryDeallocProbe : NSObject
+@end
+
+@implementation TideyNativeSessionPreviousSummaryDeallocProbe
+
+- (void)dealloc {
+    sTideyNativeSessionPreviousSummaryDidDeallocate = YES;
+    [super dealloc];
+}
+
+@end
+
+@interface TideyNativeSessionCacheTransitionProbeTerminal : PseudoTerminal
+@end
+
+@implementation TideyNativeSessionCacheTransitionProbeTerminal
+
++ (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffFromPreviousSummaries:(NSArray<NSDictionary *> *)previousSummaries
+                                                                                               currentSummaries:(NSArray<NSDictionary *> *)currentSummaries {
+    sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff =
+        sTideyNativeSessionPreviousSummaryDidDeallocate;
+    return @{
+        @"created": @[],
+        @"updated": @[],
+        @"closed": @[],
+    };
+}
+
+@end
+
 @implementation PseudoTerminalTests
 
 - (void)testNativeSessionPanelIdentityRoundTrips {
@@ -163,6 +196,37 @@ static id TideySocketTestAutorelease(id object) {
     XCTAssertEqualObjects(diff[@"created"], @[ created ]);
     XCTAssertEqualObjects(diff[@"updated"], @[]);
     XCTAssertEqualObjects(diff[@"closed"], @[ removed ]);
+}
+
+- (void)testNativeSessionEventDiffRetainsSoleOwnedPreviousCacheValue {
+    sTideyNativeSessionPreviousSummaryDidDeallocate = NO;
+    sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff = NO;
+
+    NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *summaryCache =
+        [NSMutableDictionary dictionary];
+    TideyNativeSessionPreviousSummaryDeallocProbe *deallocProbe =
+        [[TideyNativeSessionPreviousSummaryDeallocProbe alloc] init];
+    NSDictionary *previousSummary = [[NSDictionary alloc] initWithObjectsAndKeys:
+        deallocProbe, @"dealloc_probe", nil];
+    NSArray<NSDictionary *> *previousSummaries =
+        [[NSArray alloc] initWithObjects:previousSummary, nil];
+    [deallocProbe release];
+    [previousSummary release];
+    summaryCache[@"carrier-1"] = previousSummaries;
+    [previousSummaries release];
+
+    NSArray<NSDictionary *> *currentSummaries = @[
+        @{ @"panel_id": @"native-session:carrier-1:session-2" },
+    ];
+    NSDictionary *diff = [TideyNativeSessionCacheTransitionProbeTerminal
+        tideyNativeSessionPanelEventDiffForCarrierPanelIdentifier:@"carrier-1"
+                                                     summaryCache:summaryCache
+                                                 currentSummaries:currentSummaries];
+
+    XCTAssertFalse(sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff);
+    XCTAssertTrue(sTideyNativeSessionPreviousSummaryDidDeallocate);
+    XCTAssertEqualObjects(summaryCache[@"carrier-1"], currentSummaries);
+    XCTAssertNotNil(diff);
 }
 
 - (void)testNativeSessionActionPoliciesPreserveFocusAndFailClosed {
