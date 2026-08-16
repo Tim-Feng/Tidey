@@ -3071,7 +3071,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                                    panelID: panelID,
                                                                    effectiveShellPID: snapshot?.effectiveShellPID,
                                                                    tmuxPaneID: snapshot?.tmuxPaneID,
-                                                                   tmuxSocketPath: snapshot?.tmuxSocketPath) {
+                                                                   tmuxSocketPath: snapshot?.tmuxSocketPath,
+                                                                   logicalKind: snapshot?.logicalKind,
+                                                                   carrierPanelID: snapshot?.carrierPanelID,
+                                                                   nativeSessionID: snapshot?.nativeSessionID) {
                 panel["agent_session"] = .object([
                     "vendor": .string(session.vendor),
                     "session_id": .string(session.sessionID),

@@ -472,13 +472,19 @@ final class AgentSessionRegistryMonitor {
                                panelID: String,
                                effectiveShellPID: Int32?,
                                tmuxPaneID: String? = nil,
-                               tmuxSocketPath: String? = nil) -> ActiveAgentSessionSnapshot? {
+                               tmuxSocketPath: String? = nil,
+                               logicalKind: BridgePanelLogicalKind? = nil,
+                               carrierPanelID: String? = nil,
+                               nativeSessionID: String? = nil) -> ActiveAgentSessionSnapshot? {
         queue.sync {
             let panel = AgentPanelProcessSnapshot(workspaceID: workspaceID,
                                                  panelID: panelID,
                                                  effectiveShellPID: effectiveShellPID,
                                                  tmuxPaneID: tmuxPaneID,
-                                                 tmuxSocketPath: tmuxSocketPath)
+                                                 tmuxSocketPath: tmuxSocketPath,
+                                                 logicalKind: logicalKind,
+                                                 carrierPanelID: carrierPanelID,
+                                                 nativeSessionID: nativeSessionID)
             return matchedSession(for: panel)
         }
     }
@@ -1249,6 +1255,34 @@ final class AgentSessionRegistryMonitor {
                                               sessionID: direct.sessionID,
                                               panelID: panel.panelID,
                                               restoreSessionID: Self.restoreSessionID(for: direct))
+        }
+
+        if panel.logicalKind == .nativeSession,
+           let effectiveShellPID = panel.effectiveShellPID,
+           effectiveShellPID > 0 {
+            let nativeProcessMatches = activeRecords.values
+                .filter {
+                    $0.workspaceID == panel.workspaceID &&
+                        processIsDescendantOrSelf(of: effectiveShellPID, candidate: $0.pid)
+                }
+            if nativeProcessMatches.count > 1 {
+                BridgeLogger.server.info("agent native-session panel match rejected as ambiguous workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) candidate_count=\(nativeProcessMatches.count, privacy: .public)")
+                logPanelMatchFailure(panel, matchedReason: "ambiguous_native_process_tree")
+                return nil
+            }
+            if let nativeProcessMatch = nativeProcessMatches.first {
+                applyResolvedBinding(sessionID: nativeProcessMatch.sessionID,
+                                     workspaceID: panel.workspaceID,
+                                     panelID: panel.panelID)
+                BridgeLogger.server.info("agent panel matched via native session process tree workspace_id=\(panel.workspaceID, privacy: .public) panel_id=\(panel.panelID, privacy: .public) session_id=\(nativeProcessMatch.sessionID, privacy: .public)")
+                return ActiveAgentSessionSnapshot(
+                    vendor: nativeProcessMatch.vendor,
+                    workspaceID: panel.workspaceID,
+                    sessionID: nativeProcessMatch.sessionID,
+                    panelID: panel.panelID,
+                    restoreSessionID: Self.restoreSessionID(for: nativeProcessMatch)
+                )
+            }
         }
 
         let paneMatches = activeRecords.values
