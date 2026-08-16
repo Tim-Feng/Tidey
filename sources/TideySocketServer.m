@@ -133,6 +133,12 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
 
 typedef BOOL (^TideySocketSendInputHandler)(NSString *workspaceID, NSString *input);
 typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *workspaceID);
+typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
+    NSString *action,
+    NSString *panelID,
+    NSString * _Nullable token,
+    NSInteger columns,
+    NSInteger rows);
 
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
@@ -147,6 +153,10 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
                                        workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                                          sendInputHandler:(nullable TideySocketSendInputHandler)sendInputHandler
                                      recentOutputProvider:(nullable TideySocketRecentOutputProvider)recentOutputProvider;
++ (NSDictionary *)tideyNativeTerminalSizeResponseForRequestID:(NSString *)requestID
+                                                        action:(NSString *)action
+                                                        source:(NSDictionary *)source
+                                                       handler:(TideySocketNativeTerminalSizeHandler)handler;
 @end
 
 @implementation TideySocketServer
@@ -647,6 +657,51 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         [self sendSuccessResponseForRequestID:requestID
                                        result:result
                                   onConnection:connection];
+        return;
+    }
+
+    if ([@[ @"native_terminal_size_acquire",
+             @"native_terminal_size_update",
+             @"native_terminal_size_heartbeat",
+             @"native_terminal_size_release" ] containsObject:action]) {
+        if (![NSThread isMainThread]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self handleRequestMessage:message onConnection:connection];
+            });
+            return;
+        }
+        NSDictionary *response = [[self class]
+            tideyNativeTerminalSizeResponseForRequestID:requestID
+            action:action
+            source:source
+            handler:^NSDictionary *(NSString *operation,
+                                     NSString *panelID,
+                                     NSString *token,
+                                     NSInteger columns,
+                                     NSInteger rows) {
+                PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:panelID];
+                if (!term) {
+                    return @{ @"accepted": @NO, @"error_code": @"stale_binding" };
+                }
+                if ([operation isEqualToString:@"native_terminal_size_acquire"]) {
+                    return [term tideyAcquireNativeTerminalSizeForPanelIdentifier:panelID
+                                                                          columns:columns
+                                                                             rows:rows];
+                }
+                if ([operation isEqualToString:@"native_terminal_size_update"]) {
+                    return [term tideyUpdateNativeTerminalSizeForPanelIdentifier:panelID
+                                                                           token:token
+                                                                         columns:columns
+                                                                            rows:rows];
+                }
+                if ([operation isEqualToString:@"native_terminal_size_heartbeat"]) {
+                    return [term tideyHeartbeatNativeTerminalSizeForPanelIdentifier:panelID
+                                                                              token:token];
+                }
+                return [term tideyReleaseNativeTerminalSizeForPanelIdentifier:panelID
+                                                                         token:token];
+            }];
+        [connection sendJSONObject:response];
         return;
     }
 
@@ -1253,6 +1308,45 @@ typedef NSString * _Nullable (^TideySocketRecentOutputProvider)(NSString *worksp
         response[@"id"] = requestID;
     }
     return response;
+}
+
++ (NSDictionary *)tideyNativeTerminalSizeResponseForRequestID:(NSString *)requestID
+                                                        action:(NSString *)action
+                                                        source:(NSDictionary *)source
+                                                       handler:(TideySocketNativeTerminalSizeHandler)handler {
+    const BOOL isAcquire = [action isEqualToString:@"native_terminal_size_acquire"];
+    const BOOL isUpdate = [action isEqualToString:@"native_terminal_size_update"];
+    const BOOL isHeartbeat = [action isEqualToString:@"native_terminal_size_heartbeat"];
+    const BOOL isRelease = [action isEqualToString:@"native_terminal_size_release"];
+    NSString *panelID = TideySocketStringParam(source, @"panel_id");
+    NSString *token = TideySocketStringParam(source, @"token");
+    NSInteger columns = TideySocketIntegerParam(source, @"cols", 0);
+    NSInteger rows = TideySocketIntegerParam(source, @"rows", 0);
+    const BOOL hasExactNativeIdentity =
+        [PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:panelID] != nil;
+    const BOOL dimensionsAreValid =
+        columns > 0 && columns <= 1000 && rows > 0 && rows <= 1000;
+    const BOOL actionIsValid = isAcquire || isUpdate || isHeartbeat || isRelease;
+    const BOOL tokenIsValid = isAcquire || token.length > 0;
+    const BOOL sizeIsValid = (isAcquire || isUpdate) ? dimensionsAreValid : YES;
+    if (!actionIsValid || !hasExactNativeIdentity || !tokenIsValid || !sizeIsValid) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"invalid_params"
+                                            message:@"Native terminal sizing requires an exact native panel, valid dimensions, and a live lease token."];
+    }
+    NSDictionary *result = handler
+        ? handler(action, panelID, token, columns, rows)
+        : nil;
+    if (![result[@"accepted"] boolValue]) {
+        NSString *errorCode =
+            [result[@"error_code"] isKindOfClass:[NSString class]]
+                ? result[@"error_code"]
+                : @"stale_binding";
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:errorCode
+                                            message:@"Native terminal size lease request was rejected."];
+    }
+    return [self tideySuccessResponseForRequestID:requestID result:result];
 }
 
 + (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries

@@ -1613,6 +1613,8 @@ static NSString *TideyRuntimeAgentExecutablePath(
 
 @end
 
+static const NSTimeInterval kTideyNativeTerminalSizeLeaseTimeout = 5.0;
+
 @interface PseudoTerminal () <
     iTermBroadcastInputHelperDelegate,
     iTermGraphCodable,
@@ -1672,6 +1674,10 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
 - (TideyNativeTerminalSizeLeaseStore *)tideyNativeTerminalSizeLeaseStore;
+- (PTYSession *)tideyNativeTerminalSizingSessionForPanelIdentifier:(NSString *)panelIdentifier
+                                            carrierPanelIdentifier:(NSString **)carrierPanelIdentifier;
+- (void)tideyScheduleNativeTerminalSizeLeaseExpiry;
+- (void)tideyExpireNativeTerminalSizeLeases;
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel;
 - (TideyRuntimeResumeDescriptorUpdateGate *)tideyRuntimeResumeDescriptorUpdateGate;
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan;
@@ -2994,6 +3000,164 @@ ITERM_WEAKLY_REFERENCEABLE
     if (lease) {
         [session setSize:lease.savedMacGrid];
     }
+}
+
+- (PTYSession *)tideyNativeTerminalSizingSessionForPanelIdentifier:(NSString *)panelIdentifier
+                                            carrierPanelIdentifier:(NSString **)carrierPanelIdentifier {
+    NSDictionary<NSString *, NSString *> *identity =
+        [[self class] tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier];
+    if (!identity) {
+        return nil;
+    }
+    PTYSession *session = [self tideySelectedSessionForPanelIdentifier:panelIdentifier];
+    if (!session || ![session.guid isEqualToString:identity[@"native_session_id"]]) {
+        return nil;
+    }
+    if (carrierPanelIdentifier) {
+        *carrierPanelIdentifier = identity[@"carrier_panel_id"];
+    }
+    return session;
+}
+
+- (void)tideyScheduleNativeTerminalSizeLeaseExpiry {
+    __weak __typeof(self) weakSelf = self;
+    dispatch_after(dispatch_time(DISPATCH_TIME_NOW,
+                                 (int64_t)(kTideyNativeTerminalSizeLeaseTimeout * NSEC_PER_SEC)),
+                   dispatch_get_main_queue(), ^{
+        [weakSelf tideyExpireNativeTerminalSizeLeases];
+    });
+}
+
+- (void)tideyExpireNativeTerminalSizeLeases {
+    if (!_tideyNativeTerminalSizeLeaseStore) {
+        return;
+    }
+    NSArray<TideyNativeTerminalSizeLease *> *expired =
+        [_tideyNativeTerminalSizeLeaseStore
+            takeExpiredLeasesAt:[NSDate timeIntervalSinceReferenceDate]
+            timeout:kTideyNativeTerminalSizeLeaseTimeout];
+    for (TideyNativeTerminalSizeLease *lease in expired) {
+        PTYSession *session = [[PTYSession sessionMap] objectForKey:lease.sessionGUID];
+        PseudoTerminal *owner =
+            [PseudoTerminal castFrom:session.delegate.realParentWindow];
+        PTYTab *panel = owner == self ? [self tabForSession:session] : nil;
+        NSString *carrierPanelIdentifier = [self tideyPanelIdentifierForPanel:panel];
+        if ([carrierPanelIdentifier isEqualToString:lease.carrierPanelIdentifier]) {
+            [session setSize:lease.savedMacGrid];
+        }
+    }
+}
+
+- (NSDictionary *)tideyAcquireNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                            columns:(NSInteger)columns
+                                                               rows:(NSInteger)rows {
+    NSString *carrierPanelIdentifier = nil;
+    PTYSession *session =
+        [self tideyNativeTerminalSizingSessionForPanelIdentifier:panelIdentifier
+                                          carrierPanelIdentifier:&carrierPanelIdentifier];
+    if (!session) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_binding" };
+    }
+    const VT100GridSize leasedGrid = VT100GridSizeMake(columns, rows);
+    NSString *token = [NSString uuid];
+    TideyNativeTerminalSizeLease *lease =
+        [[self tideyNativeTerminalSizeLeaseStore]
+            acquireWithToken:token
+            carrierPanelIdentifier:carrierPanelIdentifier
+            sessionGUID:session.guid
+            leasedGrid:leasedGrid
+            savedMacGrid:session.screen.size
+            now:[NSDate timeIntervalSinceReferenceDate]];
+    [session setSize:leasedGrid];
+    [self tideyScheduleNativeTerminalSizeLeaseExpiry];
+    return @{
+        @"accepted": @YES,
+        @"panel_id": panelIdentifier,
+        @"token": lease.token,
+        @"cols": @(lease.leasedGrid.width),
+        @"rows": @(lease.leasedGrid.height),
+        @"expires_in_ms": @((NSInteger)(kTideyNativeTerminalSizeLeaseTimeout * 1000)),
+    };
+}
+
+- (NSDictionary *)tideyUpdateNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                             token:(NSString *)token
+                                                           columns:(NSInteger)columns
+                                                              rows:(NSInteger)rows {
+    PTYSession *session =
+        [self tideyNativeTerminalSizingSessionForPanelIdentifier:panelIdentifier
+                                          carrierPanelIdentifier:nil];
+    if (!session) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_binding" };
+    }
+    const VT100GridSize leasedGrid = VT100GridSizeMake(columns, rows);
+    TideyNativeTerminalSizeLease *lease =
+        [[self tideyNativeTerminalSizeLeaseStore]
+            updateLeasedGrid:leasedGrid
+            sessionGUID:session.guid
+            token:token
+            now:[NSDate timeIntervalSinceReferenceDate]];
+    if (!lease) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_lease" };
+    }
+    [session setSize:leasedGrid];
+    [self tideyScheduleNativeTerminalSizeLeaseExpiry];
+    return @{
+        @"accepted": @YES,
+        @"panel_id": panelIdentifier,
+        @"token": lease.token,
+        @"cols": @(lease.leasedGrid.width),
+        @"rows": @(lease.leasedGrid.height),
+        @"expires_in_ms": @((NSInteger)(kTideyNativeTerminalSizeLeaseTimeout * 1000)),
+    };
+}
+
+- (NSDictionary *)tideyHeartbeatNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                                token:(NSString *)token {
+    PTYSession *session =
+        [self tideyNativeTerminalSizingSessionForPanelIdentifier:panelIdentifier
+                                          carrierPanelIdentifier:nil];
+    if (!session) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_binding" };
+    }
+    TideyNativeTerminalSizeLease *lease =
+        [[self tideyNativeTerminalSizeLeaseStore]
+            heartbeatSessionGUID:session.guid
+            token:token
+            now:[NSDate timeIntervalSinceReferenceDate]];
+    if (!lease) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_lease" };
+    }
+    [self tideyScheduleNativeTerminalSizeLeaseExpiry];
+    return @{
+        @"accepted": @YES,
+        @"panel_id": panelIdentifier,
+        @"token": lease.token,
+        @"expires_in_ms": @((NSInteger)(kTideyNativeTerminalSizeLeaseTimeout * 1000)),
+    };
+}
+
+- (NSDictionary *)tideyReleaseNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                              token:(NSString *)token {
+    PTYSession *session =
+        [self tideyNativeTerminalSizingSessionForPanelIdentifier:panelIdentifier
+                                          carrierPanelIdentifier:nil];
+    if (!session) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_binding" };
+    }
+    TideyNativeTerminalSizeLease *lease =
+        [[self tideyNativeTerminalSizeLeaseStore]
+            takeLeaseForSessionGUID:session.guid
+            token:token];
+    if (!lease) {
+        return @{ @"accepted": @NO, @"error_code": @"stale_lease" };
+    }
+    [session setSize:lease.savedMacGrid];
+    return @{
+        @"accepted": @YES,
+        @"released": @YES,
+        @"panel_id": panelIdentifier,
+    };
 }
 
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {

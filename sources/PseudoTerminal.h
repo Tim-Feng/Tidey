@@ -271,6 +271,9 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // Returns the panel summary for the given panel identifier, or nil if not found.
 - (nullable NSDictionary *)tideySocketPanelSummaryForPanelIdentifier:(NSString *)panelIdentifier;
 
+// Decodes an exact native split-session panel identifier.
++ (nullable NSDictionary<NSString *, NSString *> *)tideyNativeSessionPanelIdentityFromPanelIdentifier:(NSString *)panelIdentifier;
+
 // Returns all panel summaries for the given workspace identifier, or nil if the workspace does not exist.
 - (nullable NSDictionary *)tideySocketPanelListForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
 
@@ -294,6 +297,17 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 - (BOOL)tideySession:(PTYSession *)session
     shouldApplyNativeTerminalSize:(VT100GridSize)size;
 - (void)tideySessionWillReplaceGUID:(PTYSession *)session;
+- (NSDictionary *)tideyAcquireNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                            columns:(NSInteger)columns
+                                                               rows:(NSInteger)rows;
+- (NSDictionary *)tideyUpdateNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                             token:(NSString *)token
+                                                           columns:(NSInteger)columns
+                                                              rows:(NSInteger)rows;
+- (NSDictionary *)tideyHeartbeatNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                                token:(NSString *)token;
+- (NSDictionary *)tideyReleaseNativeTerminalSizeForPanelIdentifier:(NSString *)panelIdentifier
+                                                              token:(NSString *)token;
 
 // Sends a terminal key press to the selected session for the given panel. Returns YES on success.
 - (BOOL)tideySendKey:(NSString *)key toPanelWithIdentifier:(NSString *)panelIdentifier;

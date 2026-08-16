@@ -22,11 +22,22 @@ static id TideySocketTestAutorelease(id object) {
 #endif
 }
 
+typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
+    NSString *action,
+    NSString *panelID,
+    NSString * _Nullable token,
+    NSInteger columns,
+    NSInteger rows);
+
 @interface TideySocketServer (Testing)
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
                               workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                                 sendInputHandler:(BOOL (^)(NSString *workspaceID, NSString *input))sendInputHandler
                             recentOutputProvider:(NSString * _Nullable (^)(NSString *workspaceID))recentOutputProvider;
++ (NSDictionary *)tideyNativeTerminalSizeResponseForRequestID:(NSString *)requestID
+                                                        action:(NSString *)action
+                                                        source:(NSDictionary *)source
+                                                       handler:(TideySocketNativeTerminalSizeHandler)handler;
 + (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                  filteredToWindowForListWorkspacesSource:(NSDictionary *)source;
 - (void)acceptFileDescriptor:(int)fd;
@@ -658,6 +669,96 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
                                                                 }];
     XCTAssertEqualObjects(response[@"ok"], @NO);
     XCTAssertEqualObjects(response[@"error"][@"code"], @"invalid_params");
+}
+
+- (void)testNativeTerminalSizeActionDispatchValidatesExactIdentityDimensionsAndToken {
+    __block NSMutableArray<NSDictionary *> *calls = [NSMutableArray array];
+    TideySocketNativeTerminalSizeHandler handler = ^NSDictionary *(
+        NSString *action,
+        NSString *panelID,
+        NSString *token,
+        NSInteger columns,
+        NSInteger rows) {
+        [calls addObject:@{
+            @"action": action,
+            @"panel_id": panelID,
+            @"token": token ?: @"",
+            @"cols": @(columns),
+            @"rows": @(rows),
+        }];
+        return @{
+            @"accepted": @YES,
+            @"token": token ?: @"new-token",
+            @"expires_in_ms": @5000,
+        };
+    };
+    NSString *panelID = @"native-session:carrier-1:session-1";
+
+    NSDictionary *acquire = [TideySocketServer
+        tideyNativeTerminalSizeResponseForRequestID:@"acquire"
+        action:@"native_terminal_size_acquire"
+        source:@{ @"panel_id": panelID, @"cols": @42, @"rows": @20 }
+        handler:handler];
+    XCTAssertEqualObjects(acquire[@"ok"], @YES);
+    XCTAssertEqualObjects(acquire[@"result"][@"token"], @"new-token");
+
+    NSDictionary *update = [TideySocketServer
+        tideyNativeTerminalSizeResponseForRequestID:@"update"
+        action:@"native_terminal_size_update"
+        source:@{ @"panel_id": panelID, @"token": @"token-1", @"cols": @50, @"rows": @22 }
+        handler:handler];
+    XCTAssertEqualObjects(update[@"ok"], @YES);
+
+    NSDictionary *heartbeat = [TideySocketServer
+        tideyNativeTerminalSizeResponseForRequestID:@"heartbeat"
+        action:@"native_terminal_size_heartbeat"
+        source:@{ @"panel_id": panelID, @"token": @"token-1" }
+        handler:handler];
+    XCTAssertEqualObjects(heartbeat[@"ok"], @YES);
+
+    NSDictionary *release = [TideySocketServer
+        tideyNativeTerminalSizeResponseForRequestID:@"release"
+        action:@"native_terminal_size_release"
+        source:@{ @"panel_id": panelID, @"token": @"token-1" }
+        handler:handler];
+    XCTAssertEqualObjects(release[@"ok"], @YES);
+    XCTAssertEqual(calls.count, 4u);
+    XCTAssertEqualObjects(calls[0][@"cols"], @42);
+    XCTAssertEqualObjects(calls[1][@"rows"], @22);
+    XCTAssertEqualObjects(calls[2][@"cols"], @0);
+    XCTAssertEqualObjects(calls[3][@"rows"], @0);
+
+    for (NSDictionary *invalidSource in @[
+        @{ @"panel_id": @"carrier-1", @"cols": @42, @"rows": @20 },
+        @{ @"panel_id": panelID, @"cols": @0, @"rows": @20 },
+        @{ @"panel_id": panelID, @"cols": @42, @"rows": @1001 },
+    ]) {
+        NSDictionary *invalid = [TideySocketServer
+            tideyNativeTerminalSizeResponseForRequestID:@"invalid"
+            action:@"native_terminal_size_acquire"
+            source:invalidSource
+            handler:handler];
+        XCTAssertEqualObjects(invalid[@"ok"], @NO);
+        XCTAssertEqualObjects(invalid[@"error"][@"code"], @"invalid_params");
+    }
+
+    NSDictionary *missingToken = [TideySocketServer
+        tideyNativeTerminalSizeResponseForRequestID:@"missing-token"
+        action:@"native_terminal_size_update"
+        source:@{ @"panel_id": panelID, @"cols": @42, @"rows": @20 }
+        handler:handler];
+    XCTAssertEqualObjects(missingToken[@"ok"], @NO);
+    XCTAssertEqualObjects(missingToken[@"error"][@"code"], @"invalid_params");
+
+    NSDictionary *stale = [TideySocketServer
+        tideyNativeTerminalSizeResponseForRequestID:@"stale"
+        action:@"native_terminal_size_release"
+        source:@{ @"panel_id": panelID, @"token": @"stale-token" }
+        handler:^NSDictionary *(NSString *action, NSString *panelID, NSString *token, NSInteger columns, NSInteger rows) {
+            return @{ @"accepted": @NO, @"error_code": @"stale_lease" };
+        }];
+    XCTAssertEqualObjects(stale[@"ok"], @NO);
+    XCTAssertEqualObjects(stale[@"error"][@"code"], @"stale_lease");
 }
 
 - (void)testTrimmedRecentOutputSnapshotPreservesCursorVisibility {
