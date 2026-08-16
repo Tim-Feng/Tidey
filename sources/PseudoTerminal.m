@@ -2674,6 +2674,18 @@ ITERM_WEAKLY_REFERENCEABLE
     return identity[@"native_session_id"];
 }
 
++ (BOOL)tideyRemoteSelectionShouldMutateMacForPanelIdentifier:(NSString *)panelIdentifier {
+    return [self tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier] == nil;
+}
+
++ (BOOL)tideyCloseShouldUseCarrierForPanelIdentifier:(NSString *)panelIdentifier
+                               nativeSessionAvailable:(BOOL)nativeSessionAvailable {
+    if ([self tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier]) {
+        return NO;
+    }
+    return !nativeSessionAvailable;
+}
+
 + (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffFromPreviousSummaries:(NSArray<NSDictionary *> *)previousSummaries
                                                                                                currentSummaries:(NSArray<NSDictionary *> *)currentSummaries {
     NSMutableDictionary<NSString *, NSDictionary *> *previousByID = [NSMutableDictionary dictionary];
@@ -4277,6 +4289,9 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!panel || !workspace) {
         return NO;
     }
+    if (![[self class] tideyRemoteSelectionShouldMutateMacForPanelIdentifier:panelIdentifier]) {
+        return YES;
+    }
     [self selectWorkspaceAtIndex:workspaceIndex recordHistory:YES];
     workspace.selectedPanelIndex = panelIndex;
     NSInteger visibleIndex = [self indexOfTab:panel];
@@ -4297,6 +4312,9 @@ ITERM_WEAKLY_REFERENCEABLE
                                         panelIndex:&panelIndex];
     if (!panel || !workspace || panelIndex == NSNotFound) {
         return NO;
+    }
+    if (![[self class] tideyRemoteSelectionShouldMutateMacForPanelIdentifier:panelIdentifier]) {
+        return YES;
     }
     workspace.selectedPanelIndex = panelIndex;
     if (workspaceIndex == self.selectedWorkspaceIndex) {
@@ -4332,15 +4350,22 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!panel) {
         return NO;
     }
-    PTYSession *nativeSession = [[self class]
-        tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier]
+    NSDictionary<NSString *, NSString *> *nativeIdentity = [[self class]
+        tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier];
+    PTYSession *nativeSession = nativeIdentity
         ? [self tideySelectedSessionForPanelIdentifier:panelIdentifier]
         : nil;
+    BOOL shouldCloseCarrier = [[self class]
+        tideyCloseShouldUseCarrierForPanelIdentifier:panelIdentifier
+                              nativeSessionAvailable:(nativeSession != nil)];
+    if (!nativeSession && !shouldCloseCarrier) {
+        return NO;
+    }
     [self performTideyWorkspaceMutationPreservingWindowFrame:^{
-        if (nativeSession) {
-            [self closeSession:nativeSession soft:YES];
-        } else {
+        if (shouldCloseCarrier) {
             [self closeTab:panel soft:YES];
+        } else {
+            [self closeSession:nativeSession soft:YES];
         }
     }];
     return YES;
@@ -13133,6 +13158,7 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
 
 - (void)tab:(PTYTab *)tab sessionDidRestart:(PTYSession *)session {
     [self refreshTools];
+    [self numberOfSessionsDidChangeInTab:tab];
 }
 
 - (void)genericCloseSheet:(NSWindow *)sheet

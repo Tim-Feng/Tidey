@@ -6,6 +6,8 @@
 #import "TideySocketServer.h"
 #import "VT100Grid.h"
 
+#import <objc/runtime.h>
+
 #include <sys/socket.h>
 #include <sys/un.h>
 #include <unistd.h>
@@ -58,9 +60,31 @@ static id TideySocketTestAutorelease(id object) {
                                          actualCarrierPanelIdentifier:(NSString *)actualCarrierPanelIdentifier;
 + (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffFromPreviousSummaries:(NSArray<NSDictionary *> *)previousSummaries
                                                                                                currentSummaries:(NSArray<NSDictionary *> *)currentSummaries;
++ (BOOL)tideyRemoteSelectionShouldMutateMacForPanelIdentifier:(NSString *)panelIdentifier;
++ (BOOL)tideyCloseShouldUseCarrierForPanelIdentifier:(NSString *)panelIdentifier
+                               nativeSessionAvailable:(BOOL)nativeSessionAvailable;
 @end
 
 @interface PseudoTerminalTests : XCTestCase
+@end
+
+@interface TideyNativeSessionRestartProbeTerminal : PseudoTerminal {
+    BOOL _didRefreshNativeSessionProjection;
+}
+@property(nonatomic, assign) BOOL didRefreshNativeSessionProjection;
+@end
+
+@implementation TideyNativeSessionRestartProbeTerminal
+
+@synthesize didRefreshNativeSessionProjection = _didRefreshNativeSessionProjection;
+
+- (void)refreshTools {
+}
+
+- (void)numberOfSessionsDidChangeInTab:(PTYTab *)tab {
+    self.didRefreshNativeSessionProjection = YES;
+}
+
 @end
 
 @implementation PseudoTerminalTests
@@ -136,6 +160,34 @@ static id TideySocketTestAutorelease(id object) {
     XCTAssertEqualObjects(diff[@"created"], @[ created ]);
     XCTAssertEqualObjects(diff[@"updated"], @[]);
     XCTAssertEqualObjects(diff[@"closed"], @[ removed ]);
+}
+
+- (void)testNativeSessionActionPoliciesPreserveFocusAndFailClosed {
+    NSString *logicalPanelID = @"native-session:carrier-1:session-1";
+
+    XCTAssertFalse([PseudoTerminal
+        tideyRemoteSelectionShouldMutateMacForPanelIdentifier:logicalPanelID]);
+    XCTAssertTrue([PseudoTerminal
+        tideyRemoteSelectionShouldMutateMacForPanelIdentifier:@"carrier-1"]);
+
+    XCTAssertFalse([PseudoTerminal
+        tideyCloseShouldUseCarrierForPanelIdentifier:logicalPanelID
+                              nativeSessionAvailable:YES]);
+    XCTAssertFalse([PseudoTerminal
+        tideyCloseShouldUseCarrierForPanelIdentifier:logicalPanelID
+                              nativeSessionAvailable:NO]);
+    XCTAssertTrue([PseudoTerminal
+        tideyCloseShouldUseCarrierForPanelIdentifier:@"carrier-1"
+                              nativeSessionAvailable:NO]);
+}
+
+- (void)testNativeSessionRestartRefreshesLogicalEventDiff {
+    TideyNativeSessionRestartProbeTerminal *terminal = TideySocketTestAutorelease(
+        class_createInstance([TideyNativeSessionRestartProbeTerminal class], 0));
+
+    [terminal tab:nil sessionDidRestart:nil];
+
+    XCTAssertTrue(terminal.didRefreshNativeSessionProjection);
 }
 
 - (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
