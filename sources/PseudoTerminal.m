@@ -1400,6 +1400,107 @@ static NSString *TideyRuntimeAgentExecutablePath(
 
 @end
 
+@interface TideyNativeTerminalSizeLease : NSObject
+
+@property(nonatomic, readonly, copy) NSString *token;
+@property(nonatomic, readonly, copy) NSString *carrierPanelIdentifier;
+@property(nonatomic, readonly, copy) NSString *sessionGUID;
+@property(nonatomic, readonly) VT100GridSize leasedGrid;
+@property(nonatomic, readonly) VT100GridSize savedMacGrid;
+@property(nonatomic, readonly) NSTimeInterval lastHeartbeatAt;
+
+- (instancetype)initWithToken:(NSString *)token
+       carrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                  sessionGUID:(NSString *)sessionGUID
+                   leasedGrid:(VT100GridSize)leasedGrid
+                 savedMacGrid:(VT100GridSize)savedMacGrid
+              lastHeartbeatAt:(NSTimeInterval)lastHeartbeatAt;
+- (TideyNativeTerminalSizeLease *)leaseByUpdatingLeasedGrid:(VT100GridSize)leasedGrid
+                                             heartbeatAt:(NSTimeInterval)heartbeatAt;
+- (TideyNativeTerminalSizeLease *)leaseBySavingMacGrid:(VT100GridSize)savedMacGrid;
+- (TideyNativeTerminalSizeLease *)leaseByHeartbeatingAt:(NSTimeInterval)heartbeatAt;
+
+@end
+
+@implementation TideyNativeTerminalSizeLease
+
+- (instancetype)initWithToken:(NSString *)token
+       carrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                  sessionGUID:(NSString *)sessionGUID
+                   leasedGrid:(VT100GridSize)leasedGrid
+                 savedMacGrid:(VT100GridSize)savedMacGrid
+              lastHeartbeatAt:(NSTimeInterval)lastHeartbeatAt {
+    self = [super init];
+    if (self) {
+        _token = [token copy];
+        _carrierPanelIdentifier = [carrierPanelIdentifier copy];
+        _sessionGUID = [sessionGUID copy];
+        _leasedGrid = leasedGrid;
+        _savedMacGrid = savedMacGrid;
+        _lastHeartbeatAt = lastHeartbeatAt;
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_token release];
+    [_carrierPanelIdentifier release];
+    [_sessionGUID release];
+    [super dealloc];
+}
+
+- (TideyNativeTerminalSizeLease *)leaseByUpdatingLeasedGrid:(VT100GridSize)leasedGrid
+                                             heartbeatAt:(NSTimeInterval)heartbeatAt {
+    return [[[TideyNativeTerminalSizeLease alloc]
+        initWithToken:self.token
+        carrierPanelIdentifier:self.carrierPanelIdentifier
+        sessionGUID:self.sessionGUID
+        leasedGrid:leasedGrid
+        savedMacGrid:self.savedMacGrid
+        lastHeartbeatAt:heartbeatAt] autorelease];
+}
+
+- (TideyNativeTerminalSizeLease *)leaseBySavingMacGrid:(VT100GridSize)savedMacGrid {
+    return [[[TideyNativeTerminalSizeLease alloc]
+        initWithToken:self.token
+        carrierPanelIdentifier:self.carrierPanelIdentifier
+        sessionGUID:self.sessionGUID
+        leasedGrid:self.leasedGrid
+        savedMacGrid:savedMacGrid
+        lastHeartbeatAt:self.lastHeartbeatAt] autorelease];
+}
+
+- (TideyNativeTerminalSizeLease *)leaseByHeartbeatingAt:(NSTimeInterval)heartbeatAt {
+    return [self leaseByUpdatingLeasedGrid:self.leasedGrid heartbeatAt:heartbeatAt];
+}
+
+@end
+
+@interface TideyNativeTerminalSizeLeaseStore : NSObject {
+    NSMutableDictionary<NSString *, TideyNativeTerminalSizeLease *> *_leasesBySessionGUID;
+}
+
+- (NSMutableDictionary<NSString *, TideyNativeTerminalSizeLease *> *)leaseStore;
+
+@end
+
+
+@implementation TideyNativeTerminalSizeLeaseStore
+
+- (void)dealloc {
+    [_leasesBySessionGUID release];
+    [super dealloc];
+}
+
+- (NSMutableDictionary<NSString *, TideyNativeTerminalSizeLease *> *)leaseStore {
+    if (!_leasesBySessionGUID) {
+        _leasesBySessionGUID = [[NSMutableDictionary alloc] init];
+    }
+    return _leasesBySessionGUID;
+}
+
+@end
+
 @interface PseudoTerminal () <
     iTermBroadcastInputHelperDelegate,
     iTermGraphCodable,
@@ -1458,6 +1559,7 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (NSString *)tideyWorkspaceIdentifierForWorkspace:(Workspace *)workspace;
 - (void)tideyAssignWorkspaceIdentifierToPanel:(PTYTab *)panel workspace:(Workspace *)workspace;
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel;
+- (TideyNativeTerminalSizeLeaseStore *)tideyNativeTerminalSizeLeaseStore;
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel;
 - (TideyRuntimeResumeDescriptorUpdateGate *)tideyRuntimeResumeDescriptorUpdateGate;
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan;
@@ -1740,6 +1842,7 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
     NSMutableDictionary<NSString *, NSString *> *_tideyWorkspaceTitleOverrides;
     NSMutableSet<NSString *> *_tideyTmuxWindowBackfillKeysInFlight;
     NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier;
+    TideyNativeTerminalSizeLeaseStore *_tideyNativeTerminalSizeLeaseStore;
 
     // Launch-scoped native restoration state. These are cleared after workspace hydration.
     TideyWorkspaceRestorationState *_tideyPendingWorkspaceRestorationState;
@@ -2403,6 +2506,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_tideyWorkspaceTitleOverrides release];
     [_tideyTmuxWindowBackfillKeysInFlight release];
     [_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier release];
+    [_tideyNativeTerminalSizeLeaseStore release];
     [_tideyLastBroadcastWorkspaceSelectionIdentifier release];
     [_tideyLastBroadcastPanelSelectionIdentifier release];
 
@@ -2749,6 +2853,14 @@ ITERM_WEAKLY_REFERENCEABLE
             [[NSMutableDictionary alloc] init];
     }
     return _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier;
+}
+
+- (TideyNativeTerminalSizeLeaseStore *)tideyNativeTerminalSizeLeaseStore {
+    if (!_tideyNativeTerminalSizeLeaseStore) {
+        _tideyNativeTerminalSizeLeaseStore =
+            [[TideyNativeTerminalSizeLeaseStore alloc] init];
+    }
+    return _tideyNativeTerminalSizeLeaseStore;
 }
 
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {

@@ -5213,7 +5213,7 @@
 		TIDEMOUSE0001A00000000001 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
 		TIDEMOUSE0001A00000000002 /* PTYMouseHandlerSelectionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEMOUSE0001A00000000000 /* PTYMouseHandlerSelectionTests.m */; };
 		TIDESOCK0001A00000000001 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
-		TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; };
+		TIDESOCK0001A00000000002 /* TideySocketServerTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDESOCK0001A00000000000 /* TideySocketServerTests.m */; settings = {COMPILER_FLAGS = "-fno-objc-arc"; }; };
 /* End PBXBuildFile section */
 
 /* Begin PBXContainerItemProxy section */
