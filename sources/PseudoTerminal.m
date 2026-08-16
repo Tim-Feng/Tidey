@@ -1678,6 +1678,8 @@ static const NSTimeInterval kTideyNativeTerminalSizeLeaseTimeout = 5.0;
                                             carrierPanelIdentifier:(NSString **)carrierPanelIdentifier;
 - (void)tideyScheduleNativeTerminalSizeLeaseExpiry;
 - (void)tideyExpireNativeTerminalSizeLeases;
+- (void)tideyRestoreExpiredNativeTerminalSizeLease:(TideyNativeTerminalSizeLease *)lease
+                                   resolvedSession:(PTYSession *)session;
 - (TideyWorkspaceRestorationPanelInput *)tideyWorkspaceRestorationInputForPanel:(PTYTab *)panel;
 - (TideyRuntimeResumeDescriptorUpdateGate *)tideyRuntimeResumeDescriptorUpdateGate;
 - (TideyWorkspaceRestorationCapturePlan *)tideyWorkspaceRestorationCapturePlan;
@@ -3038,13 +3040,15 @@ ITERM_WEAKLY_REFERENCEABLE
             timeout:kTideyNativeTerminalSizeLeaseTimeout];
     for (TideyNativeTerminalSizeLease *lease in expired) {
         PTYSession *session = [[PTYSession sessionMap] objectForKey:lease.sessionGUID];
-        PseudoTerminal *owner =
-            [PseudoTerminal castFrom:session.delegate.realParentWindow];
-        PTYTab *panel = owner == self ? [self tabForSession:session] : nil;
-        NSString *carrierPanelIdentifier = [self tideyPanelIdentifierForPanel:panel];
-        if ([carrierPanelIdentifier isEqualToString:lease.carrierPanelIdentifier]) {
-            [session setSize:lease.savedMacGrid];
-        }
+        [self tideyRestoreExpiredNativeTerminalSizeLease:lease
+                                         resolvedSession:session];
+    }
+}
+
+- (void)tideyRestoreExpiredNativeTerminalSizeLease:(TideyNativeTerminalSizeLease *)lease
+                                   resolvedSession:(PTYSession *)session {
+    if (session) {
+        [session setSize:lease.savedMacGrid];
     }
 }
 

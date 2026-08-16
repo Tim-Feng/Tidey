@@ -80,10 +80,14 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                nativeSessionAvailable:(BOOL)nativeSessionAvailable;
 @end
 
+@class TideyNativeTerminalSizeLease;
+
 @interface PseudoTerminal (TideyNativeTerminalSizeLeaseTesting)
 - (BOOL)tideySession:(PTYSession *)session
     shouldApplyNativeTerminalSize:(VT100GridSize)size;
 - (void)tideySessionWillReplaceGUID:(PTYSession *)session;
+- (void)tideyRestoreExpiredNativeTerminalSizeLease:(TideyNativeTerminalSizeLease *)lease
+                                   resolvedSession:(PTYSession *)session;
 @end
 
 @interface PseudoTerminalTests : XCTestCase
@@ -332,6 +336,32 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertNil([store leaseForSessionGUID:probe.guid]);
     [terminal tideySessionWillReplaceGUID:(PTYSession *)probe];
     XCTAssertEqual(probe.applyCount, 1u);
+}
+
+- (void)testExpiredNativeTerminalSizeLeaseRestoresAfterCarrierMove {
+    TideyNativeTerminalSizeLeaseStore *store = TideySocketTestAutorelease(
+        [[TideyNativeTerminalSizeLeaseStore alloc] init]);
+    TideyNativeTerminalSizeProbeSession *probe = TideySocketTestAutorelease(
+        [[TideyNativeTerminalSizeProbeSession alloc] init]);
+    probe.guid = @"session-1";
+    const VT100GridSize macGrid = VT100GridSizeMake(132, 48);
+
+    [store acquireWithToken:@"token-1"
+     carrierPanelIdentifier:@"old-carrier"
+                sessionGUID:probe.guid
+                 leasedGrid:VT100GridSizeMake(42, 20)
+               savedMacGrid:macGrid
+                        now:100];
+    TideyNativeTerminalSizeLease *expired =
+        [store takeExpiredLeasesAt:106 timeout:5].firstObject;
+
+    PseudoTerminal *terminal = TideySocketTestAutorelease(
+        class_createInstance([PseudoTerminal class], 0));
+    [terminal tideyRestoreExpiredNativeTerminalSizeLease:expired
+                                         resolvedSession:(PTYSession *)probe];
+
+    XCTAssertEqual(probe.applyCount, 1u);
+    XCTAssertTrue(VT100GridSizeEquals(probe.appliedGrid, macGrid));
 }
 
 - (void)testNativeSessionProjectionFlattensTwoLeaves {
