@@ -52,6 +52,8 @@ static id TideySocketTestAutorelease(id object) {
 + (NSString *)tideyNativeSessionPanelIdentifierForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
                                                   nativeSessionIdentifier:(NSString *)nativeSessionIdentifier;
 + (NSDictionary<NSString *, NSString *> *)tideyNativeSessionPanelIdentityFromPanelIdentifier:(NSString *)panelIdentifier;
++ (NSArray<NSDictionary *> *)tideyNativeSessionPanelSummariesForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                                                    basePanelSummaries:(NSArray<NSDictionary *> *)basePanelSummaries;
 @end
 
 @interface PseudoTerminalTests : XCTestCase
@@ -74,6 +76,24 @@ static id TideySocketTestAutorelease(id object) {
     XCTAssertNil([PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:@"carrier-1"]);
     XCTAssertNil([PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:@"native-session:carrier-1:"]);
     XCTAssertNil([PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:@"native-session:carrier-1:session-1:extra"]);
+}
+
+- (void)testNativeSessionProjectionFlattensTwoLeaves {
+    NSArray<NSDictionary *> *projected = [PseudoTerminal
+        tideyNativeSessionPanelSummariesForCarrierPanelIdentifier:@"carrier-1"
+                                               basePanelSummaries:@[
+        @{ @"native_session_id": @"session-1", @"title": @"Claude" },
+        @{ @"native_session_id": @"session-2", @"title": @"Codex" },
+    ]];
+
+    XCTAssertEqual(projected.count, 2u);
+    XCTAssertEqualObjects(projected[0][@"panel_id"], @"native-session:carrier-1:session-1");
+    XCTAssertEqualObjects(projected[0][@"carrier_panel_id"], @"carrier-1");
+    XCTAssertEqualObjects(projected[0][@"native_session_id"], @"session-1");
+    XCTAssertEqualObjects(projected[0][@"logical_kind"], @"native_session");
+    XCTAssertEqualObjects(projected[0][@"title"], @"Claude");
+    XCTAssertEqualObjects(projected[1][@"panel_id"], @"native-session:carrier-1:session-2");
+    XCTAssertEqualObjects(projected[1][@"title"], @"Codex");
 }
 
 - (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
