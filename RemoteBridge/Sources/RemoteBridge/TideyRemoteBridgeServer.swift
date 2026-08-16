@@ -4,6 +4,13 @@ import NIOHTTP1
 import NIOPosix
 import NIOWebSocket
 
+struct BridgeMediaResponseObservation: Equatable, Sendable {
+    let method: String
+    let rangeHeader: String?
+    let statusCode: Int
+    let contentRange: String?
+}
+
 final class TideyRemoteBridgeServer {
     private static let maximumWebSocketFrameSizeBytes = 16 * 1024 * 1024
 
@@ -22,6 +29,7 @@ final class TideyRemoteBridgeServer {
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let mediaLeaseRegistry: BridgeMediaLeaseRegistry
+    private let mediaResponseObserver: (@Sendable (BridgeMediaResponseObservation) -> Void)?
     private let startRegistryMonitor: Bool
     private let startCloudflaredSupervisor: Bool
     private let interactivePTYRuntime: TmuxInteractivePTYRuntime
@@ -51,7 +59,8 @@ final class TideyRemoteBridgeServer {
          mediaLeaseRegistry: BridgeMediaLeaseRegistry = BridgeMediaLeaseRegistry(),
          interactivePTYRuntime: TmuxInteractivePTYRuntime = .disabled(),
          requestSequencer: BridgeRequestSequencer = BridgeRequestSequencer(),
-         terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry()) {
+         terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry(),
+         mediaResponseObserver: (@Sendable (BridgeMediaResponseObservation) -> Void)? = nil) {
         self.host = host
         self.port = port
         self.token = token
@@ -66,6 +75,7 @@ final class TideyRemoteBridgeServer {
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
         self.mediaLeaseRegistry = mediaLeaseRegistry
+        self.mediaResponseObserver = mediaResponseObserver
         self.startRegistryMonitor = startRegistryMonitor
         self.startCloudflaredSupervisor = startCloudflaredSupervisor
         self.interactivePTYRuntime = interactivePTYRuntime
@@ -121,7 +131,7 @@ final class TideyRemoteBridgeServer {
         let bootstrap = ServerBootstrap(group: group)
             .serverChannelOption(ChannelOptions.backlog, value: 16)
             .serverChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
-            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager, uploadGarbageCollector, mediaLeaseRegistry] channel in
+            .childChannelInitializer { [token, authenticator, pairingController, port, registryMonitor, eventHub, observability, cloudflaredManager, uploadGarbageCollector, mediaLeaseRegistry, mediaResponseObserver] channel in
                 let httpHandler = HTTPHandler(legacyPairToken: token,
                                               authenticator: authenticator,
                                               pairingController: pairingController,
@@ -131,7 +141,8 @@ final class TideyRemoteBridgeServer {
                                               observability: observability,
                                               cloudflaredManager: cloudflaredManager,
                                               uploadGarbageCollector: uploadGarbageCollector,
-                                              mediaLeaseRegistry: mediaLeaseRegistry)
+                                              mediaLeaseRegistry: mediaLeaseRegistry,
+                                              mediaResponseObserver: mediaResponseObserver)
                 return channel.pipeline.configureHTTPServerPipeline(
                     withServerUpgrade: (
                         upgraders: [upgrader],
@@ -209,6 +220,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
     private let cloudflaredManager: BridgeCloudflaredManager
     private let uploadGarbageCollector: BridgeUploadGarbageCollector
     private let mediaLeaseRegistry: BridgeMediaLeaseRegistry
+    private let mediaResponseObserver: (@Sendable (BridgeMediaResponseObservation) -> Void)?
     private let encoder = JSONEncoder()
     private let decoder = JSONDecoder()
     private var pendingHead: HTTPRequestHead?
@@ -223,7 +235,8 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
          observability: BridgeObservabilityCenter,
          cloudflaredManager: BridgeCloudflaredManager,
          uploadGarbageCollector: BridgeUploadGarbageCollector,
-         mediaLeaseRegistry: BridgeMediaLeaseRegistry) {
+         mediaLeaseRegistry: BridgeMediaLeaseRegistry,
+         mediaResponseObserver: (@Sendable (BridgeMediaResponseObservation) -> Void)?) {
         self.legacyPairToken = legacyPairToken
         self.authenticator = authenticator
         self.pairingController = pairingController
@@ -234,6 +247,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         self.cloudflaredManager = cloudflaredManager
         self.uploadGarbageCollector = uploadGarbageCollector
         self.mediaLeaseRegistry = mediaLeaseRegistry
+        self.mediaResponseObserver = mediaResponseObserver
         encoder.dateEncodingStrategy = .iso8601
         encoder.outputFormatting = [.sortedKeys]
         decoder.dateDecodingStrategy = .iso8601
@@ -359,6 +373,12 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
         headers.add(name: "x-content-type-options", value: "nosniff")
 
         let responseHead = HTTPResponseHead(version: head.version, status: status, headers: headers)
+        mediaResponseObserver?(
+            BridgeMediaResponseObservation(method: head.method.rawValue,
+                                           rangeHeader: head.headers.first(name: "range"),
+                                           statusCode: Int(status.code),
+                                           contentRange: headers.first(name: "content-range"))
+        )
         if head.method == .HEAD {
             try? authority.fileHandle.close()
             respondHeadersOnly(responseHead, context: context)

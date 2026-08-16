@@ -4,6 +4,12 @@ import XCTest
 @testable import RemoteBridge
 
 final class BridgeMediaHTTPIntegrationTests: XCTestCase {
+    func testMediaResponseObserverSeamCompilesWithoutStartingServer() throws {
+        let fixture = try MediaHTTPFixture(mediaResponseObserver: { _ in })
+
+        XCTAssertNotNil(fixture.server)
+    }
+
     func testRealHTTPMediaRouteServesExactSingleRangesAndHeaders() throws {
         let fixture = try MediaHTTPFixture()
         let source = Data((0..<256).map(UInt8.init))
@@ -185,7 +191,7 @@ private final class MediaHTTPFixture {
     let registry = BridgeMediaLeaseRegistry()
     let server: TideyRemoteBridgeServer
 
-    init() throws {
+    init(mediaResponseObserver: (@Sendable (BridgeMediaResponseObservation) -> Void)? = nil) throws {
         rootURL = FileManager.default.temporaryDirectory
             .appendingPathComponent("tidey-media-http-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: rootURL, withIntermediateDirectories: true)
@@ -221,7 +227,8 @@ private final class MediaHTTPFixture {
             uploadGarbageCollector: BridgeUploadGarbageCollector(uploadDirectory: rootURL.appendingPathComponent("uploads")),
             startRegistryMonitor: false,
             startCloudflaredSupervisor: false,
-            mediaLeaseRegistry: registry
+            mediaLeaseRegistry: registry,
+            mediaResponseObserver: mediaResponseObserver
         )
     }
 
