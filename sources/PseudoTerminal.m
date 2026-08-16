@@ -2597,6 +2597,30 @@ ITERM_WEAKLY_REFERENCEABLE
     return [self workspaceAtIndex:self.selectedWorkspaceIndex];
 }
 
++ (NSString *)tideyNativeSessionPanelIdentifierForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                                  nativeSessionIdentifier:(NSString *)nativeSessionIdentifier {
+    if (carrierPanelIdentifier.length == 0 || nativeSessionIdentifier.length == 0) {
+        return nil;
+    }
+    return [NSString stringWithFormat:@"native-session:%@:%@",
+                                      carrierPanelIdentifier,
+                                      nativeSessionIdentifier];
+}
+
++ (NSDictionary<NSString *, NSString *> *)tideyNativeSessionPanelIdentityFromPanelIdentifier:(NSString *)panelIdentifier {
+    NSArray<NSString *> *components = [panelIdentifier componentsSeparatedByString:@":"];
+    if (components.count != 3 ||
+        ![components[0] isEqualToString:@"native-session"] ||
+        [components[1] length] == 0 ||
+        [components[2] length] == 0) {
+        return nil;
+    }
+    return @{
+        @"carrier_panel_id": components[1],
+        @"native_session_id": components[2],
+    };
+}
+
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {
     if (!panel) {
         return nil;

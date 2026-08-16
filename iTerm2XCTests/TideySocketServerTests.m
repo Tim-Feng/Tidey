@@ -48,10 +48,33 @@ static id TideySocketTestAutorelease(id object) {
                                          cursorVisible:(BOOL)cursorVisible;
 @end
 
+@interface PseudoTerminal (TideyNativeSessionPanelIdentityTesting)
++ (NSString *)tideyNativeSessionPanelIdentifierForCarrierPanelIdentifier:(NSString *)carrierPanelIdentifier
+                                                  nativeSessionIdentifier:(NSString *)nativeSessionIdentifier;
++ (NSDictionary<NSString *, NSString *> *)tideyNativeSessionPanelIdentityFromPanelIdentifier:(NSString *)panelIdentifier;
+@end
+
 @interface PseudoTerminalTests : XCTestCase
 @end
 
 @implementation PseudoTerminalTests
+
+- (void)testNativeSessionPanelIdentityRoundTrips {
+    NSString *panelID = [PseudoTerminal
+        tideyNativeSessionPanelIdentifierForCarrierPanelIdentifier:@"carrier-1"
+                                           nativeSessionIdentifier:@"session-1"];
+
+    XCTAssertEqualObjects(panelID, @"native-session:carrier-1:session-1");
+    XCTAssertEqualObjects(
+        [PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:panelID],
+        (@{
+            @"carrier_panel_id": @"carrier-1",
+            @"native_session_id": @"session-1",
+        }));
+    XCTAssertNil([PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:@"carrier-1"]);
+    XCTAssertNil([PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:@"native-session:carrier-1:"]);
+    XCTAssertNil([PseudoTerminal tideyNativeSessionPanelIdentityFromPanelIdentifier:@"native-session:carrier-1:session-1:extra"]);
+}
 
 - (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
     VT100Grid *grid = TideySocketTestAutorelease(
