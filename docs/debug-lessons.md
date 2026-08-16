@@ -454,6 +454,11 @@
 
 ## Native workspace restoration
 
+- MRC mutable collection 取出的舊值若要跨過 collection mutation 使用，必須先取得 ownership
+  - `objectForKey:`／subscript 只回傳 borrowed reference；若 dictionary 是該值的唯一 owner，替換同一個 key 會立即 release 舊值，後續 diff、enumeration 或 event publication 都可能讀到已釋放物件
+  - 保留「先更新 cache、再發布 event」的 reentrancy 順序時，先 retain 舊值，完成 diff 後再 release；不能靠區域變數延長 MRC lifetime
+  - 只用 array literal 直接測 pure diff 會讓呼叫端持續持有舊值，無法覆蓋 ownership transition；regression 要讓 cache 成為唯一 owner，並用 deallocation probe 驗證舊值在 diff 執行時仍存活、helper 回傳後已釋放
+  - restoration、key-window 切換與 session-count callback 都可能觸發這條路徑；部署驗收除了正常啟動，也要包含 AppKit reopen／restoration 期間的 topology refresh
 - 還原 panel、cwd 與 scrollback，不代表原本的 agent runtime 已經還原
   - non-tmux Claude／Codex 在正常結束後只會剩下重新啟動的 shell；驗收時要另外確認 durable session ID 與 agent process
   - Bridge 的 runtime descriptor 必須把沒有 tmux carrier 的 agent 表達成第一級 `direct_resume`，不能因為共用 tmux schema 就直接略過
