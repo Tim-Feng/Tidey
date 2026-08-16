@@ -39,6 +39,9 @@ final class BridgeImageReadDispatchTests: XCTestCase {
         let capabilities = try XCTUnwrap(result.response.result?["capabilities"]?.arrayValue)
         XCTAssertTrue(capabilities.compactMap(\.stringValue).contains("image_read_v1"))
         XCTAssertTrue(capabilities.compactMap(\.stringValue).contains(
+            BridgeVideoPreviewProtocolV1.capability
+        ))
+        XCTAssertTrue(capabilities.compactMap(\.stringValue).contains(
             BridgeProtocolCapability.terminalStreamSubscriptionOwnership
         ))
     }

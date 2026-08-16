@@ -23,6 +23,13 @@ struct BridgeVideoProbeResult: Equatable {
     let revisionToken: String
 }
 
+struct BridgeVideoPreparedSource {
+    let result: BridgeVideoProbeResult
+    /// Present only for `.direct`. Ownership passes to the lease registry or
+    /// must be closed by the caller if lease creation fails.
+    let openedFile: BridgeSafeOpenedFile?
+}
+
 struct BridgeVideoFilePolicy: BridgeLocalFileContentPolicy {
     static let allowedExtensions: Set<String> = [
         "3g2", "3gp", "asf", "avi", "f4v", "flv", "m2ts", "m4v", "mkv", "mov",
@@ -85,6 +92,14 @@ struct BridgeVideoPrepareHandler {
     }
 
     func probe(path: String, workspaceID: String, panelID: String) async throws -> BridgeVideoProbeResult {
+        let prepared = try await prepare(path: path, workspaceID: workspaceID, panelID: panelID)
+        prepared.openedFile?.close()
+        return prepared.result
+    }
+
+    func prepare(path: String,
+                 workspaceID: String,
+                 panelID: String) async throws -> BridgeVideoPreparedSource {
         let resolved = try targetResolver.resolve(path: path,
                                                   workspaceID: workspaceID,
                                                   panelID: panelID,
@@ -108,8 +123,8 @@ struct BridgeVideoPrepareHandler {
             notFoundMessage: "video_prepare target changed during inspection",
             outsideScopeMessage: policy.outsideRootMessage
         )
-        defer { verified.close() }
         guard verified.revisionToken == opened.revisionToken else {
+            verified.close()
             throw BridgeInternalError.forbidden("影片檔案在檢查期間已變更，請重試。")
         }
 
@@ -122,14 +137,19 @@ struct BridgeVideoPrepareHandler {
             route = .transcode
         }
 
-        return BridgeVideoProbeResult(normalizedPath: resolved.targetURL.path,
-                                      displayName: resolved.targetURL.lastPathComponent,
-                                      route: route,
-                                      mime: metadata.mime,
-                                      size: UInt64(opened.size),
-                                      durationMS: metadata.durationMS,
-                                      hasAudio: metadata.hasAudio,
-                                      revisionToken: opened.revisionToken)
+        let result = BridgeVideoProbeResult(normalizedPath: resolved.targetURL.path,
+                                            displayName: resolved.targetURL.lastPathComponent,
+                                            route: route,
+                                            mime: metadata.mime,
+                                            size: UInt64(opened.size),
+                                            durationMS: metadata.durationMS,
+                                            hasAudio: metadata.hasAudio,
+                                            revisionToken: opened.revisionToken)
+        if route == .direct {
+            return BridgeVideoPreparedSource(result: result, openedFile: verified)
+        }
+        verified.close()
+        return BridgeVideoPreparedSource(result: result, openedFile: nil)
     }
 
     private static func probeMetadata(at fileURL: URL) async throws -> BridgeVideoProbeMetadata {

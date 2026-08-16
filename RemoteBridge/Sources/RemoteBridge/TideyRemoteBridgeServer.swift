@@ -95,8 +95,11 @@ final class TideyRemoteBridgeServer {
                 }
                 return channel.eventLoop.makeSucceededFuture([:])
             },
-            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, interactivePTYRuntime, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager] channel, _ in
-                channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
+            upgradePipelineHandler: { [socketClient, eventHub, workspaceEventHub, registryMonitor, codexApprovalProvider, promptSubmitDeduper, observability, interactivePTYRuntime, requestSequencer, terminalStreamLaneRegistry, terminalObserver, port, cloudflaredManager, authenticator, mediaLeaseRegistry] channel, head in
+                let principal = authenticator.principal(
+                    authorizationHeader: head.headers.first(name: "Authorization")
+                )
+                return channel.pipeline.addHandler(WebSocketFrameHandler(socketClient: socketClient,
                                                                   eventHub: eventHub,
                                                                   workspaceEventHub: workspaceEventHub,
                                                                   registryMonitor: registryMonitor,
@@ -109,7 +112,9 @@ final class TideyRemoteBridgeServer {
                                                                   ordinaryTmuxProjectionContext: interactivePTYRuntime.ordinaryTmuxProjectionContext,
                                                                   requestSequencer: requestSequencer,
                                                                   terminalStreamLaneRegistry: terminalStreamLaneRegistry,
-                                                                  promptSubmitDeduper: promptSubmitDeduper))
+                                                                  promptSubmitDeduper: promptSubmitDeduper,
+                                                                  authenticatedPrincipal: principal,
+                                                                  mediaLeaseRegistry: mediaLeaseRegistry))
             }
         )
 
@@ -488,6 +493,7 @@ private final class HTTPHandler: ChannelInboundHandler, RemovableChannelHandler 
             guard try pairingController.revokeDevice(deviceID: request.deviceID) else {
                 throw BridgeInternalError.notFound("No paired device exists for device_id \(request.deviceID)")
             }
+            mediaLeaseRegistry.revoke(deviceID: request.deviceID)
             let response = BridgeAdminRevokeDeviceResponse(revokedDeviceID: request.deviceID)
             respond(status: .ok,
                     data: try encoder.encode(response),
@@ -699,6 +705,7 @@ typealias TerminalStreamEventLoopScheduler = (EventLoop, @escaping () -> Void) -
 enum BridgeProtocolCapability {
     static let terminalStreamSubscriptionOwnership = "terminal_stream_subscription_ownership_v1"
     static let tmuxInteractive = TmuxInteractiveProtocolV1.capability
+    static let videoPreview = BridgeVideoPreviewProtocolV1.capability
 }
 
 enum TmuxInteractivePTYActivation: Sendable {
@@ -823,6 +830,37 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
 
         func submit(_ work: @escaping @Sendable () -> Void) {
             execute(work)
+        }
+    }
+
+    private final class VideoPreviewCompletionTarget: @unchecked Sendable {
+        private weak var handler: WebSocketFrameHandler?
+        private weak var context: ChannelHandlerContext?
+        private let eventLoop: EventLoop
+        private let mediaLeaseRegistry: BridgeMediaLeaseRegistry
+
+        init(handler: WebSocketFrameHandler, context: ChannelHandlerContext) {
+            self.handler = handler
+            self.context = context
+            self.eventLoop = context.eventLoop
+            self.mediaLeaseRegistry = handler.mediaLeaseRegistry
+        }
+
+        func complete(_ result: BridgeVideoPreviewActionResult,
+                      messageType: String) {
+            eventLoop.execute {
+                guard let handler = self.handler,
+                      let context = self.context else {
+                    if let prepareID = result.registeredPrepareID,
+                       let deviceID = result.deviceID {
+                        self.mediaLeaseRegistry.close(prepareID: prepareID, deviceID: deviceID)
+                    }
+                    return
+                }
+                handler.completeVideoPreviewAction(result,
+                                                   messageType: messageType,
+                                                   context: context)
+            }
         }
     }
 
@@ -1017,6 +1055,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let interactivePromptActionHandler: InteractivePromptActionHandler
     private let imageUploadHandler: BridgeImageUploadHandler
     private let imageReadHandler: BridgeImageReadHandler
+    private let authenticatedPrincipal: BridgeAuthenticatedPrincipal?
+    private let mediaLeaseRegistry: BridgeMediaLeaseRegistry
+    private let videoPreviewActionHandler: BridgeVideoPreviewActionHandler
+    private let videoPreviewLeaseTracker: BridgeVideoPreviewConnectionLeaseTracker?
     private let ordinaryTmuxPanelProjector: OrdinaryTmuxPanelProjector
     private var agentSubscriptions = BridgeAgentSubscriptionSlots()
     private var workspaceSubscriptionID: UUID?
@@ -1054,7 +1096,10 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
          terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry = OrdinaryTmuxTerminalStreamLaneRegistry(),
          terminalStreamConnectionAdmission: TerminalStreamConnectionAdmission = TerminalStreamConnectionAdmission(),
          promptSubmitDeduper: InteractivePromptSubmitDeduper = InteractivePromptSubmitDeduper(),
-         lifecycleStore: AgentSessionLifecycleStore = AgentSessionLifecycle.store) {
+         lifecycleStore: AgentSessionLifecycleStore = AgentSessionLifecycle.store,
+         authenticatedPrincipal: BridgeAuthenticatedPrincipal? = .legacy,
+         mediaLeaseRegistry: BridgeMediaLeaseRegistry = BridgeMediaLeaseRegistry(),
+         videoPreviewActionHandler: BridgeVideoPreviewActionHandler? = nil) {
         self.socketClient = socketClient
         self.eventHub = eventHub
         self.workspaceEventHub = workspaceEventHub
@@ -1069,6 +1114,16 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.requestExecutor = requestExecutor
         self.terminalStreamEventLoopScheduler = terminalStreamEventLoopScheduler
         self.interactivePTYActivation = interactivePTYActivation
+        self.authenticatedPrincipal = authenticatedPrincipal
+        self.mediaLeaseRegistry = mediaLeaseRegistry
+        if case .device(let deviceID) = authenticatedPrincipal {
+            self.videoPreviewLeaseTracker = BridgeVideoPreviewConnectionLeaseTracker(
+                deviceID: deviceID,
+                leaseRegistry: mediaLeaseRegistry
+            )
+        } else {
+            self.videoPreviewLeaseTracker = nil
+        }
         self.ordinaryTmuxPanelRegistry = ordinaryTmuxProjectionContext.registry
         self.ordinaryTmuxPanelProjector = ordinaryTmuxProjectionContext.projector
         let routeResolver = OrdinaryTmuxRouteResolver(registry: ordinaryTmuxProjectionContext.registry)
@@ -1101,6 +1156,11 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                            filenameGenerator: TimestampedImageUploadFilenameGenerator())
         self.imageReadHandler = BridgeImageReadHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                 ordinaryTmuxRouteResolver: routeResolver))
+        self.videoPreviewActionHandler = videoPreviewActionHandler ?? .live(
+            rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
+                                                     ordinaryTmuxRouteResolver: routeResolver),
+            leaseRegistry: mediaLeaseRegistry
+        )
     }
 
     func handlerAdded(context: ChannelHandlerContext) {
@@ -1173,6 +1233,22 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                                      byteCount: inboundByteCount,
                                                      durationMs: (CFAbsoluteTimeGetCurrent() - decodeStartedAt) * 1000)
                     responseMessageType = "response.\(request.action)"
+                    if self.videoPreviewActionHandler.handles(request) {
+                        let completionTarget = VideoPreviewCompletionTarget(handler: self,
+                                                                            context: context)
+                        let videoResponseMessageType = "response.\(request.action)"
+                        Task {
+                            guard let result = await self.videoPreviewActionHandler.handle(
+                                request,
+                                principal: self.authenticatedPrincipal
+                            ) else {
+                                return
+                            }
+                            completionTarget.complete(result,
+                                                      messageType: videoResponseMessageType)
+                        }
+                        return
+                    }
                     if request.action == "image_upload" {
                         BridgeImageUploadDiagnostics.log("server received request_id=\(request.id) action=\(request.action) params_keys=\(request.params?.keys.sorted().joined(separator: ",") ?? "-") base64_length=\(request.params?["data_base64"]?.stringValue?.count ?? 0)")
                     }
@@ -1258,6 +1334,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        videoPreviewLeaseTracker?.retire()
         let interactivePTYOutputPumpsToStop =
             interactivePTYPumps.values.map(\.outputPump)
         let interactivePTYInputPumpsToStop =
@@ -1309,6 +1386,18 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         unsubscribeFromWorkspaceEvents()
         observability.clearActiveTerminalStreamSubscriptionCount(forConnectionID: connectionID)
         context.fireChannelInactive()
+    }
+
+    private func completeVideoPreviewAction(_ result: BridgeVideoPreviewActionResult,
+                                            messageType: String,
+                                            context: ChannelHandlerContext) {
+        guard videoPreviewLeaseTracker?.accept(
+            result,
+            connectionIsActive: context.channel.isActive
+        ) ?? context.channel.isActive else {
+            return
+        }
+        send(response: result.response, messageType: messageType, to: context)
     }
 
     func installInteractivePTYOwner(
@@ -1453,6 +1542,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             let connectionCapabilities: [JSONValue] = [
                 .string("image_read_v1"),
                 .string(BridgeProtocolCapability.terminalStreamSubscriptionOwnership),
+                .string(BridgeProtocolCapability.videoPreview),
             ] + interactivePTYActivation.protocolCapabilities.map(JSONValue.string)
             return LocalRequestResult(
                 response: BridgeResponse(id: request.id,
