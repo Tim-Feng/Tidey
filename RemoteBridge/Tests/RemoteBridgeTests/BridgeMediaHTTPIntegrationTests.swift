@@ -1,5 +1,7 @@
 import Darwin
+import AVFoundation
 import Foundation
+import QuartzCore
 import XCTest
 @testable import RemoteBridge
 
@@ -85,6 +87,80 @@ final class BridgeMediaHTTPIntegrationTests: XCTestCase {
         XCTAssertEqual(response.headers["content-length"], "\(tail.count)")
         XCTAssertEqual(response.headers["content-range"],
                        "bytes \(64 * 1024 * 1024 - tail.count)-\(64 * 1024 * 1024 - 1)/\(64 * 1024 * 1024)")
+    }
+
+    func testCanonicalNonFaststartSampleReachesFirstFrameOverRealRangeOrigin() throws {
+        let sampleURL = URL(fileURLWithPath: "/Users/timfeng/GitHub/adbrewer/projects/embryo-074/production-design/experiments/directors-layout-full-codex-v01/renders/codex-director-layout-v04.mp4")
+        try XCTSkipUnless(FileManager.default.fileExists(atPath: sampleURL.path),
+                          "canonical local sample is unavailable")
+
+        let recorder = MediaResponseRecorder()
+        let fixture = try MediaHTTPFixture(mediaResponseObserver: { observation in
+            recorder.record(observation)
+        })
+        let grant = try fixture.register(fileAt: sampleURL, prepareID: "avplayer-canonical")
+        let handle = try fixture.server.start()
+        defer { try? handle.close() }
+
+        let mediaURL = try XCTUnwrap(URL(string: "http://127.0.0.1:\(handle.port)\(grant.leasePath)"))
+        let item = AVPlayerItem(url: mediaURL)
+        let videoOutput = AVPlayerItemVideoOutput(
+            pixelBufferAttributes: [
+                kCVPixelBufferPixelFormatTypeKey as String: kCVPixelFormatType_32BGRA,
+            ]
+        )
+        item.add(videoOutput)
+        let player = AVPlayer(playerItem: item)
+        player.automaticallyWaitsToMinimizeStalling = false
+        defer { player.pause() }
+
+        let startedAt = Date()
+        let deadline = startedAt.addingTimeInterval(2)
+        player.play()
+
+        var firstFrameElapsed: TimeInterval?
+        while Date() < deadline {
+            if item.status == .failed {
+                XCTFail("AVPlayer failed: \(String(describing: item.error))")
+                break
+            }
+            let itemTime = videoOutput.itemTime(forHostTime: CACurrentMediaTime())
+            if videoOutput.copyPixelBuffer(forItemTime: itemTime,
+                                           itemTimeForDisplay: nil) != nil {
+                firstFrameElapsed = Date().timeIntervalSince(startedAt)
+                break
+            }
+            RunLoop.current.run(until: Date().addingTimeInterval(0.01))
+        }
+
+        XCTAssertNotNil(firstFrameElapsed, "real AVPlayer must render a first pixel buffer within two seconds")
+        XCTAssertLessThan(firstFrameElapsed ?? .infinity, 2)
+
+        let observations = recorder.snapshot()
+        XCTAssertTrue(
+            observations.contains(where: isTailTargetingPartialResponse),
+            "startup must include a real tail-targeting 206 ending at EOF; observed \(observations)"
+        )
+    }
+
+    private func isTailTargetingPartialResponse(_ observation: BridgeMediaResponseObservation) -> Bool {
+        guard observation.statusCode == 206,
+              let contentRange = observation.contentRange,
+              contentRange.hasPrefix("bytes ") else {
+            return false
+        }
+        let rangeAndSize = contentRange.dropFirst("bytes ".count).split(separator: "/")
+        guard rangeAndSize.count == 2,
+              let size = UInt64(rangeAndSize[1]) else {
+            return false
+        }
+        let bounds = rangeAndSize[0].split(separator: "-")
+        guard bounds.count == 2,
+              let start = UInt64(bounds[0]),
+              let end = UInt64(bounds[1]) else {
+            return false
+        }
+        return start > 0 && end == size - 1
     }
 
     private func assertSuccessHeaders(_ response: RawHTTPResponse,
@@ -259,10 +335,34 @@ private final class MediaHTTPFixture {
                                      mime: "video/mp4")
     }
 
+    func register(fileAt url: URL, prepareID: String) throws -> BridgeMediaLeaseGrant {
+        try registry.register(openedFile: open(url),
+                              deviceID: "device",
+                              prepareID: prepareID,
+                              mime: "video/mp4")
+    }
+
     private func open(_ url: URL) throws -> BridgeSafeOpenedFile {
         try BridgeSafeFileOpener.openRegularFile(at: url,
                                                 notFoundMessage: "missing",
                                                 outsideScopeMessage: "outside")
+    }
+}
+
+private final class MediaResponseRecorder: @unchecked Sendable {
+    private let lock = NSLock()
+    private var observations: [BridgeMediaResponseObservation] = []
+
+    func record(_ observation: BridgeMediaResponseObservation) {
+        lock.lock()
+        observations.append(observation)
+        lock.unlock()
+    }
+
+    func snapshot() -> [BridgeMediaResponseObservation] {
+        lock.lock()
+        defer { lock.unlock() }
+        return observations
     }
 }
 
