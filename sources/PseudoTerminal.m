@@ -1492,6 +1492,9 @@ static NSString *TideyRuntimeAgentExecutablePath(
                                                               workspace:(Workspace *)workspace
                                                          workspaceIndex:(NSInteger)workspaceIndex
                                                      startingPanelIndex:(NSInteger)startingPanelIndex;
+- (NSInteger)tideySocketLogicalPanelIndexForPanel:(PTYTab *)panel
+                                           session:(PTYSession *)session
+                                         workspace:(Workspace *)workspace;
 - (NSInteger)tideySocketLogicalPanelCountForWorkspace:(Workspace *)workspace;
 - (NSString *)tideySocketSelectedLogicalPanelIdentifierForWorkspace:(Workspace *)workspace;
 + (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
@@ -3448,6 +3451,23 @@ ITERM_WEAKLY_REFERENCEABLE
                                                basePanelSummaries:baseSummaries];
 }
 
+- (NSInteger)tideySocketLogicalPanelIndexForPanel:(PTYTab *)panel
+                                           session:(PTYSession *)session
+                                         workspace:(Workspace *)workspace {
+    NSInteger logicalPanelIndex = 0;
+    for (PTYTab *candidatePanel in workspace.panels) {
+        if (candidatePanel == panel) {
+            if (candidatePanel.isTmuxTab) {
+                return logicalPanelIndex;
+            }
+            NSInteger sessionIndex = [candidatePanel.orderedSessions indexOfObjectIdenticalTo:session];
+            return sessionIndex == NSNotFound ? NSNotFound : logicalPanelIndex + sessionIndex;
+        }
+        logicalPanelIndex += candidatePanel.isTmuxTab ? 1 : candidatePanel.orderedSessions.count;
+    }
+    return NSNotFound;
+}
+
 - (NSArray<NSDictionary *> *)tideySocketWorkspaceSummaries {
     [self ensureTideyWorkspacesInitialized];
     NSMutableArray<NSDictionary *> *summaries = [NSMutableArray array];
@@ -3477,6 +3497,39 @@ ITERM_WEAKLY_REFERENCEABLE
                                         panelIndex:&panelIndex];
     if (!panel || !workspace) {
         return nil;
+    }
+    NSDictionary<NSString *, NSString *> *nativeIdentity =
+        [[self class] tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier];
+    if (nativeIdentity) {
+        PTYSession *session = [self tideySelectedSessionForPanelIdentifier:panelIdentifier];
+        NSInteger logicalPanelIndex =
+            [self tideySocketLogicalPanelIndexForPanel:panel session:session workspace:workspace];
+        if (!session || logicalPanelIndex == NSNotFound) {
+            return nil;
+        }
+        NSMutableDictionary *baseSummary = [NSMutableDictionary dictionaryWithDictionary:
+            [self tideySocketPanelSummaryForSession:session
+                                              panel:panel
+                                          workspace:workspace
+                                     workspaceIndex:workspaceIndex
+                                         panelIndex:logicalPanelIndex
+                                    panelIdentifier:panelIdentifier]];
+        baseSummary[@"native_session_id"] = session.guid;
+        baseSummary[@"selected"] = @([workspace selectedPanel] == panel && panel.activeSession == session);
+        return [[[self class]
+            tideyNativeSessionPanelSummariesForCarrierPanelIdentifier:nativeIdentity[@"carrier_panel_id"]
+                                                   basePanelSummaries:@[ baseSummary ]] firstObject];
+    }
+    if (panel.isTmuxTab) {
+        NSInteger logicalPanelIndex =
+            [self tideySocketLogicalPanelIndexForPanel:panel session:panel.activeSession workspace:workspace];
+        NSMutableDictionary *summary = [NSMutableDictionary dictionaryWithDictionary:
+            [self tideySocketPanelSummaryForPanel:panel
+                                         workspace:workspace
+                                    workspaceIndex:workspaceIndex
+                                        panelIndex:logicalPanelIndex]];
+        summary[@"logical_kind"] = @"ordinary_tmux_window";
+        return summary;
     }
     return [self tideySocketPanelSummaryForPanel:panel
                                        workspace:workspace
@@ -3989,10 +4042,12 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex];
-    NSDictionary *panelSummary = [self tideySocketPanelSummaryForPanel:panel
-                                                             workspace:workspace
-                                                        workspaceIndex:workspaceIndex
-                                                            panelIndex:panelIndex];
+    NSString *panelIdentifier = panel.isTmuxTab
+        ? [self tideyPanelIdentifierForPanel:panel]
+        : [[self class]
+            tideyNativeSessionPanelIdentifierForCarrierPanelIdentifier:[self tideyPanelIdentifierForPanel:panel]
+                                               nativeSessionIdentifier:session.guid];
+    NSDictionary *panelSummary = [self tideySocketPanelSummaryForPanelIdentifier:panelIdentifier];
     return @{
         @"workspace": workspaceSummary ?: @{},
         @"panel": panelSummary ?: @{},
@@ -4105,17 +4160,24 @@ ITERM_WEAKLY_REFERENCEABLE
         return NO;
     }
     NSString *trimmed = [title stringByTrimmingCharactersInSet:[NSCharacterSet whitespaceAndNewlineCharacterSet]];
-    [panel setTitleOverride:trimmed.length > 0 ? trimmed : nil];
+    NSDictionary<NSString *, NSString *> *nativeIdentity =
+        [[self class] tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier];
+    if (nativeIdentity) {
+        PTYSession *session = [self tideySelectedSessionForPanelIdentifier:panelIdentifier];
+        if (!session) {
+            return NO;
+        }
+        [self setName:trimmed forSession:session];
+    } else {
+        [panel setTitleOverride:trimmed.length > 0 ? trimmed : nil];
+    }
     [panel updatePaneTitles];
     [_contentView reloadTideySidebar];
     [self tideyPostWorkspaceEventForKind:@"panel_updated"
                              workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
                                  panelID:panelIdentifier
                                workspace:[self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex]
-                                   panel:[self tideySocketPanelSummaryForPanel:panel
-                                                                    workspace:workspace
-                                                               workspaceIndex:workspaceIndex
-                                                                   panelIndex:panelIndex]];
+                                   panel:[self tideySocketPanelSummaryForPanelIdentifier:panelIdentifier]];
     return YES;
 }
 
@@ -4185,8 +4247,16 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!panel) {
         return NO;
     }
+    PTYSession *nativeSession = [[self class]
+        tideyNativeSessionPanelIdentityFromPanelIdentifier:panelIdentifier]
+        ? [self tideySelectedSessionForPanelIdentifier:panelIdentifier]
+        : nil;
     [self performTideyWorkspaceMutationPreservingWindowFrame:^{
-        [self closeTab:panel soft:YES];
+        if (nativeSession) {
+            [self closeSession:nativeSession soft:YES];
+        } else {
+            [self closeTab:panel soft:YES];
+        }
     }];
     return YES;
 }
