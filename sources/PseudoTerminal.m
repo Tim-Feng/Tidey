@@ -1495,6 +1495,8 @@ static NSString *TideyRuntimeAgentExecutablePath(
 - (NSInteger)tideySocketLogicalPanelIndexForPanel:(PTYTab *)panel
                                            session:(PTYSession *)session
                                          workspace:(Workspace *)workspace;
+- (NSInteger)tideySocketStartingLogicalPanelIndexForPanel:(PTYTab *)panel
+                                                   workspace:(Workspace *)workspace;
 - (NSInteger)tideySocketLogicalPanelCountForWorkspace:(Workspace *)workspace;
 - (NSString *)tideySocketSelectedLogicalPanelIdentifierForWorkspace:(Workspace *)workspace;
 + (NSString *)tideySocketPanelTitleForDisplayTitle:(NSString *)displayTitle
@@ -1737,6 +1739,7 @@ static NSImage *gTideyApplicationIconBaseImage = nil;
     // Socket-driven title overrides keyed by workspace UUID string.
     NSMutableDictionary<NSString *, NSString *> *_tideyWorkspaceTitleOverrides;
     NSMutableSet<NSString *> *_tideyTmuxWindowBackfillKeysInFlight;
+    NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier;
 
     // Launch-scoped native restoration state. These are cleared after workspace hydration.
     TideyWorkspaceRestorationState *_tideyPendingWorkspaceRestorationState;
@@ -2399,6 +2402,7 @@ ITERM_WEAKLY_REFERENCEABLE
     [_tideyRuntimeRehydrationStateMachine release];
     [_tideyWorkspaceTitleOverrides release];
     [_tideyTmuxWindowBackfillKeysInFlight release];
+    [_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier release];
     [_tideyLastBroadcastWorkspaceSelectionIdentifier release];
     [_tideyLastBroadcastPanelSelectionIdentifier release];
 
@@ -2670,6 +2674,47 @@ ITERM_WEAKLY_REFERENCEABLE
     return identity[@"native_session_id"];
 }
 
++ (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffFromPreviousSummaries:(NSArray<NSDictionary *> *)previousSummaries
+                                                                                               currentSummaries:(NSArray<NSDictionary *> *)currentSummaries {
+    NSMutableDictionary<NSString *, NSDictionary *> *previousByID = [NSMutableDictionary dictionary];
+    for (NSDictionary *summary in previousSummaries) {
+        NSString *panelIdentifier = summary[@"panel_id"];
+        if (panelIdentifier.length > 0) {
+            previousByID[panelIdentifier] = summary;
+        }
+    }
+    NSMutableDictionary<NSString *, NSDictionary *> *currentByID = [NSMutableDictionary dictionary];
+    for (NSDictionary *summary in currentSummaries) {
+        NSString *panelIdentifier = summary[@"panel_id"];
+        if (panelIdentifier.length > 0) {
+            currentByID[panelIdentifier] = summary;
+        }
+    }
+
+    NSMutableArray<NSDictionary *> *created = [NSMutableArray array];
+    NSMutableArray<NSDictionary *> *updated = [NSMutableArray array];
+    for (NSDictionary *summary in currentSummaries) {
+        NSString *panelIdentifier = summary[@"panel_id"];
+        NSDictionary *previous = previousByID[panelIdentifier];
+        if (!previous) {
+            [created addObject:summary];
+        } else if (![previous isEqualToDictionary:summary]) {
+            [updated addObject:summary];
+        }
+    }
+    NSMutableArray<NSDictionary *> *closed = [NSMutableArray array];
+    for (NSDictionary *summary in previousSummaries) {
+        if (!currentByID[summary[@"panel_id"]]) {
+            [closed addObject:summary];
+        }
+    }
+    return @{
+        @"created": created,
+        @"updated": updated,
+        @"closed": closed,
+    };
+}
+
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {
     if (!panel) {
         return nil;
@@ -2732,15 +2777,30 @@ ITERM_WEAKLY_REFERENCEABLE
     const NSInteger panelIndex = [workspace.panels indexOfObjectIdenticalTo:panel];
     NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:workspace
                                                                             index:workspaceIndex];
-    NSDictionary *panelSummary = panelIndex != NSNotFound ? [self tideySocketPanelSummaryForPanel:panel
-                                                                                       workspace:workspace
-                                                                                  workspaceIndex:workspaceIndex
-                                                                                      panelIndex:panelIndex] : nil;
-    [self tideyPostWorkspaceEventForKind:@"panel_created"
-                             workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
-                                 panelID:[self tideyPanelIdentifierForPanel:panel]
-                               workspace:workspaceSummary
-                                   panel:panelSummary];
+    NSInteger logicalPanelIndex = panelIndex != NSNotFound
+        ? [self tideySocketStartingLogicalPanelIndexForPanel:panel workspace:workspace]
+        : NSNotFound;
+    NSArray<NSDictionary *> *panelSummaries = logicalPanelIndex != NSNotFound
+        ? [self tideySocketLogicalPanelSummariesForPanel:panel
+                                                workspace:workspace
+                                           workspaceIndex:workspaceIndex
+                                       startingPanelIndex:logicalPanelIndex]
+        : @[];
+    if (!panel.isTmuxTab && panelSummaries.count > 0) {
+        if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
+            _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
+                [[NSMutableDictionary alloc] init];
+        }
+        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[
+            [self tideyPanelIdentifierForPanel:panel]] = panelSummaries;
+    }
+    for (NSDictionary *panelSummary in panelSummaries) {
+        [self tideyPostWorkspaceEventForKind:@"panel_created"
+                                 workspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace]
+                                     panelID:panelSummary[@"panel_id"]
+                                   workspace:workspaceSummary
+                                       panel:panelSummary];
+    }
 }
 
 - (void)tideyBackfillTmuxWindowsFromList:(TSVDocument *)doc context:(NSArray *)context {
@@ -2931,6 +2991,11 @@ ITERM_WEAKLY_REFERENCEABLE
     }
 
     Workspace *workspace = [self workspaceAtIndex:workspaceIndex];
+    if (!panel.isTmuxTab) {
+        [_contentView reloadTideySidebar];
+        [self numberOfSessionsDidChangeInTab:panel];
+        return;
+    }
     NSInteger panelIndex = [workspace.panels indexOfObjectIdenticalTo:panel];
     NSLog(@"[TideyOrdinaryTmux] metadata_update panel_updated workspace=%@ panel=%@",
           [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"-",
@@ -3454,14 +3519,24 @@ ITERM_WEAKLY_REFERENCEABLE
 - (NSInteger)tideySocketLogicalPanelIndexForPanel:(PTYTab *)panel
                                            session:(PTYSession *)session
                                          workspace:(Workspace *)workspace {
+    NSInteger logicalPanelIndex =
+        [self tideySocketStartingLogicalPanelIndexForPanel:panel workspace:workspace];
+    if (logicalPanelIndex == NSNotFound) {
+        return NSNotFound;
+    }
+    if (panel.isTmuxTab) {
+        return logicalPanelIndex;
+    }
+    NSInteger sessionIndex = [panel.orderedSessions indexOfObjectIdenticalTo:session];
+    return sessionIndex == NSNotFound ? NSNotFound : logicalPanelIndex + sessionIndex;
+}
+
+- (NSInteger)tideySocketStartingLogicalPanelIndexForPanel:(PTYTab *)panel
+                                                   workspace:(Workspace *)workspace {
     NSInteger logicalPanelIndex = 0;
     for (PTYTab *candidatePanel in workspace.panels) {
         if (candidatePanel == panel) {
-            if (candidatePanel.isTmuxTab) {
-                return logicalPanelIndex;
-            }
-            NSInteger sessionIndex = [candidatePanel.orderedSessions indexOfObjectIdenticalTo:session];
-            return sessionIndex == NSNotFound ? NSNotFound : logicalPanelIndex + sessionIndex;
+            return logicalPanelIndex;
         }
         logicalPanelIndex += candidatePanel.isTmuxTab ? 1 : candidatePanel.orderedSessions.count;
     }
@@ -3555,6 +3630,16 @@ ITERM_WEAKLY_REFERENCEABLE
                                              workspaceIndex:workspaceIndex
                                          startingPanelIndex:logicalPanelIndex];
         [panels addObjectsFromArray:logicalPanels];
+        if (!panel.isTmuxTab) {
+            if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
+                _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
+                    [[NSMutableDictionary alloc] init];
+            }
+            NSString *carrierPanelIdentifier = [self tideyPanelIdentifierForPanel:panel];
+            if (carrierPanelIdentifier.length > 0) {
+                _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[carrierPanelIdentifier] = logicalPanels;
+            }
+        }
         logicalPanelIndex += logicalPanels.count;
     }
 
@@ -6214,7 +6299,7 @@ ITERM_WEAKLY_REFERENCEABLE
     NSInteger tideyWorkspaceToReveal = NSNotFound;
     BOOL tideyShouldCloseWindow = NO;
     NSDictionary *closedWorkspaceSummary = nil;
-    NSDictionary *closedPanelSummary = nil;
+    NSArray<NSDictionary *> *closedPanelSummaries = @[];
     NSString *closedWorkspaceID = nil;
     NSString *closedPanelID = [self tideyPanelIdentifierForPanel:aTab];
     BOOL closingLastPanelInWorkspace = NO;
@@ -6226,10 +6311,18 @@ ITERM_WEAKLY_REFERENCEABLE
             closedWorkspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:workspace index:tideyWorkspaceIndex];
             NSInteger removedPanelIndex = [workspace.panels indexOfObject:aTab];
             if (removedPanelIndex != NSNotFound) {
-                closedPanelSummary = [self tideySocketPanelSummaryForPanel:aTab
-                                                                 workspace:workspace
-                                                            workspaceIndex:tideyWorkspaceIndex
-                                                                panelIndex:removedPanelIndex];
+                NSInteger startingPanelIndex =
+                    [self tideySocketStartingLogicalPanelIndexForPanel:aTab workspace:workspace];
+                closedPanelSummaries =
+                    [self tideySocketLogicalPanelSummariesForPanel:aTab
+                                                          workspace:workspace
+                                                     workspaceIndex:tideyWorkspaceIndex
+                                                 startingPanelIndex:startingPanelIndex];
+                closedPanelID = closedPanelSummaries.firstObject[@"panel_id"];
+                if (!aTab.isTmuxTab) {
+                    [_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier
+                        removeObjectForKey:[self tideyPanelIdentifierForPanel:aTab]];
+                }
                 closingLastPanelInWorkspace = (workspace.panels.count == 1);
                 [workspace.panels removeObjectAtIndex:removedPanelIndex];
                 if (workspace.selectedPanelIndex >= workspace.panels.count) {
@@ -6253,10 +6346,10 @@ ITERM_WEAKLY_REFERENCEABLE
         }
     }
 
-    if (closedPanelSummary) {
+    for (NSDictionary *closedPanelSummary in closedPanelSummaries) {
         [self tideyPostWorkspaceEventForKind:@"panel_closed"
                                  workspaceID:closedWorkspaceID
-                                     panelID:closedPanelID
+                                     panelID:closedPanelSummary[@"panel_id"]
                                    workspace:(closingLastPanelInWorkspace ? nil : [self tideySocketWorkspaceSummaryForWorkspace:[self workspaceAtIndex:tideyWorkspaceIndex] index:tideyWorkspaceIndex])
                                        panel:closedPanelSummary];
     }
@@ -6265,7 +6358,7 @@ ITERM_WEAKLY_REFERENCEABLE
                                  workspaceID:closedWorkspaceID
                                      panelID:closedPanelID
                                    workspace:closedWorkspaceSummary
-                                       panel:closedPanelSummary];
+                                       panel:closedPanelSummaries.firstObject];
     }
 
     if (![aTab isTmuxTab]) {
@@ -16364,15 +16457,35 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
             if (targetWorkspace) {
                 NSDictionary *workspaceSummary = [self tideySocketWorkspaceSummaryForWorkspace:targetWorkspace index:targetWorkspaceIndex];
                 NSInteger panelIndex = [targetWorkspace.panels indexOfObject:aTab];
-                NSDictionary *panelSummary = panelIndex != NSNotFound ? [self tideySocketPanelSummaryForPanel:aTab
-                                                                                                     workspace:targetWorkspace
-                                                                                                workspaceIndex:targetWorkspaceIndex
-                                                                                                    panelIndex:panelIndex] : nil;
-                [self tideyPostWorkspaceEventForKind:(createdWorkspace ? @"workspace_created" : @"panel_created")
-                                         workspaceID:[self tideyWorkspaceIdentifierForWorkspace:targetWorkspace]
-                                             panelID:[self tideyPanelIdentifierForPanel:aTab]
-                                           workspace:workspaceSummary
-                                               panel:panelSummary];
+                NSInteger startingPanelIndex = panelIndex != NSNotFound
+                    ? [self tideySocketStartingLogicalPanelIndexForPanel:aTab workspace:targetWorkspace]
+                    : NSNotFound;
+                NSArray<NSDictionary *> *panelSummaries = startingPanelIndex != NSNotFound
+                    ? [self tideySocketLogicalPanelSummariesForPanel:aTab
+                                                            workspace:targetWorkspace
+                                                       workspaceIndex:targetWorkspaceIndex
+                                                   startingPanelIndex:startingPanelIndex]
+                    : @[];
+                if (!aTab.isTmuxTab && panelSummaries.count > 0) {
+                    if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
+                        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
+                            [[NSMutableDictionary alloc] init];
+                    }
+                    _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[
+                        [self tideyPanelIdentifierForPanel:aTab]] = panelSummaries;
+                }
+                [panelSummaries enumerateObjectsUsingBlock:^(NSDictionary *panelSummary,
+                                                             NSUInteger summaryIndex,
+                                                             BOOL *stop) {
+                    NSString *eventKind = createdWorkspace && summaryIndex == 0
+                        ? @"workspace_created"
+                        : @"panel_created";
+                    [self tideyPostWorkspaceEventForKind:eventKind
+                                             workspaceID:[self tideyWorkspaceIdentifierForWorkspace:targetWorkspace]
+                                                 panelID:panelSummary[@"panel_id"]
+                                               workspace:workspaceSummary
+                                                   panel:panelSummary];
+                }];
             }
 
             if (createdWorkspace) {
@@ -18226,6 +18339,55 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
 - (void)numberOfSessionsDidChangeInTab:(PTYTab *)tab {
     if (tab == self.currentTab) {
         [self updateUseTransparency];
+    }
+    if (!self.isShowingTideySidebar || tab.isTmuxTab) {
+        return;
+    }
+
+    NSInteger workspaceIndex = [self indexOfWorkspaceContainingPanel:tab];
+    Workspace *workspace = [self workspaceAtIndex:workspaceIndex];
+    NSInteger startingPanelIndex =
+        [self tideySocketStartingLogicalPanelIndexForPanel:tab workspace:workspace];
+    NSString *carrierPanelIdentifier = [self tideyPanelIdentifierForPanel:tab];
+    if (!workspace || startingPanelIndex == NSNotFound || carrierPanelIdentifier.length == 0) {
+        return;
+    }
+
+    NSArray<NSDictionary *> *currentSummaries =
+        [self tideySocketLogicalPanelSummariesForPanel:tab
+                                              workspace:workspace
+                                         workspaceIndex:workspaceIndex
+                                     startingPanelIndex:startingPanelIndex];
+    if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
+        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
+            [[NSMutableDictionary alloc] init];
+    }
+    NSArray<NSDictionary *> *previousSummaries =
+        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[carrierPanelIdentifier];
+    _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[carrierPanelIdentifier] = currentSummaries;
+    if (!previousSummaries) {
+        return;
+    }
+
+    NSDictionary<NSString *, NSArray<NSDictionary *> *> *diff = [[self class]
+        tideyNativeSessionPanelEventDiffFromPreviousSummaries:previousSummaries
+                                             currentSummaries:currentSummaries];
+    NSDictionary *workspaceSummary =
+        [self tideySocketWorkspaceSummaryForWorkspace:workspace index:workspaceIndex];
+    NSString *workspaceIdentifier = [self tideyWorkspaceIdentifierForWorkspace:workspace];
+    NSDictionary<NSString *, NSString *> *eventKinds = @{
+        @"created": @"panel_created",
+        @"updated": @"panel_updated",
+        @"closed": @"panel_closed",
+    };
+    for (NSString *diffKind in @[ @"created", @"updated", @"closed" ]) {
+        for (NSDictionary *panelSummary in diff[diffKind]) {
+            [self tideyPostWorkspaceEventForKind:eventKinds[diffKind]
+                                     workspaceID:workspaceIdentifier
+                                         panelID:panelSummary[@"panel_id"]
+                                       workspace:workspaceSummary
+                                           panel:panelSummary];
+        }
     }
 }
 

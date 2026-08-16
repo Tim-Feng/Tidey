@@ -56,6 +56,8 @@ static id TideySocketTestAutorelease(id object) {
                                                                     basePanelSummaries:(NSArray<NSDictionary *> *)basePanelSummaries;
 + (NSString *)tideyValidatedNativeSessionIdentifierForPanelIdentifier:(NSString *)panelIdentifier
                                          actualCarrierPanelIdentifier:(NSString *)actualCarrierPanelIdentifier;
++ (NSDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelEventDiffFromPreviousSummaries:(NSArray<NSDictionary *> *)previousSummaries
+                                                                                               currentSummaries:(NSArray<NSDictionary *> *)currentSummaries;
 @end
 
 @interface PseudoTerminalTests : XCTestCase
@@ -111,6 +113,29 @@ static id TideySocketTestAutorelease(id object) {
     XCTAssertNil(
         [PseudoTerminal tideyValidatedNativeSessionIdentifierForPanelIdentifier:@"carrier-1"
                                                   actualCarrierPanelIdentifier:@"carrier-1"]);
+}
+
+- (void)testNativeSessionEventDiffUsesExactLogicalIDs {
+    NSDictionary *unchanged = @{
+        @"panel_id": @"native-session:carrier-1:session-1",
+        @"title": @"Claude",
+    };
+    NSDictionary *removed = @{
+        @"panel_id": @"native-session:carrier-1:session-2",
+        @"title": @"Codex",
+    };
+    NSDictionary *created = @{
+        @"panel_id": @"native-session:carrier-1:session-3",
+        @"title": @"Shell",
+    };
+
+    NSDictionary<NSString *, NSArray<NSDictionary *> *> *diff = [PseudoTerminal
+        tideyNativeSessionPanelEventDiffFromPreviousSummaries:@[ unchanged, removed ]
+                                             currentSummaries:@[ unchanged, created ]];
+
+    XCTAssertEqualObjects(diff[@"created"], @[ created ]);
+    XCTAssertEqualObjects(diff[@"updated"], @[]);
+    XCTAssertEqualObjects(diff[@"closed"], @[ removed ]);
 }
 
 - (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
