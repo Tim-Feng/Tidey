@@ -188,6 +188,7 @@ final class OrdinaryTmuxPanelProjector {
         var ordinaryCarrierCount = 0
         var everyCarrierProjectionIsAuthoritative = true
         var timedOutSocketKeys = Set<String>()
+        var claimedProjectedPanelIDs = Set<String>()
 
         for panelValue in panels {
             guard let carrierPanel = panelValue.objectValue else {
@@ -240,12 +241,24 @@ final class OrdinaryTmuxPanelProjector {
                 nextPanels.append(panelValue)
                 continue
             }
-            let projectedPanels = projectedLoad.panels
+            let loadedProjectedPanels = projectedLoad.panels
+            let projectedPanels = loadedProjectedPanels.filter {
+                claimedProjectedPanelIDs.insert($0.panelID).inserted
+            }
             if projectedLoad.canReplaceRegistry == false {
                 everyCarrierProjectionIsAuthoritative = false
             }
             if projectedLoad.timedOutWithoutCache {
                 timedOutSocketKeys.insert(socketKey)
+            }
+
+            if loadedProjectedPanels.isEmpty == false && projectedPanels.isEmpty {
+                didProjectCarrier = true
+                if projectedLoad.canReplaceRegistry {
+                    authoritativeRoutesByCarrier[carrierPanelID] = []
+                }
+                BridgeLogger.server.info("ordinary tmux projection deduplicated carrier workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) duplicate_count=\(loadedProjectedPanels.count, privacy: .public)")
+                continue
             }
 
             BridgeLogger.server.info("ordinary tmux projection result workspace_id=\(workspaceID, privacy: .public) carrier_panel_id=\(carrierPanelID, privacy: .public) tty=\(metadata.clientTTY, privacy: .public) target=\(metadata.targetSession ?? "<default>", privacy: .public) projected_count=\(projectedPanels.count, privacy: .public)")
@@ -609,6 +622,7 @@ final class OrdinaryTmuxPanelProjector {
         }
         var panel: [String: JSONValue] = [
             "panel_id": .string(projectedPanel.panelID),
+            "logical_kind": .string(BridgePanelLogicalKind.ordinaryTmuxWindow.rawValue),
             "workspace_id": .string(workspaceID),
             "title": .string(projectedPanel.title),
             "subtitle": .string(projectedPanel.subtitle),
@@ -670,6 +684,7 @@ final class OrdinaryTmuxPanelProjector {
         var panel = carrierPanel
         panel["panel_id"] = .string(carrierPanelID)
         panel["workspace_id"] = .string(workspaceID)
+        panel["logical_kind"] = .string(BridgePanelLogicalKind.ordinaryTmuxWindow.rawValue)
 
         var logical = panel["ordinary_tmux_logical"]?.objectValue ?? [:]
         logical["carrier_panel_id"] = .string(carrierPanelID)

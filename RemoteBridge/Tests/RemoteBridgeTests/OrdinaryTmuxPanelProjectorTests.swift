@@ -428,6 +428,33 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
         )
     }
 
+    func testDuplicateNativeSessionCarriersProjectEachPhysicalWindowOnceUsingFirstCarrier() {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let projector = OrdinaryTmuxPanelProjector(
+            adapter: StubAdapter(panels: [
+                projectedPanel(windowID: "@15", index: 0, name: "Claude", paneID: "%15", current: true),
+                projectedPanel(windowID: "@16", index: 1, name: "Codex", paneID: "%16", current: false),
+            ]),
+            registry: registry
+        )
+
+        let result = projector.projectPanelListResult(duplicateNativeSessionCarrierPanelListResult())
+        let panels = result["panels"]?.arrayValue?.compactMap(\.objectValue)
+
+        XCTAssertEqual(panels?.map { $0["panel_id"]?.stringValue }, [
+            "ordinary-tmux:/tmp/tmux-501/default:$7:@15",
+            "ordinary-tmux:/tmp/tmux-501/default:$7:@16",
+        ])
+        XCTAssertEqual(panels?.map { $0["logical_kind"]?.stringValue }, [
+            "ordinary_tmux_window",
+            "ordinary_tmux_window",
+        ])
+        XCTAssertEqual(
+            registry.route(forPanelID: "ordinary-tmux:/tmp/tmux-501/default:$7:@15")?.carrierPanelID,
+            "native-session:carrier-1:leaf-1"
+        )
+    }
+
     func testProjectedLogicalPanelUsesItsOwnLifecycleAggregate() throws {
         let workspaceID = "workspace-lifecycle-\(UUID().uuidString)"
         let projected = projectedPanel(windowID: "@15",
@@ -1143,6 +1170,41 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
                         "client_tty": .string("/dev/ttys004"),
                         "target_session": .string("adbrewer-codex"),
                     ]),
+                ]),
+            ]),
+        ]
+    }
+
+    private func duplicateNativeSessionCarrierPanelListResult() -> [String: JSONValue] {
+        let ordinaryTmux: JSONValue = .object([
+            "client_tty": .string("/dev/ttys010"),
+            "target_session": .string("genesis-extraction"),
+        ])
+        return [
+            "workspace_id": .string("workspace-1"),
+            "selected_panel_id": .string("native-session:carrier-1:leaf-1"),
+            "panels": .array([
+                .object([
+                    "panel_id": .string("native-session:carrier-1:leaf-1"),
+                    "carrier_panel_id": .string("carrier-1"),
+                    "native_session_id": .string("leaf-1"),
+                    "logical_kind": .string("native_session"),
+                    "workspace_id": .string("workspace-1"),
+                    "selected": .bool(true),
+                    "panel_index": .number(0),
+                    "workspace_index": .number(0),
+                    "ordinary_tmux": ordinaryTmux,
+                ]),
+                .object([
+                    "panel_id": .string("native-session:carrier-1:leaf-2"),
+                    "carrier_panel_id": .string("carrier-1"),
+                    "native_session_id": .string("leaf-2"),
+                    "logical_kind": .string("native_session"),
+                    "workspace_id": .string("workspace-1"),
+                    "selected": .bool(false),
+                    "panel_index": .number(1),
+                    "workspace_index": .number(0),
+                    "ordinary_tmux": ordinaryTmux,
                 ]),
             ]),
         ]
