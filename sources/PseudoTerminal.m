@@ -2727,6 +2727,14 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
+- (NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *)tideyNativeSessionPanelSummaryCache {
+    if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
+        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
+            [[NSMutableDictionary alloc] init];
+    }
+    return _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier;
+}
+
 - (NSString *)tideyPanelIdentifierForPanel:(PTYTab *)panel {
     if (!panel) {
         return nil;
@@ -2799,11 +2807,7 @@ ITERM_WEAKLY_REFERENCEABLE
                                        startingPanelIndex:logicalPanelIndex]
         : @[];
     if (!panel.isTmuxTab && panelSummaries.count > 0) {
-        if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
-            _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
-                [[NSMutableDictionary alloc] init];
-        }
-        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[
+        [self tideyNativeSessionPanelSummaryCache][
             [self tideyPanelIdentifierForPanel:panel]] = panelSummaries;
     }
     for (NSDictionary *panelSummary in panelSummaries) {
@@ -3643,13 +3647,9 @@ ITERM_WEAKLY_REFERENCEABLE
                                          startingPanelIndex:logicalPanelIndex];
         [panels addObjectsFromArray:logicalPanels];
         if (!panel.isTmuxTab) {
-            if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
-                _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
-                    [[NSMutableDictionary alloc] init];
-            }
             NSString *carrierPanelIdentifier = [self tideyPanelIdentifierForPanel:panel];
             if (carrierPanelIdentifier.length > 0) {
-                _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[carrierPanelIdentifier] = logicalPanels;
+                [self tideyNativeSessionPanelSummaryCache][carrierPanelIdentifier] = logicalPanels;
             }
         }
         logicalPanelIndex += logicalPanels.count;
@@ -16493,11 +16493,7 @@ static BOOL iTermApproximatelyEqualRects(NSRect lhs, NSRect rhs, double epsilon)
                                                    startingPanelIndex:startingPanelIndex]
                     : @[];
                 if (!aTab.isTmuxTab && panelSummaries.count > 0) {
-                    if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
-                        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
-                            [[NSMutableDictionary alloc] init];
-                    }
-                    _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[
+                    [self tideyNativeSessionPanelSummaryCache][
                         [self tideyPanelIdentifierForPanel:aTab]] = panelSummaries;
                 }
                 [panelSummaries enumerateObjectsUsingBlock:^(NSDictionary *panelSummary,
@@ -18384,13 +18380,11 @@ typedef NS_ENUM(NSUInteger, iTermBroadcastCommand) {
                                               workspace:workspace
                                          workspaceIndex:workspaceIndex
                                      startingPanelIndex:startingPanelIndex];
-    if (!_tideyNativeSessionPanelSummariesByCarrierPanelIdentifier) {
-        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier =
-            [[NSMutableDictionary alloc] init];
-    }
+    NSMutableDictionary<NSString *, NSArray<NSDictionary *> *> *summaryCache =
+        [self tideyNativeSessionPanelSummaryCache];
     NSArray<NSDictionary *> *previousSummaries =
-        _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[carrierPanelIdentifier];
-    _tideyNativeSessionPanelSummariesByCarrierPanelIdentifier[carrierPanelIdentifier] = currentSummaries;
+        summaryCache[carrierPanelIdentifier];
+    summaryCache[carrierPanelIdentifier] = currentSummaries;
     if (!previousSummaries) {
         return;
     }
