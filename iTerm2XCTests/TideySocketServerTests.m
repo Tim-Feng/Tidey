@@ -11,6 +11,14 @@
 #include <unistd.h>
 #include <string.h>
 
+static id TideySocketTestAutorelease(id object) {
+#if __has_feature(objc_arc)
+    return object;
+#else
+    return [object autorelease];
+#endif
+}
+
 @interface TideySocketServer (Testing)
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
                               workspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
@@ -46,8 +54,8 @@
 @implementation PseudoTerminalTests
 
 - (void)testTideyGridSnapshotSeamMatchesExistingRowProjection {
-    VT100Grid *grid = [[[VT100Grid alloc] initWithSize:VT100GridSizeMake(2, 1)
-                                               delegate:nil] autorelease];
+    VT100Grid *grid = TideySocketTestAutorelease(
+        [[VT100Grid alloc] initWithSize:VT100GridSizeMake(2, 1) delegate:nil]);
     screen_char_t *cells = [grid screenCharsAtLineNumber:0];
     cells[0].code = 'O';
     cells[1].code = 'K';
@@ -66,17 +74,17 @@
 }
 
 - (void)testTideySnapshotUsesSynchronizedVisibleGrid {
-    VT100Grid *currentGrid = [[[VT100Grid alloc] initWithSize:VT100GridSizeMake(1, 1)
-                                                      delegate:nil] autorelease];
+    VT100Grid *currentGrid = TideySocketTestAutorelease(
+        [[VT100Grid alloc] initWithSize:VT100GridSizeMake(1, 1) delegate:nil]);
     [currentGrid screenCharsAtLineNumber:0][0].code = 'N';
     currentGrid.cursor = VT100GridCoordMake(1, 0);
 
-    VT100Grid *visibleGrid = [[[VT100Grid alloc] initWithSize:VT100GridSizeMake(1, 1)
-                                                      delegate:nil] autorelease];
+    VT100Grid *visibleGrid = TideySocketTestAutorelease(
+        [[VT100Grid alloc] initWithSize:VT100GridSizeMake(1, 1) delegate:nil]);
     [visibleGrid screenCharsAtLineNumber:0][0].code = 'S';
     visibleGrid.cursor = VT100GridCoordMake(0, 0);
     PTYTextViewSynchronousUpdateState *synchronizedState =
-        [[[PTYTextViewSynchronousUpdateState alloc] init] autorelease];
+        TideySocketTestAutorelease([[PTYTextViewSynchronousUpdateState alloc] init]);
     synchronizedState.grid = visibleGrid;
     synchronizedState.cursorVisible = NO;
 
