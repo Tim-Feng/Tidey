@@ -60,6 +60,9 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                                cursorX:(NSInteger)cursorX
                                                cursorY:(NSInteger)cursorY
                                          cursorVisible:(BOOL)cursorVisible;
++ (NSDictionary *)tideySnapshot:(NSDictionary *)snapshot
+    byAddingScrollbackScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
+                                   width:(NSInteger)width;
 @end
 
 @interface PseudoTerminal (TideyNativeSessionPanelIdentityTesting)
@@ -578,6 +581,60 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     NSString *capture = [[NSString alloc] initWithData:captureData encoding:NSUTF8StringEncoding];
     XCTAssertEqualObjects(capture,
                           @"\033[0;36;1mA\033[0;2;3;4;7mB\033[0;42;5;8;9mC\033[0m");
+}
+
+- (void)testTideyANSIGridSnapshotAddsStyledScrollbackCapture {
+    screen_char_t firstCells[3] = { 0 };
+    firstCells[0].code = 'O';
+    firstCells[0].foregroundColorMode = ColorModeNormal;
+    firstCells[0].foregroundColor = kiTermScreenCharAnsiColorCyan;
+    firstCells[0].bold = 1;
+    firstCells[1].code = 'L';
+    firstCells[1].foregroundColorMode = ColorModeNormal;
+    firstCells[1].foregroundColor = kiTermScreenCharAnsiColorCyan;
+    firstCells[1].bold = 1;
+    firstCells[2].code = 'D';
+    firstCells[2].foregroundColorMode = ColorModeNormal;
+    firstCells[2].foregroundColor = kiTermScreenCharAnsiColorCyan;
+    firstCells[2].bold = 1;
+
+    screen_char_t secondCells[3] = { 0 };
+    secondCells[0].code = 'L';
+    secondCells[1].code = 'S';
+    NSData *firstRow = [NSData dataWithBytes:firstCells length:sizeof(firstCells)];
+    NSData *secondRow = [NSData dataWithBytes:secondCells length:sizeof(secondCells)];
+    NSDictionary *activeSnapshot = @{
+        @"output": @"NOW",
+        @"cursor_row": @0,
+        @"cursor_col": @3,
+        @"cursor_visible": @YES,
+        @"terminal_grid_version": @1,
+        @"ansi_active_capture_base64": [[@"NOW" dataUsingEncoding:NSUTF8StringEncoding]
+            base64EncodedStringWithOptions:0],
+        @"cols": @3,
+        @"rows": @1,
+    };
+
+    NSDictionary *snapshot = [PseudoTerminal
+        tideySnapshot:activeSnapshot
+        byAddingScrollbackScreenCharacterRows:@[ firstRow, secondRow ]
+        width:3];
+
+    XCTAssertEqualObjects(snapshot[@"output"], @"NOW");
+    XCTAssertEqualObjects(snapshot[@"ansi_active_capture_base64"],
+                          activeSnapshot[@"ansi_active_capture_base64"]);
+    XCTAssertEqualObjects(snapshot[@"scrollback_rows"], @2);
+    NSString *encodedScrollback = snapshot[@"ansi_scrollback_capture_base64"];
+    XCTAssertNotNil(encodedScrollback);
+    if (!encodedScrollback) {
+        return;
+    }
+    NSData *captureData = [[NSData alloc]
+        initWithBase64EncodedString:encodedScrollback
+        options:0];
+    NSString *capture = [[NSString alloc] initWithData:captureData
+                                               encoding:NSUTF8StringEncoding];
+    XCTAssertEqualObjects(capture, @"\033[0;36;1mOLD\033[0m\r\nLS");
 }
 
 @end

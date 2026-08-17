@@ -4490,7 +4490,24 @@ ITERM_WEAKLY_REFERENCEABLE
 + (NSDictionary *)tideySnapshot:(NSDictionary *)snapshot
     byAddingScrollbackScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
                                    width:(NSInteger)width {
-    return snapshot;
+    if (screenCharacterRows.count == 0 || width <= 0) {
+        return snapshot;
+    }
+    NSDictionary *scrollbackSnapshot = [self
+        tideySnapshotForScreenCharacterRows:screenCharacterRows
+        width:width
+        height:screenCharacterRows.count
+        cursorX:0
+        cursorY:screenCharacterRows.count - 1
+        cursorVisible:NO];
+    NSString *capture = scrollbackSnapshot[@"ansi_active_capture_base64"];
+    if (capture.length == 0) {
+        return snapshot;
+    }
+    NSMutableDictionary *result = [snapshot mutableCopy];
+    result[@"ansi_scrollback_capture_base64"] = capture;
+    result[@"scrollback_rows"] = @(screenCharacterRows.count);
+    return [result autorelease];
 }
 
 + (NSDictionary *)tideyPresentedSnapshotForCurrentGrid:(id<VT100GridReading>)currentGrid
