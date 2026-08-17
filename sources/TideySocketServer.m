@@ -827,7 +827,7 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                                @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
                                                @"panel_id": panelID,
                                                @"workspace_id": panelSummary[@"workspace_id"] ?: @"" } mutableCopy];
-            for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ]) {
+            for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"ansi_scrollback_capture_base64", @"scrollback_rows", @"cols", @"rows" ]) {
                 if (trimmed[key]) {
                     result[key] = trimmed[key];
                 }
@@ -1182,7 +1182,7 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                            @"cursor_col": trimmed[@"cursor_col"] ?: @0,
                                            @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
                                            @"workspace_id": workspaceID } mutableCopy];
-        for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ]) {
+        for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"ansi_scrollback_capture_base64", @"scrollback_rows", @"cols", @"rows" ]) {
             if (trimmed[key]) {
                 result[key] = trimmed[key];
             }
@@ -1268,6 +1268,7 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
         @"cursor_visible": snapshot[@"cursor_visible"] ?: @YES,
     } mutableCopy];
     NSArray<NSString *> *gridKeys = @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ];
+    NSArray<NSString *> *optionalGridKeys = @[ @"ansi_scrollback_capture_base64", @"scrollback_rows" ];
     BOOL hasCompleteGrid = !didTrim;
     for (NSString *key in gridKeys) {
         hasCompleteGrid = hasCompleteGrid && snapshot[key] != nil;
@@ -1275,6 +1276,11 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
     if (hasCompleteGrid) {
         for (NSString *key in gridKeys) {
             result[key] = snapshot[key];
+        }
+        for (NSString *key in optionalGridKeys) {
+            if (snapshot[key]) {
+                result[key] = snapshot[key];
+            }
         }
     }
     return result;

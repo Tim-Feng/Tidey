@@ -54,6 +54,7 @@
 #import "PreferencePanel.h"
 #import "PseudoTerminalRestorer.h"
 #import "SessionView.h"
+#import "ScreenCharArray.h"
 #import "SplitPanel.h"
 #import "TemporaryNumberAllocator.h"
 #import "TideySocketServer.h"
@@ -248,6 +249,8 @@ static NSString *TideySubmitLogSuffix(NSString *input) {
     suffix = [suffix stringByReplacingOccurrencesOfString:@"\n" withString:@"\\n"];
     return suffix;
 }
+
+static const NSInteger kTideyRemoteScrollbackLineLimit = 50;
 
 @interface Workspace : NSObject
 
@@ -4529,10 +4532,35 @@ ITERM_WEAKLY_REFERENCEABLE
     if (!grid) {
         return nil;
     }
-    return [PseudoTerminal
+    NSDictionary *snapshot = [PseudoTerminal
         tideyPresentedSnapshotForCurrentGrid:grid
                                cursorVisible:session.screen.immutableState.cursorVisible
                            synchronizedState:session.screen.temporaryDoubleBuffer.savedState];
+    const NSInteger width = [snapshot[@"cols"] integerValue];
+    const NSInteger availableRows = session.screen.numberOfScrollbackLines;
+    const NSInteger rowCount = MIN(availableRows,
+                                   kTideyRemoteScrollbackLineLimit);
+    if (width <= 0 || rowCount <= 0) {
+        return snapshot;
+    }
+    const NSInteger firstRow = availableRows - rowCount;
+    NSMutableArray<NSData *> *screenCharacterRows =
+        [NSMutableArray arrayWithCapacity:rowCount];
+    for (NSInteger row = firstRow; row < availableRows; row++) {
+        ScreenCharArray *screenCharArray =
+            [[session.screen screenCharArrayForLine:(int)row]
+                paddedOrTruncatedToLength:width];
+        if (!screenCharArray || screenCharArray.length < width) {
+            continue;
+        }
+        [screenCharacterRows addObject:
+            [NSData dataWithBytes:screenCharArray.line
+                           length:sizeof(screen_char_t) * width]];
+    }
+    return [PseudoTerminal
+        tideySnapshot:snapshot
+        byAddingScrollbackScreenCharacterRows:screenCharacterRows
+        width:width];
 }
 
 - (NSString *)tideyRecentOutputForSession:(PTYSession *)session {

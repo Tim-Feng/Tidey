@@ -867,6 +867,8 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     TideySocketServer *server = [[TideySocketServer alloc] init];
     NSString *ansiCapture = [[@"\033[38;5;6mfirst\033[0m\nsecond"
         dataUsingEncoding:NSUTF8StringEncoding] base64EncodedStringWithOptions:0];
+    NSString *scrollbackCapture = [[@"older\r\nold"
+        dataUsingEncoding:NSUTF8StringEncoding] base64EncodedStringWithOptions:0];
     NSDictionary *snapshot = @{
         @"output": @"first\nsecond",
         @"cursor_row": @1,
@@ -874,6 +876,8 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
         @"cursor_visible": @NO,
         @"terminal_grid_version": @1,
         @"ansi_active_capture_base64": ansiCapture,
+        @"ansi_scrollback_capture_base64": scrollbackCapture,
+        @"scrollback_rows": @2,
         @"cols": @6,
         @"rows": @2,
     };
@@ -883,6 +887,9 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
                                                           maxChars:20];
     XCTAssertEqualObjects(untrimmed[@"terminal_grid_version"], @1);
     XCTAssertEqualObjects(untrimmed[@"ansi_active_capture_base64"], ansiCapture);
+    XCTAssertEqualObjects(untrimmed[@"ansi_scrollback_capture_base64"],
+                          scrollbackCapture);
+    XCTAssertEqualObjects(untrimmed[@"scrollback_rows"], @2);
     XCTAssertEqualObjects(untrimmed[@"cols"], @6);
     XCTAssertEqualObjects(untrimmed[@"rows"], @2);
 
@@ -891,6 +898,8 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
                                                         maxChars:20];
     XCTAssertNil(trimmed[@"terminal_grid_version"]);
     XCTAssertNil(trimmed[@"ansi_active_capture_base64"]);
+    XCTAssertNil(trimmed[@"ansi_scrollback_capture_base64"]);
+    XCTAssertNil(trimmed[@"scrollback_rows"]);
     XCTAssertNil(trimmed[@"cols"]);
     XCTAssertNil(trimmed[@"rows"]);
 }
