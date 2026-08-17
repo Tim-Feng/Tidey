@@ -4487,6 +4487,12 @@ ITERM_WEAKLY_REFERENCEABLE
                                                   cursorVisible:cursorVisible];
 }
 
++ (NSDictionary *)tideySnapshot:(NSDictionary *)snapshot
+    byAddingScrollbackScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
+                                   width:(NSInteger)width {
+    return snapshot;
+}
+
 + (NSDictionary *)tideyPresentedSnapshotForCurrentGrid:(id<VT100GridReading>)currentGrid
                                           cursorVisible:(BOOL)cursorVisible
                                       synchronizedState:(id<PTYTextViewSynchronousUpdateStateReading>)synchronizedState {
