@@ -8,6 +8,7 @@
 @property(nonatomic, copy) void (^messageHandler)(TideySocketConnection *connection, NSDictionary *message);
 @property(nonatomic, copy) void (^closeHandler)(TideySocketConnection *connection);
 @property(nonatomic) BOOL closed;
+@property(nonatomic, readwrite, copy) NSString *automationSessionID;
 @end
 
 @implementation TideySocketConnection
@@ -21,6 +22,7 @@
         _buffer = [[NSMutableData alloc] init];
         _messageHandler = [messageHandler copy];
         _closeHandler = [closeHandler copy];
+        _automationSessionID = NSUUID.UUID.UUIDString;
     }
     return self;
 }

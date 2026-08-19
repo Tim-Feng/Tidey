@@ -4,6 +4,8 @@ NS_ASSUME_NONNULL_BEGIN
 
 @interface TideySocketConnection : NSObject
 
+@property(nonatomic, readonly, copy) NSString *automationSessionID;
+
 - (instancetype)initWithFileDescriptor:(int)fileDescriptor
                         messageHandler:(void (^)(TideySocketConnection *connection, NSDictionary *message))messageHandler
                            closeHandler:(void (^)(TideySocketConnection *connection))closeHandler NS_DESIGNATED_INITIALIZER;

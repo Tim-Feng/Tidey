@@ -5150,6 +5150,7 @@
 		D9A2368683D7DDB73A826821 /* iTermStreamingPNGWriter.m in Sources */ = {isa = PBXBuildFile; fileRef = 11C735CA9A1AF5E864EC718E /* iTermStreamingPNGWriter.m */; };
 		DCE63F57A37160221DC5B939 /* iTermScreenshotPreviewOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */; };
 		DDF0FD65062916F70080EF74 /* iTermApplication.h in Headers */ = {isa = PBXBuildFile; fileRef = DDF0FD63062916F70080EF74 /* iTermApplication.h */; };
+		EC525AFF8C7AB5F14BF248E5 /* TideySocketBrowserAutomationTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 98BCD51E782F66126F79616E /* TideySocketBrowserAutomationTests.m */; };
 		EDD2335A6BDA84CE2B29C285 /* Box.swift in Sources */ = {isa = PBXBuildFile; fileRef = F10731A1F54B9BF72FBAC682 /* Box.swift */; };
 		EE293B4DA9D2204FCFDE6784 /* iTermCursorSlideAnimator.h in Sources */ = {isa = PBXBuildFile; fileRef = 889A9128E944B618CDE75E18 /* iTermCursorSlideAnimator.h */; };
 		EEBDD6CF78595292D0CF8977 /* PrivateIPCheckerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 86F85D24451C27760B7C75BC /* PrivateIPCheckerTests.swift */; };
@@ -6337,6 +6338,7 @@
 		90A1E13A186F9EA4003EC3E8 /* AppleScriptTest.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = AppleScriptTest.m; sourceTree = "<group>"; };
 		93EDFB853885460AA504C6B9 /* iTermLayoutCalculator.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = iTermLayoutCalculator.h; sourceTree = "<group>"; };
 		97539C440B63BAC6011E9208 /* iTermScreenshotRedaction.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotRedaction.swift; sourceTree = "<group>"; };
+		98BCD51E782F66126F79616E /* TideySocketBrowserAutomationTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySocketBrowserAutomationTests.m; sourceTree = "<group>"; };
 		98E9463133DCF8311E0E5B6E /* iTermFindOnPageHelperTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermFindOnPageHelperTests.swift; sourceTree = "<group>"; };
 		9D737D5D17495B4100B3334D /* PrefsGeneral.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = PrefsGeneral.png; path = images/PrefsGeneral.png; sourceTree = "<group>"; };
 		9D737D5E17495B4100B3334D /* PrefsGeneral@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = "PrefsGeneral@2x.png"; path = "images/PrefsGeneral@2x.png"; sourceTree = "<group>"; };
@@ -10073,6 +10075,7 @@
 				F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */,
 				C604B2C8CF6F324C8E3E8C3C /* TideyBrowserAutomationControllerTests.swift */,
 				FBD4B4F6113275A0C965F05B /* TideyBrowserAutomationEngineTests.swift */,
+				98BCD51E782F66126F79616E /* TideySocketBrowserAutomationTests.m */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -20476,6 +20479,7 @@
 				CE6F5BF4B6C9719F5667CA8D /* TideyBrowserAutomationAdoptionTests.m in Sources */,
 				BC2B166D41FFCD65B6E8E5F4 /* TideyBrowserAutomationControllerTests.swift in Sources */,
 				938836D845839C6693AC639C /* TideyBrowserAutomationEngineTests.swift in Sources */,
+				EC525AFF8C7AB5F14BF248E5 /* TideySocketBrowserAutomationTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
