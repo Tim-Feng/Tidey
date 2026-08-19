@@ -156,19 +156,20 @@ run_profile_config_test() {
         profile_name="$(stable_codex_profile_name "tidey-codex")"
         sqlite_home="$(stable_codex_sqlite_home "$real_home" "tidey-codex")"
         dispatch_script="/tmp/Tidey Dev.app/Contents/Resources/bin/codex-hook-dispatch"
+        browser_mcp_script="/tmp/Tidey Dev.app/Contents/Resources/bin/tidey-browser-mcp"
         stale_dispatch_script="/Users/timfeng/GitHub/Tidey/Resources/bin/codex-hook-dispatch"
         mkdir -p "$real_home"
         printf "%s\n" "{\"hooks\":{\"Stop\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"/tmp/user-hook\"},{\"type\":\"command\",\"command\":\"'\''$stale_dispatch_script'\'' stop\",\"timeout\":10}]}],\"UserPromptSubmit\":[{\"hooks\":[{\"type\":\"command\",\"command\":\"'\''$stale_dispatch_script'\'' user-prompt-submit\",\"timeout\":10}]}]}}" > "$real_home/hooks.json"
 
         merge_tidey_hooks_into_user_hooks "$real_home" "$dispatch_script"
-        write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script"
+        write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script" "$browser_mcp_script"
         merge_tidey_hooks_into_user_hooks "$real_home" "$dispatch_script"
-        write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script"
+        write_tidey_profile_config "$real_home" "$profile_name" "$sqlite_home" "$dispatch_script" "$browser_mcp_script"
 
         [[ -d "$sqlite_home" ]] || fail "sqlite home was not created"
         [[ -f "$real_home/$profile_name.config.toml" ]] || fail "profile config was not created"
 
-        python3 - "$real_home/$profile_name.config.toml" "$real_home/hooks.json" "$sqlite_home" "$dispatch_script" <<'"'"'PY'"'"'
+        python3 - "$real_home/$profile_name.config.toml" "$real_home/hooks.json" "$sqlite_home" "$dispatch_script" "$browser_mcp_script" <<'"'"'PY'"'"'
 from pathlib import Path
 import json
 import sys
@@ -177,6 +178,7 @@ profile_path = sys.argv[1]
 hooks_path = Path(sys.argv[2])
 sqlite_home = sys.argv[3]
 dispatch_script = sys.argv[4]
+browser_mcp_script = sys.argv[5]
 text = Path(profile_path).read_text()
 hooks_root = json.loads(hooks_path.read_text())
 
@@ -188,6 +190,14 @@ if text.count("\n[tui]\n") != 1:
     raise SystemExit("profile config must contain exactly one tui table")
 if text.count("resume_cwd = \"session\"") != 1:
     raise SystemExit("profile config must prefer the saved session cwd exactly once")
+if text.count("\n[mcp_servers.tidey_browser]\n") != 1:
+    raise SystemExit("profile config must contain exactly one Tidey browser MCP table")
+if f"command = \"{browser_mcp_script}\"" not in text:
+    raise SystemExit("profile config did not use the bundled Tidey browser MCP adapter")
+if "env_vars = [\"TIDEY_SOCKET_PATH\", \"TIDEY_WORKSPACE_ID\"]" not in text:
+    raise SystemExit("profile config did not forward Tidey browser identity")
+if "default_tools_approval_mode = \"approve\"" not in text:
+    raise SystemExit("profile config did not preapprove the bounded Tidey browser tools")
 if "\n[hooks]\n" in text or "[[hooks." in text:
     raise SystemExit("profile config should not declare hooks")
 if "notify" in text:
