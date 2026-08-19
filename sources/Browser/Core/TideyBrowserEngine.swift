@@ -30,6 +30,7 @@ final class TideyBrowserEngine: NSObject, TideyBrowserNavigationEngine {
         }
     }
     let webView: WKWebView
+    private(set) var automationNavigationEpoch = 0
     private var observations: [NSKeyValueObservation] = []
 
     convenience init(host: TideyBrowserEngineHost? = nil) {
