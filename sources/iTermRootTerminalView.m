@@ -5544,6 +5544,22 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     return result;
 }
 
+- (void)tideyHandleBrowserAutomationOperation:(NSString *)operation
+                                    parameters:(NSDictionary *)parameters
+                                   workspaceID:(NSString *)workspaceID
+                                ownerSessionID:(NSString *)ownerSessionID
+                                    completion:(void (^)(NSDictionary *result, NSDictionary *error))completion {
+    [_tideyBrowserAutomationController handleOperation:operation
+                                             parameters:parameters ?: @{}
+                                            workspaceID:workspaceID
+                                         ownerSessionID:ownerSessionID
+                                             completion:completion];
+}
+
+- (void)tideyCleanupBrowserAutomationSession:(NSString *)ownerSessionID {
+    [_tideyBrowserAutomationController cleanupSessionWithOwnerSessionID:ownerSessionID];
+}
+
 - (TideyBrowserEngine *)browserAutomationEngineForTabID:(NSString *)tabID {
     if (tabID.length == 0) {
         return nil;

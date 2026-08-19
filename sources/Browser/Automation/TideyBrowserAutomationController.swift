@@ -292,6 +292,37 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         }
     }
 
+    @objc(handleOperation:parameters:workspaceID:ownerSessionID:completion:)
+    func handle(operation: String,
+                parameters: [String: Any],
+                workspaceID: String,
+                ownerSessionID: String,
+                completion: @escaping ([String: Any]?, [String: Any]?) -> Void) {
+        Task { @MainActor in
+            do {
+                let request = try TideyBrowserAutomationProtocol.decodeRequest(
+                    workspaceID: workspaceID,
+                    operation: operation,
+                    parameters: parameters
+                )
+                let result = try await handle(request: request, ownerSessionID: ownerSessionID)
+                completion(result.dictionary, nil)
+            } catch let error as TideyBrowserAutomationProtocolError {
+                completion(nil, error.dictionary)
+            } catch {
+                completion(nil, TideyBrowserAutomationProtocolError(
+                    code: .internalError,
+                    message: "Browser automation failed"
+                ).dictionary)
+            }
+        }
+    }
+
+    @objc(cleanupSessionWithOwnerSessionID:)
+    func cleanupSession(ownerSessionID: String) {
+        cleanupSession(ownerSessionID: ownerSessionID, now: Date())
+    }
+
     func cleanupSession(ownerSessionID: String, now: Date = Date()) {
         let plan = state.cleanupSession(ownerSessionID: ownerSessionID, now: now)
         for tabID in plan.privateTabIDsToClose {

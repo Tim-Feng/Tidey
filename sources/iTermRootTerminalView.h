@@ -223,6 +223,13 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (BOOL)selectTideyEditorTabByNumber:(NSInteger)number;
 - (void)tideyOpenBrowserTabWithURL:(NSURL *)url;
 - (void)tideyOpenBrowserTabWithURL:(NSURL *)url focus:(BOOL)focus;
+- (void)tideyHandleBrowserAutomationOperation:(NSString *)operation
+                                    parameters:(NSDictionary *)parameters
+                                   workspaceID:(NSString *)workspaceID
+                                ownerSessionID:(NSString *)ownerSessionID
+                                    completion:(void (^)(NSDictionary * _Nullable result,
+                                                         NSDictionary * _Nullable error))completion;
+- (void)tideyCleanupBrowserAutomationSession:(NSString *)ownerSessionID;
 - (BOOL)shouldShowTideyEditorPanel;
 
 @end

@@ -4094,6 +4094,22 @@ ITERM_WEAKLY_REFERENCEABLE
     };
 }
 
+- (void)tideyHandleBrowserAutomationOperation:(NSString *)operation
+                                    parameters:(NSDictionary *)parameters
+                                   workspaceID:(NSString *)workspaceID
+                                ownerSessionID:(NSString *)ownerSessionID
+                                    completion:(void (^)(NSDictionary *result, NSDictionary *error))completion {
+    [_contentView tideyHandleBrowserAutomationOperation:operation
+                                             parameters:parameters
+                                            workspaceID:workspaceID
+                                         ownerSessionID:ownerSessionID
+                                             completion:completion];
+}
+
+- (void)tideyCleanupBrowserAutomationSession:(NSString *)ownerSessionID {
+    [_contentView tideyCleanupBrowserAutomationSession:ownerSessionID];
+}
+
 - (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload {
     NSAssert([NSThread isMainThread], @"Runtime descriptor updates mutate native window state.");
     if (![payload isKindOfClass:[NSDictionary class]]) {

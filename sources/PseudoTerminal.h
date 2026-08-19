@@ -277,6 +277,14 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // Returns all panel summaries for the given workspace identifier, or nil if the workspace does not exist.
 - (nullable NSDictionary *)tideySocketPanelListForWorkspaceIdentifier:(NSString *)workspaceIdentifier;
 
+- (void)tideyHandleBrowserAutomationOperation:(NSString *)operation
+                                    parameters:(NSDictionary *)parameters
+                                   workspaceID:(NSString *)workspaceID
+                                ownerSessionID:(NSString *)ownerSessionID
+                                    completion:(void (^)(NSDictionary * _Nullable result,
+                                                         NSDictionary * _Nullable error))completion;
+- (void)tideyCleanupBrowserAutomationSession:(NSString *)ownerSessionID;
+
 // Accepts a nested Remote Bridge runtime descriptor update only when its
 // workspace/panel binding still names this window's current native graph.
 - (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload;

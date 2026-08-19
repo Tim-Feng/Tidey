@@ -139,6 +139,12 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
     NSString * _Nullable token,
     NSInteger columns,
     NSInteger rows);
+typedef void (^TideySocketBrowserAutomationHandler)(
+    NSString *workspaceID,
+    NSString *operation,
+    NSDictionary *parameters,
+    NSString *sessionID,
+    void (^completion)(NSDictionary * _Nullable result, NSDictionary * _Nullable error));
 
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
@@ -157,6 +163,10 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                                         action:(NSString *)action
                                                         source:(NSDictionary *)source
                                                        handler:(TideySocketNativeTerminalSizeHandler)handler;
++ (void)tideyBrowserAutomationResponseForRequestMessage:(NSDictionary *)message
+                                               sessionID:(NSString *)sessionID
+                                                 handler:(TideySocketBrowserAutomationHandler)handler
+                                              completion:(void (^)(NSDictionary *response))completion;
 @end
 
 @implementation TideySocketServer
@@ -318,6 +328,9 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
             [self connectionDidClose:connection];
         });
         return;
+    }
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        [term tideyCleanupBrowserAutomationSession:connection.automationSessionID];
     }
     [self.workspaceEventSubscriptions removeObjectForKey:connection];
     [self.connections removeObject:connection];
@@ -505,6 +518,35 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
         [self sendSuccessResponseForRequestID:requestID
                                        result:@{ @"pong": @YES }
                                   onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"browser_automation"]) {
+        [[self class]
+            tideyBrowserAutomationResponseForRequestMessage:message
+            sessionID:connection.automationSessionID
+            handler:^(NSString *workspaceID,
+                      NSString *operation,
+                      NSDictionary *parameters,
+                      NSString *sessionID,
+                      void (^completion)(NSDictionary *, NSDictionary *)) {
+                PseudoTerminal *term = [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+                if (!term) {
+                    completion(nil, @{
+                        @"code": @"workspace_not_found",
+                        @"message": @"No workspace matched workspace_id.",
+                    });
+                    return;
+                }
+                [term tideyHandleBrowserAutomationOperation:operation
+                                                  parameters:parameters
+                                                 workspaceID:workspaceID
+                                              ownerSessionID:sessionID
+                                                  completion:completion];
+            }
+            completion:^(NSDictionary *response) {
+                [connection sendJSONObject:response];
+            }];
         return;
     }
 
@@ -1353,6 +1395,49 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                             message:@"Native terminal size lease request was rejected."];
     }
     return [self tideySuccessResponseForRequestID:requestID result:result];
+}
+
++ (void)tideyBrowserAutomationResponseForRequestMessage:(NSDictionary *)message
+                                               sessionID:(NSString *)sessionID
+                                                 handler:(TideySocketBrowserAutomationHandler)handler
+                                              completion:(void (^)(NSDictionary *response))completion {
+    NSString *requestID = [message[@"id"] isKindOfClass:[NSString class]] ? message[@"id"] : nil;
+    NSDictionary *params = [message[@"params"] isKindOfClass:[NSDictionary class]] ? message[@"params"] : nil;
+    NSDictionary *source = params ?: message;
+    NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+    NSString *operation = TideySocketStringParam(source, @"operation");
+    NSDictionary *parameters = [source[@"parameters"] isKindOfClass:[NSDictionary class]]
+        ? source[@"parameters"]
+        : @{};
+    if (requestID.length == 0 || workspaceID.length == 0 || operation.length == 0 || sessionID.length == 0) {
+        completion([self tideyErrorResponseForRequestID:requestID
+                                                   code:@"invalid_request"
+                                                message:@"Browser automation requires id, workspace_id, and operation."]);
+        return;
+    }
+    if (!handler) {
+        completion([self tideyErrorResponseForRequestID:requestID
+                                                   code:@"internal_error"
+                                                message:@"Browser automation handler is unavailable."]);
+        return;
+    }
+    handler(workspaceID,
+            operation,
+            parameters,
+            sessionID,
+            ^(NSDictionary *result, NSDictionary *error) {
+        if (error) {
+            NSString *code = [error[@"code"] isKindOfClass:[NSString class]]
+                ? error[@"code"]
+                : @"internal_error";
+            NSString *message = [error[@"message"] isKindOfClass:[NSString class]]
+                ? error[@"message"]
+                : @"Browser automation failed.";
+            completion([self tideyErrorResponseForRequestID:requestID code:code message:message]);
+        } else {
+            completion([self tideySuccessResponseForRequestID:requestID result:result ?: @{}]);
+        }
+    });
 }
 
 + (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
