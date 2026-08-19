@@ -1,0 +1,244 @@
+#!/usr/bin/env python3
+"""MCP stdio adapter for Tidey's workspace-scoped browser automation socket."""
+
+from __future__ import annotations
+
+import base64
+import json
+import os
+import socket
+import sys
+import uuid
+from typing import Any
+
+
+PROTOCOL_VERSION = "2025-06-18"
+SERVER_INFO = {"name": "tidey-browser", "version": "1.0.0"}
+SERVER_INSTRUCTIONS = (
+    "Tidey browser tabs are workspace-scoped. Opened tabs stay private and hidden until "
+    "present is called. Use snapshot to obtain navigation_epoch and element_id values; "
+    "those element references expire after navigation. Only HTTP(S) navigation is allowed."
+)
+
+
+def object_schema(properties: dict[str, Any], required: list[str] | None = None) -> dict[str, Any]:
+    schema: dict[str, Any] = {
+        "type": "object",
+        "properties": properties,
+        "additionalProperties": False,
+    }
+    if required:
+        schema["required"] = required
+    return schema
+
+
+TAB_ID = {"type": "string", "minLength": 1, "description": "Canonical Tidey browser tab ID."}
+URL = {"type": "string", "format": "uri", "description": "An HTTP or HTTPS URL."}
+EPOCH = {"type": "integer", "minimum": 0, "description": "Navigation epoch from snapshot."}
+ELEMENT_ID = {"type": "string", "minLength": 1, "description": "Element ID from snapshot."}
+
+
+def tool(name: str, description: str, schema: dict[str, Any]) -> dict[str, Any]:
+    return {"name": name, "description": description, "inputSchema": schema}
+
+
+TOOLS = [
+    tool("tabs", "List visible tabs plus private tabs owned by this Codex session.", object_schema({})),
+    tool("open", "Open an HTTP(S) page in a hidden, session-owned Tidey browser tab.",
+         object_schema({"url": URL}, ["url"])),
+    tool("claim", "Atomically claim a user-visible Tidey browser tab before automating it.",
+         object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("release", "Release this session's claim on a user-visible tab.",
+         object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("reclaim", "Reclaim a retained handoff tab within its TTL.",
+         object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("mark", "Set private-tab disconnect behavior: none closes, deliverable presents, handoff retains.",
+         object_schema({"tab_id": TAB_ID, "mark": {"type": "string", "enum": ["none", "deliverable", "handoff"]}},
+                       ["tab_id", "mark"])),
+    tool("close", "Close an owned browser tab.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("present", "Adopt the exact hidden tab and WebKit engine into Tidey's visible Browser UI.",
+         object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("navigate", "Navigate an owned tab to an HTTP(S) URL.",
+         object_schema({"tab_id": TAB_ID, "url": URL}, ["tab_id", "url"])),
+    tool("back", "Navigate an owned tab backward.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("forward", "Navigate an owned tab forward.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("reload", "Reload an owned tab.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("current_url", "Read the current URL of an owned tab.",
+         object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("snapshot", "Read bounded page text and interactive elements with stable epoch-scoped references.",
+         object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool("click", "Click an element returned by snapshot.",
+         object_schema({"tab_id": TAB_ID, "navigation_epoch": EPOCH, "element_id": ELEMENT_ID},
+                       ["tab_id", "navigation_epoch", "element_id"])),
+    tool("fill", "Replace an element's text with the provided value.",
+         object_schema({"tab_id": TAB_ID, "navigation_epoch": EPOCH, "element_id": ELEMENT_ID,
+                        "text": {"type": "string"}},
+                       ["tab_id", "navigation_epoch", "element_id", "text"])),
+    tool("type", "Append text to an element.",
+         object_schema({"tab_id": TAB_ID, "navigation_epoch": EPOCH, "element_id": ELEMENT_ID,
+                        "text": {"type": "string"}},
+                       ["tab_id", "navigation_epoch", "element_id", "text"])),
+    tool("key", "Send one supported navigation/editing key to an owned tab.",
+         object_schema({"tab_id": TAB_ID, "key": {"type": "string", "enum": [
+             "Enter", "Tab", "Escape", "ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight",
+             "Backspace", "Delete", "Home", "End", "PageUp", "PageDown", "Space"
+         ]}}, ["tab_id", "key"])),
+    tool("scroll", "Scroll an owned tab by CSS-pixel deltas.",
+         object_schema({"tab_id": TAB_ID, "delta_x": {"type": "number", "default": 0},
+                        "delta_y": {"type": "number", "default": 0}}, ["tab_id"])),
+    tool("wait", "Wait up to 30 seconds for load, delay, text, or URL state.",
+         object_schema({
+             "tab_id": TAB_ID,
+             "condition": {"type": "string", "enum": ["load", "delay", "text", "url"]},
+             "milliseconds": {"type": "integer", "minimum": 0, "maximum": 30000},
+             "value": {"type": "string"},
+             "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000, "default": 10000},
+         }, ["tab_id", "condition"])),
+    tool("screenshot", "Capture an owned tab as PNG.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+]
+TOOL_NAMES = {item["name"] for item in TOOLS}
+
+
+class TideySocketClient:
+    def __init__(self) -> None:
+        self.socket_path = os.environ.get("TIDEY_SOCKET_PATH", "")
+        self.workspace_id = os.environ.get("TIDEY_WORKSPACE_ID", "")
+        self.connection: socket.socket | None = None
+        self.reader = None
+
+    def validate_environment(self) -> None:
+        if not self.socket_path:
+            raise RuntimeError("TIDEY_SOCKET_PATH is required")
+        if not self.workspace_id:
+            raise RuntimeError("TIDEY_WORKSPACE_ID is required")
+
+    def connect(self) -> None:
+        if self.connection is not None:
+            return
+        self.validate_environment()
+        connection = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        connection.settimeout(65)
+        connection.connect(self.socket_path)
+        self.connection = connection
+        self.reader = connection.makefile("rb")
+
+    def call(self, operation: str, parameters: dict[str, Any]) -> dict[str, Any]:
+        self.connect()
+        assert self.connection is not None
+        assert self.reader is not None
+        request_id = f"mcp-{uuid.uuid4()}"
+        payload = {
+            "id": request_id,
+            "action": "browser_automation",
+            "params": {
+                "workspace_id": self.workspace_id,
+                "operation": operation,
+                "parameters": parameters,
+            },
+        }
+        self.connection.sendall(json.dumps(payload, separators=(",", ":")).encode() + b"\n")
+        while True:
+            line = self.reader.readline()
+            if not line:
+                raise RuntimeError("Tidey browser socket disconnected")
+            response = json.loads(line)
+            if response.get("id") == request_id:
+                return response
+
+
+def jsonrpc_result(request_id: Any, result: Any) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "result": result}
+
+
+def jsonrpc_error(request_id: Any, code: int, message: str) -> dict[str, Any]:
+    return {"jsonrpc": "2.0", "id": request_id, "error": {"code": code, "message": message}}
+
+
+def tool_result(result: dict[str, Any]) -> dict[str, Any]:
+    if result.get("mime_type") == "image/png" and isinstance(result.get("data_base64"), str):
+        data = result["data_base64"]
+        base64.b64decode(data, validate=True)
+        metadata = {key: value for key, value in result.items() if key != "data_base64"}
+        return {
+            "content": [
+                {"type": "image", "data": data, "mimeType": "image/png"},
+                {"type": "text", "text": json.dumps(metadata, ensure_ascii=False, separators=(",", ":"))},
+            ],
+            "structuredContent": metadata,
+        }
+    text = json.dumps(result, ensure_ascii=False, separators=(",", ":"))
+    return {"content": [{"type": "text", "text": text}], "structuredContent": result}
+
+
+def tool_error(error: dict[str, Any]) -> dict[str, Any]:
+    text = json.dumps(error, ensure_ascii=False, separators=(",", ":"))
+    return {"content": [{"type": "text", "text": text}], "isError": True}
+
+
+def dispatch(message: dict[str, Any], client: TideySocketClient) -> dict[str, Any] | None:
+    request_id = message.get("id")
+    method = message.get("method")
+    if request_id is None:
+        return None
+    if method == "initialize":
+        return jsonrpc_result(request_id, {
+            "protocolVersion": PROTOCOL_VERSION,
+            "capabilities": {"tools": {"listChanged": False}},
+            "serverInfo": SERVER_INFO,
+            "instructions": SERVER_INSTRUCTIONS,
+        })
+    if method == "ping":
+        return jsonrpc_result(request_id, {})
+    if method == "tools/list":
+        return jsonrpc_result(request_id, {"tools": TOOLS})
+    if method == "tools/call":
+        params = message.get("params")
+        if not isinstance(params, dict):
+            return jsonrpc_error(request_id, -32602, "tools/call params must be an object")
+        name = params.get("name")
+        arguments = params.get("arguments", {})
+        if name not in TOOL_NAMES:
+            return jsonrpc_error(request_id, -32602, "Unknown Tidey browser tool")
+        if not isinstance(arguments, dict):
+            return jsonrpc_error(request_id, -32602, "Tool arguments must be an object")
+        try:
+            response = client.call(name, arguments)
+        except (OSError, RuntimeError, ValueError, json.JSONDecodeError) as error:
+            return jsonrpc_result(request_id, tool_error({
+                "code": "adapter_unavailable",
+                "message": str(error),
+            }))
+        if response.get("ok") is True and isinstance(response.get("result"), dict):
+            try:
+                result = tool_result(response["result"])
+            except (ValueError, TypeError):
+                return jsonrpc_result(request_id, tool_error({
+                    "code": "invalid_response",
+                    "message": "Tidey returned an invalid browser result",
+                }))
+            return jsonrpc_result(request_id, result)
+        error = response.get("error")
+        if not isinstance(error, dict):
+            error = {"code": "invalid_response", "message": "Tidey returned an invalid error"}
+        return jsonrpc_result(request_id, tool_error(error))
+    return jsonrpc_error(request_id, -32601, "Method not found")
+
+
+def main() -> int:
+    client = TideySocketClient()
+    for raw_line in sys.stdin.buffer:
+        try:
+            message = json.loads(raw_line)
+            if not isinstance(message, dict):
+                raise ValueError("request must be an object")
+            response = dispatch(message, client)
+        except (json.JSONDecodeError, ValueError) as error:
+            response = jsonrpc_error(None, -32700, str(error))
+        if response is not None:
+            sys.stdout.write(json.dumps(response, ensure_ascii=False, separators=(",", ":")) + "\n")
+            sys.stdout.flush()
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

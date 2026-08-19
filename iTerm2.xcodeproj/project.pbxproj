@@ -5214,6 +5214,7 @@
 		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
 		T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CODEX0001 /* codex */; };
 		T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */; };
+		T1DEY00001BIN0BRWMCP002 /* tidey-browser-mcp in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */; };
 		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
 		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
 		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
@@ -5527,6 +5528,7 @@
 				T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */,
 				T1DEY00001BIN0CDXHOOK002 /* codex-hook-dispatch in CopyFiles */,
 				T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */,
+				T1DEY00001BIN0BRWMCP002 /* tidey-browser-mcp in CopyFiles */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -9368,6 +9370,7 @@
 		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
 		T1DEY00001BIN0CODEX0001 /* codex */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = codex; sourceTree = "<group>"; };
 		T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "tidey-tmux-pane-identity"; sourceTree = "<group>"; };
+		T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "tidey-browser-mcp"; sourceTree = "<group>"; };
 		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
 		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
 		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
@@ -14894,6 +14897,7 @@
 				T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */,
 				T1DEY00001BIN0CODEX0001 /* codex */,
 				T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */,
+				T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */,
 			);
 			path = bin;
 			sourceTree = "<group>";
