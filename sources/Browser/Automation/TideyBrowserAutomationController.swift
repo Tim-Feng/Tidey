@@ -23,6 +23,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
     private let navigationGate: TideyBrowserNavigationGate
     private var popupTabIDsByParentID: [String: [String]] = [:]
     private var handoffExpiryTasksByTabID: [String: Task<Void, Never>] = [:]
+    private var retiredOwnerSessionIDs: Set<String> = []
     private(set) var actionLog: [String] = []
 
     @objc convenience init(host: TideyBrowserAutomationHost,
@@ -118,6 +119,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
 
     func handle(request: TideyBrowserAutomationRequest,
                 ownerSessionID: String) async throws -> TideyBrowserAutomationResponse {
+        try ensureActiveSession(ownerSessionID)
         expireHandoffs(now: Date())
         log(request.command, ownerSessionID: ownerSessionID)
         let workspaceID = request.workspaceID
@@ -143,7 +145,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
                 })
             return response(["tabs": tabs])
         case .open(let url):
-            let tabID = try await withNavigationPermit(url: url) {
+            let tabID = try await withNavigationPermit(url: url, ownerSessionID: ownerSessionID) {
                 let tabID = try self.mapStateError {
                     try self.openPrivate(
                         url: url,
@@ -240,7 +242,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         case .navigate(let tabID, let url):
             let engine = try ownedEngine(tabID: tabID, workspaceID: workspaceID,
                                          ownerSessionID: ownerSessionID)
-            try await withNavigationPermit(url: url) {
+            try await withNavigationPermit(url: url, ownerSessionID: ownerSessionID) {
                 try await engine.automationPerformPotentialNavigation {
                     engine.load(url)
                 }
@@ -249,7 +251,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         case .back(let tabID):
             let engine = try ownedEngine(tabID: tabID, workspaceID: workspaceID,
                                          ownerSessionID: ownerSessionID)
-            try await withNavigationPermit(url: engine.url) {
+            try await withNavigationPermit(url: engine.url, ownerSessionID: ownerSessionID) {
                 try await engine.automationPerformPotentialNavigation {
                     engine.goBack()
                 }
@@ -258,7 +260,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         case .forward(let tabID):
             let engine = try ownedEngine(tabID: tabID, workspaceID: workspaceID,
                                          ownerSessionID: ownerSessionID)
-            try await withNavigationPermit(url: engine.url) {
+            try await withNavigationPermit(url: engine.url, ownerSessionID: ownerSessionID) {
                 try await engine.automationPerformPotentialNavigation {
                     engine.goForward()
                 }
@@ -267,7 +269,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         case .reload(let tabID):
             let engine = try ownedEngine(tabID: tabID, workspaceID: workspaceID,
                                          ownerSessionID: ownerSessionID)
-            try await withNavigationPermit(url: engine.url) {
+            try await withNavigationPermit(url: engine.url, ownerSessionID: ownerSessionID) {
                 try await engine.automationPerformPotentialNavigation {
                     engine.reload()
                 }
@@ -284,7 +286,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         case .click(let target):
             let engine = try ownedEngine(tabID: target.tabID, workspaceID: workspaceID,
                                          ownerSessionID: ownerSessionID)
-            try await withNavigationPermit(url: engine.url) {
+            try await withNavigationPermit(url: engine.url, ownerSessionID: ownerSessionID) {
                 try await engine.automationPerformPotentialNavigation {
                     try await engine.automationClick(target)
                 }
@@ -303,7 +305,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
         case .key(let tabID, let key):
             let engine = try ownedEngine(tabID: tabID, workspaceID: workspaceID,
                                          ownerSessionID: ownerSessionID)
-            try await withNavigationPermit(url: engine.url) {
+            try await withNavigationPermit(url: engine.url, ownerSessionID: ownerSessionID) {
                 try await engine.automationPerformPotentialNavigation {
                     try await engine.automationKey(key)
                 }
@@ -364,6 +366,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
     }
 
     func cleanupSession(ownerSessionID: String, now: Date = Date()) {
+        retiredOwnerSessionIDs.insert(ownerSessionID)
         let plan = state.cleanupSession(ownerSessionID: ownerSessionID, now: now)
         for tabID in plan.privateTabIDsToClose {
             removePrivateEngine(tabID: tabID)
@@ -415,7 +418,10 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
                       let popupEngine = self.privateEnginesByID[popupTabID] else {
                     return
                 }
-                try? await self.withNavigationPermit(url: request.url) {
+                try? await self.withNavigationPermit(
+                    url: request.url,
+                    ownerSessionID: ownerSessionID
+                ) {
                     try await popupEngine.automationPerformPotentialNavigation {
                         popupEngine.load(request.url)
                     }
@@ -502,18 +508,26 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
 
     private func withNavigationPermit<T>(
         url: URL?,
+        ownerSessionID: String,
         operation: @MainActor () async throws -> T
     ) async throws -> T {
         let permit = try await navigationGate.acquire(
             origin: TideyBrowserNavigationGate.origin(for: url)
         )
         do {
+            try ensureActiveSession(ownerSessionID)
             let result = try await operation()
             await navigationGate.release(permit)
             return result
         } catch {
             await navigationGate.release(permit)
             throw error
+        }
+    }
+
+    private func ensureActiveSession(_ ownerSessionID: String) throws {
+        guard !retiredOwnerSessionIDs.contains(ownerSessionID) else {
+            throw protocolError(.targetGone, "Browser automation session disconnected")
         }
     }
 
