@@ -5561,6 +5561,21 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     return nil;
 }
 
+- (BOOL)browserAutomationCloseWithTabID:(NSString *)tabID {
+    if (tabID.length == 0) {
+        return NO;
+    }
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        NSInteger index = [self tideyIndexOfRightPanelTabWithIdentifier:tabID inPane:pane];
+        if (index == NSNotFound || pane.tabs[index].kind != TideyRightPanelTabKindBrowser) {
+            continue;
+        }
+        [self closeTideyRightPanelTabAtIndex:index inPane:pane];
+        return YES;
+    }
+    return NO;
+}
+
 - (BOOL)browserAutomationPresentWithEngine:(TideyBrowserEngine *)engine
                                       tabID:(NSString *)tabID
                                  initialURL:(NSURL *)initialURL {

@@ -7,6 +7,7 @@ private final class TideyBrowserAutomationHostStub: NSObject, TideyBrowserAutoma
     var visibleTabs: [[String: Any]] = []
     var enginesByTabID: [String: TideyBrowserEngine] = [:]
     var presentations: [(engine: TideyBrowserEngine, tabID: String, url: URL)] = []
+    var closedTabIDs: [String] = []
     var allowsPresentation = true
 
     func browserEngine(_ engine: TideyBrowserEngine,
@@ -34,6 +35,15 @@ private final class TideyBrowserAutomationHostStub: NSObject, TideyBrowserAutoma
         presentations.append((engine, tabID, initialURL))
         enginesByTabID[tabID] = engine
         visibleTabs.append(["tab_id": tabID, "url": initialURL.absoluteString])
+        return true
+    }
+
+    func browserAutomationClose(tabID: String) -> Bool {
+        guard enginesByTabID.removeValue(forKey: tabID) != nil else {
+            return false
+        }
+        visibleTabs.removeAll { $0["tab_id"] as? String == tabID }
+        closedTabIDs.append(tabID)
         return true
     }
 }
@@ -150,5 +160,98 @@ final class TideyBrowserAutomationControllerTests: XCTestCase {
         XCTAssertEqual(controller.state.privateTabsByID["popup-tab"]?.ownerSessionID, "session-1")
         XCTAssertTrue(host.visibleTabs.isEmpty)
         XCTAssertTrue(host.presentations.isEmpty)
+    }
+
+    @MainActor
+    func testCommandRoutingRequiresAtomicClaimForVisibleTab() async throws {
+        let host = TideyBrowserAutomationHostStub()
+        let engine = TideyBrowserEngine(configuration: WKWebViewConfiguration())
+        host.enginesByTabID["visible-1"] = engine
+        host.visibleTabs = [["tab_id": "visible-1", "url": "https://example.com/"]]
+        let controller = TideyBrowserAutomationController(host: host)
+
+        _ = try await controller.handle(
+            request: TideyBrowserAutomationRequest(
+                workspaceID: "workspace-1",
+                command: .claim(tabID: "visible-1")
+            ),
+            ownerSessionID: "session-1"
+        )
+
+        do {
+            _ = try await controller.handle(
+                request: TideyBrowserAutomationRequest(
+                    workspaceID: "workspace-1",
+                    command: .claim(tabID: "visible-1")
+                ),
+                ownerSessionID: "session-2"
+            )
+            XCTFail("Expected ownership conflict")
+        } catch let error as TideyBrowserAutomationProtocolError {
+            XCTAssertEqual(error.code, .ownershipConflict)
+        }
+
+        _ = try await controller.handle(
+            request: TideyBrowserAutomationRequest(
+                workspaceID: "workspace-1",
+                command: .release(tabID: "visible-1")
+            ),
+            ownerSessionID: "session-1"
+        )
+        _ = try await controller.handle(
+            request: TideyBrowserAutomationRequest(
+                workspaceID: "workspace-1",
+                command: .claim(tabID: "visible-1")
+            ),
+            ownerSessionID: "session-2"
+        )
+        XCTAssertEqual(controller.state.userClaimsByTabID["visible-1"]?.ownerSessionID,
+                       "session-2")
+    }
+
+    @MainActor
+    func testDisconnectClosesUnmarkedAdoptsDeliverableAndRetainsHandoff() async throws {
+        let host = TideyBrowserAutomationHostStub()
+        var generatedIDs = ["discard", "deliver", "handoff"]
+        let controller = TideyBrowserAutomationController(
+            host: host,
+            handoffTTL: 60,
+            tabIDGenerator: { generatedIDs.removeFirst() },
+            engineFactory: { TideyBrowserEngine(configuration: $0) }
+        )
+        let url = try XCTUnwrap(URL(string: "http://127.0.0.1:1/private"))
+        for _ in 0..<3 {
+            _ = try controller.openPrivate(
+                url: url,
+                workspaceID: "workspace-1",
+                ownerSessionID: "session-1"
+            )
+        }
+        _ = try await controller.handle(
+            request: TideyBrowserAutomationRequest(
+                workspaceID: "workspace-1",
+                command: .mark(tabID: "deliver", mark: .deliverable)
+            ),
+            ownerSessionID: "session-1"
+        )
+        _ = try await controller.handle(
+            request: TideyBrowserAutomationRequest(
+                workspaceID: "workspace-1",
+                command: .mark(tabID: "handoff", mark: .handoff)
+            ),
+            ownerSessionID: "session-1"
+        )
+
+        controller.cleanupSession(ownerSessionID: "session-1", now: Date(timeIntervalSince1970: 100))
+
+        XCTAssertNil(controller.privateEnginesByID["discard"])
+        XCTAssertNil(controller.privateEnginesByID["deliver"])
+        XCTAssertNotNil(controller.privateEnginesByID["handoff"])
+        XCTAssertEqual(host.presentations.map(\.tabID), ["deliver"])
+        XCTAssertNil(controller.state.privateTabsByID["handoff"]?.ownerSessionID)
+        XCTAssertEqual(
+            controller.state.privateTabsByID["handoff"]?.handoffExpiresAt,
+            Date(timeIntervalSince1970: 160)
+        )
     }
 }

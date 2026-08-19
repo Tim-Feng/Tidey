@@ -109,6 +109,44 @@ struct TideyBrowserAutomationState {
         )
     }
 
+    func ownedUserClaim(tabID: String,
+                        workspaceID: String,
+                        ownerSessionID: String) throws -> TideyBrowserAutomationUserClaim {
+        guard let claim = userClaimsByTabID[tabID] else {
+            throw TideyBrowserAutomationStateError.ownershipConflict
+        }
+        guard claim.workspaceID == workspaceID else {
+            throw TideyBrowserAutomationStateError.workspaceMismatch
+        }
+        guard claim.ownerSessionID == ownerSessionID else {
+            throw TideyBrowserAutomationStateError.ownershipConflict
+        }
+        return claim
+    }
+
+    mutating func releaseUserTab(tabID: String,
+                                 workspaceID: String,
+                                 ownerSessionID: String) throws {
+        _ = try ownedUserClaim(
+            tabID: tabID,
+            workspaceID: workspaceID,
+            ownerSessionID: ownerSessionID
+        )
+        userClaimsByTabID.removeValue(forKey: tabID)
+    }
+
+    mutating func takePrivateTabForClose(tabID: String,
+                                         workspaceID: String,
+                                         ownerSessionID: String) throws -> TideyBrowserAutomationPrivateTab {
+        let tab = try ownedPrivateTab(
+            tabID: tabID,
+            workspaceID: workspaceID,
+            ownerSessionID: ownerSessionID
+        )
+        privateTabsByID.removeValue(forKey: tabID)
+        return tab
+    }
+
     mutating func takePrivateTabForPresentation(tabID: String,
                                                 workspaceID: String,
                                                 ownerSessionID: String) throws -> TideyBrowserAutomationPrivateTab {

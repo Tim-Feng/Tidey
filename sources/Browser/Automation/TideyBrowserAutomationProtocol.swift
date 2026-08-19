@@ -335,7 +335,33 @@ extension TideyBrowserAutomationResponse {
     }
 }
 
-private extension TideyBrowserAutomationValue {
+extension TideyBrowserAutomationValue {
+    static func fromFoundation(_ value: Any) -> TideyBrowserAutomationValue {
+        if value is NSNull {
+            return .null
+        }
+        if let value = value as? Bool {
+            return .bool(value)
+        }
+        if let value = value as? Int {
+            return .integer(value)
+        }
+        if let value = value as? NSNumber {
+            let number = value.doubleValue
+            return number.rounded() == number ? .integer(value.intValue) : .number(number)
+        }
+        if let value = value as? String {
+            return .string(value)
+        }
+        if let value = value as? [Any] {
+            return .array(value.map(Self.fromFoundation))
+        }
+        if let value = value as? [String: Any] {
+            return .object(value.mapValues(Self.fromFoundation))
+        }
+        return .string(String(describing: value))
+    }
+
     var foundationValue: Any {
         switch self {
         case .null:
