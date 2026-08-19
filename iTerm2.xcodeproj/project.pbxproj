@@ -5140,6 +5140,7 @@
 		C553EACADC5ADCED8853BAD9 /* TideyBrowserAutomationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */; };
 		C6675EBC1C4FE96B0041173B /* iTermSelectorSwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = C6675EBB1C4FE96B0041173B /* iTermSelectorSwizzler.m */; };
 		CDCD9FF08FCE42F7A6963859 /* PillBackgroundGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA289FFE2BF4090A65931BA /* PillBackgroundGenerator.swift */; };
+		CE6F5BF4B6C9719F5667CA8D /* TideyBrowserAutomationAdoptionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */; };
 		D3CE2D4E1A00936F0098ED99 /* PSMDarkTabStyle.h in Headers */ = {isa = PBXBuildFile; fileRef = D3CE2D4C1A00936F0098ED99 /* PSMDarkTabStyle.h */; };
 		D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */ = {isa = PBXBuildFile; fileRef = 93EDFB853885460AA504C6B9 /* iTermLayoutCalculator.h */; };
 		D9A2368683D7DDB73A826821 /* iTermStreamingPNGWriter.m in Sources */ = {isa = PBXBuildFile; fileRef = 11C735CA9A1AF5E864EC718E /* iTermStreamingPNGWriter.m */; };
@@ -9309,6 +9310,7 @@
 		F0C30D1E3A6E000100000009 /* TideyRuntimeResumeDescriptor.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRuntimeResumeDescriptor.swift; path = sources/TideyRuntimeResumeDescriptor.swift; sourceTree = SOURCE_ROOT; };
 		F0C30D1E3A6E00010000000B /* TideyRuntimeRehydrationStateMachine.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; name = TideyRuntimeRehydrationStateMachine.swift; path = sources/TideyRuntimeRehydrationStateMachine.swift; sourceTree = SOURCE_ROOT; };
 		F10731A1F54B9BF72FBAC682 /* Box.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = Box.swift; sourceTree = "<group>"; };
+		F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserAutomationAdoptionTests.m; sourceTree = "<group>"; };
 		F4ED0C4AF3AE475286D75846 /* TideyBrowserAutomationStoreTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationStoreTests.swift; sourceTree = "<group>"; };
 		F5145BCC5773DB25978071C5 /* iTermScreenshotLineRangeView.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotLineRangeView.swift; sourceTree = "<group>"; };
 		F52ED8DD037F0A7D01A8A066 /* PTYSession.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PTYSession.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
@@ -10058,6 +10060,7 @@
 				110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */,
 				F4ED0C4AF3AE475286D75846 /* TideyBrowserAutomationStoreTests.swift */,
 				5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */,
+				F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -20452,6 +20455,7 @@
 				C472BB71AF7F3F957C28474A /* TideySessionViewRedrawTests.m in Sources */,
 				289021114B126DAD12FA9EDA /* TideyBrowserAutomationStoreTests.swift in Sources */,
 				B76D4483DD74A31838098767 /* TideyBrowserAutomationProtocolTests.swift in Sources */,
+				CE6F5BF4B6C9719F5667CA8D /* TideyBrowserAutomationAdoptionTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

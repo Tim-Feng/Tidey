@@ -530,6 +530,9 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
                                hintViews:(NSMutableArray<NSView *> *)hintViews;
 + (NSString *)tideyNormalizedBrowserURLString:(NSString *)input;
 + (NSString *)tideyBrowserDisplayNameForURL:(NSURL *)url pageTitle:(NSString *)pageTitle;
++ (TideyEditorTab *)tideyBrowserAutomationTabWithIdentifier:(NSString *)identifier
+                                                         URL:(NSURL *)url
+                                                      engine:(TideyBrowserEngine *)engine;
 + (BOOL)tideyResponder:(NSResponder *)responder isDescendantOfView:(NSView *)view;
 + (BOOL)tideyResponderLooksLikeWebKitResponder:(NSResponder *)responder;
 + (WKWebView *)tideyNearestWebViewForResponder:(NSResponder *)responder;
@@ -1153,6 +1156,22 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     } else {
         _dirty = dirty;
     }
+}
+
+@end
+
+@implementation iTermRootTerminalView (TideyBrowserAutomationTabIdentity)
+
++ (TideyEditorTab *)tideyBrowserAutomationTabWithIdentifier:(NSString *)identifier
+                                                         URL:(NSURL *)url
+                                                      engine:(TideyBrowserEngine *)engine {
+    if (identifier.length == 0 || !url || !engine) {
+        return nil;
+    }
+    TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
+    tab.identifier = identifier;
+    tab.browserEngine = engine;
+    return tab;
 }
 
 @end
