@@ -297,7 +297,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
     NSOutlineViewDelegate,
     SCEventListenerProtocol,
     WKNavigationDelegate,
-    TideyBrowserEngineHost>
+    TideyBrowserEngineHost,
+    TideyBrowserAutomationHost>
 
 @property(nonatomic, strong) PTYTabView *tabView;
 @property(nonatomic, strong) iTermTabBarControlView *tabBarControl;
@@ -1280,6 +1281,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideyDraggingTabInsertionIndicatorView;
 
     // Browser panel
+    TideyBrowserAutomationController *_tideyBrowserAutomationController;
     NSTextField *_tideyBrowserURLField;
     NSButton *_tideyBrowserBackButton;
     NSButton *_tideyBrowserForwardButton;
@@ -1795,6 +1797,10 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _primaryPane = [[TideyRightPanelPane alloc] init];
         _primaryPane.expandedTabKind = TideyRightPanelTabKindEditor;
         _activePane = _primaryPane;
+        _tideyBrowserAutomationController = [[TideyBrowserAutomationController alloc]
+            initWithHost:self
+            maxPrivateTabs:8
+            handoffTTL:30 * 60];
         _splitVisible = NO;
         _splitFraction = 0.5;
         _tideyLastClickedRegion = TideyLastClickedRegionTerminal;
@@ -5516,6 +5522,77 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     TideyEditorTab *tab = [TideyEditorTab browserTabWithURL:url];
     [targetPane.tabs addObject:tab];
     [self selectTideyRightPanelTabAtIndex:targetPane.tabs.count - 1 inPane:targetPane];
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)browserAutomationVisibleTabs {
+    NSMutableArray<NSDictionary<NSString *, id> *> *result = [NSMutableArray array];
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        TideyEditorTab *selectedTab = [self tideyCurrentRightPanelTabInPane:pane];
+        for (TideyEditorTab *tab in pane.tabs) {
+            if (tab.kind != TideyRightPanelTabKindBrowser) {
+                continue;
+            }
+            NSMutableDictionary<NSString *, id> *item = [NSMutableDictionary dictionaryWithDictionary:@{
+                @"tab_id": tab.identifier ?: @"",
+                @"url": tab.browserEngine.url.absoluteString ?: tab.path ?: @"",
+                @"title": tab.displayName ?: @"",
+                @"selected": @(tab == selectedTab),
+            }];
+            [result addObject:item];
+        }
+    }
+    return result;
+}
+
+- (TideyBrowserEngine *)browserAutomationEngineForTabID:(NSString *)tabID {
+    if (tabID.length == 0) {
+        return nil;
+    }
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        for (TideyEditorTab *tab in pane.tabs) {
+            if (tab.kind != TideyRightPanelTabKindBrowser ||
+                ![tab.identifier isEqualToString:tabID]) {
+                continue;
+            }
+            [self tideyEnsureBrowserEngineForTab:tab];
+            return tab.browserEngine;
+        }
+    }
+    return nil;
+}
+
+- (BOOL)browserAutomationPresentWithEngine:(TideyBrowserEngine *)engine
+                                      tabID:(NSString *)tabID
+                                 initialURL:(NSURL *)initialURL {
+    if (!engine || tabID.length == 0 || !initialURL) {
+        return NO;
+    }
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        if ([self tideyIndexOfRightPanelTabWithIdentifier:tabID inPane:pane] != NSNotFound) {
+            return NO;
+        }
+    }
+
+    TideyRightPanelPane *targetPane = self.activePane;
+    if (!targetPane) {
+        return NO;
+    }
+    TideyEditorTab *tab = [[self class]
+        tideyBrowserAutomationTabWithIdentifier:tabID
+                                             URL:initialURL
+                                          engine:engine];
+    if (!tab) {
+        return NO;
+    }
+    if (_tideyEditorPanelView.hidden) {
+        self.shouldShowTideyEditorPanel = YES;
+        [self layoutSubviews];
+    }
+    [self tideySetActivePane:targetPane];
+    self.shouldShowTideyEditorFileTree = NO;
+    [targetPane.tabs addObject:tab];
+    [self selectTideyRightPanelTabAtIndex:targetPane.tabs.count - 1 inPane:targetPane];
+    return YES;
 }
 
 - (BOOL)tideyCanPreviewDroppedFileURL:(NSURL *)url {

@@ -112,6 +112,18 @@ struct TideyBrowserAutomationState {
     mutating func takePrivateTabForPresentation(tabID: String,
                                                 workspaceID: String,
                                                 ownerSessionID: String) throws -> TideyBrowserAutomationPrivateTab {
+        let tab = try ownedPrivateTab(
+            tabID: tabID,
+            workspaceID: workspaceID,
+            ownerSessionID: ownerSessionID
+        )
+        privateTabsByID.removeValue(forKey: tabID)
+        return tab
+    }
+
+    func ownedPrivateTab(tabID: String,
+                         workspaceID: String,
+                         ownerSessionID: String) throws -> TideyBrowserAutomationPrivateTab {
         guard let tab = privateTabsByID[tabID] else {
             throw TideyBrowserAutomationStateError.targetGone
         }
@@ -121,7 +133,6 @@ struct TideyBrowserAutomationState {
         guard tab.ownerSessionID == ownerSessionID else {
             throw TideyBrowserAutomationStateError.ownershipConflict
         }
-        privateTabsByID.removeValue(forKey: tabID)
         return tab
     }
 
