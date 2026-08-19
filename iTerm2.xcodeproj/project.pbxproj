@@ -934,6 +934,7 @@
 		53FF984C20967806008688D7 /* iTermMetalDeviceProvider.m in Sources */ = {isa = PBXBuildFile; fileRef = 53FF984A20967805008688D7 /* iTermMetalDeviceProvider.m */; };
 		564EA2FD15A05A60A95ABBB9 /* PrivateIPChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 625C956DD832F4FD0D8F9715 /* PrivateIPChecker.swift */; };
 		56C476620E56B783B8972219 /* iTermCharacterSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E188B891EEA2947C8B12466D /* iTermCharacterSourceTests.swift */; };
+		5E671E2FA838E668A33564BC /* TideyBrowserAutomationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */; };
 		5ECE005F1454E59B004861E9 /* PseudoTerminalRestorer.h in Headers */ = {isa = PBXBuildFile; fileRef = 5ECE005D1454E59B004861E9 /* PseudoTerminalRestorer.h */; };
 		63784809C4F1C06074729416 /* IntervalTreeForwardLocationEnumeratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */; };
 		6998793AE8C54A0EAE7D5D0F /* PillBackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3AA921DF1744D7BA890104 /* PillBackgroundRenderer.swift */; };
@@ -5135,6 +5136,7 @@
 		A7E25DCB1956D4A7FA738CB9 /* iTermStreamingPNGWriter.h in Sources */ = {isa = PBXBuildFile; fileRef = CB2F48F836C5732146BCEDD9 /* iTermStreamingPNGWriter.h */; };
 		B76D4483DD74A31838098767 /* TideyBrowserAutomationProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */; };
 		BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
+		BC2B166D41FFCD65B6E8E5F4 /* TideyBrowserAutomationControllerTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = C604B2C8CF6F324C8E3E8C3C /* TideyBrowserAutomationControllerTests.swift */; };
 		C472BB71AF7F3F957C28474A /* TideySessionViewRedrawTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 51E45EA5078C7CA32BE9EA3B /* TideySessionViewRedrawTests.m */; };
 		C48D7AA2E70B019313C401F3 /* WordSelectionAtom.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */; };
 		C553EACADC5ADCED8853BAD9 /* TideyBrowserAutomationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */; };
@@ -6325,6 +6327,7 @@
 		8742065A0564169600CFC3F1 /* iTerm2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iTerm2.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		889A9128E944B618CDE75E18 /* iTermCursorSlideAnimator.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = iTermCursorSlideAnimator.h; path = sources/iTermCursorSlideAnimator.h; sourceTree = SOURCE_ROOT; };
 		88DE50834DCFD50354FD591D /* TideyBrowserAutomationProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationProtocol.swift; sourceTree = "<group>"; };
+		90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationController.swift; sourceTree = "<group>"; };
 		904AE312A0E0489899D9ECB8 /* MenuTips.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MenuTips.xcassets; sourceTree = "<group>"; };
 		90A1E139186F9EA4003EC3E8 /* AppleScriptTest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppleScriptTest.h; sourceTree = "<group>"; };
 		90A1E13A186F9EA4003EC3E8 /* AppleScriptTest.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = AppleScriptTest.m; sourceTree = "<group>"; };
@@ -9224,6 +9227,7 @@
 		AF19E441FF824539A275D8DA /* iTermLayoutCalculator.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculator.m; sourceTree = "<group>"; };
 		B231EDB860248C368A511B42 /* iTermEventTriggerEvaluator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermEventTriggerEvaluator.swift; sourceTree = "<group>"; };
 		C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WordSelectionAtom.swift; sourceTree = "<group>"; };
+		C604B2C8CF6F324C8E3E8C3C /* TideyBrowserAutomationControllerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationControllerTests.swift; sourceTree = "<group>"; };
 		C6675EBA1C4FE96B0041173B /* iTermSelectorSwizzler.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = iTermSelectorSwizzler.h; sourceTree = "<group>"; };
 		C6675EBB1C4FE96B0041173B /* iTermSelectorSwizzler.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermSelectorSwizzler.m; sourceTree = "<group>"; };
 		CB2F48F836C5732146BCEDD9 /* iTermStreamingPNGWriter.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = iTermStreamingPNGWriter.h; sourceTree = "<group>"; };
@@ -10061,6 +10065,7 @@
 				F4ED0C4AF3AE475286D75846 /* TideyBrowserAutomationStoreTests.swift */,
 				5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */,
 				F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */,
+				C604B2C8CF6F324C8E3E8C3C /* TideyBrowserAutomationControllerTests.swift */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -11269,6 +11274,7 @@
 			children = (
 				426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */,
 				88DE50834DCFD50354FD591D /* TideyBrowserAutomationProtocol.swift */,
+				90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */,
 			);
 			name = Automation;
 			path = Automation;
@@ -20386,6 +20392,7 @@
 				EDD2335A6BDA84CE2B29C285 /* Box.swift in Sources */,
 				C553EACADC5ADCED8853BAD9 /* TideyBrowserAutomationState.swift in Sources */,
 				14F87F0582EB0D7EDBBAA30D /* TideyBrowserAutomationProtocol.swift in Sources */,
+				5E671E2FA838E668A33564BC /* TideyBrowserAutomationController.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20456,6 +20463,7 @@
 				289021114B126DAD12FA9EDA /* TideyBrowserAutomationStoreTests.swift in Sources */,
 				B76D4483DD74A31838098767 /* TideyBrowserAutomationProtocolTests.swift in Sources */,
 				CE6F5BF4B6C9719F5667CA8D /* TideyBrowserAutomationAdoptionTests.m in Sources */,
+				BC2B166D41FFCD65B6E8E5F4 /* TideyBrowserAutomationControllerTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
