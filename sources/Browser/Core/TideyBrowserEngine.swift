@@ -133,6 +133,10 @@ final class TideyBrowserEngine: NSObject, TideyBrowserNavigationEngine {
 }
 
 extension TideyBrowserEngine: WKNavigationDelegate {
+    func webView(_ webView: WKWebView, didCommit navigation: WKNavigation!) {
+        automationNavigationEpoch += 1
+        notifyStateDidChange()
+    }
 }
 
 extension TideyBrowserEngine: WKUIDelegate {
