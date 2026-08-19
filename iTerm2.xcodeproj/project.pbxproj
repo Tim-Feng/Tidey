@@ -665,6 +665,7 @@
 		289021114B126DAD12FA9EDA /* TideyBrowserAutomationStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4ED0C4AF3AE475286D75846 /* TideyBrowserAutomationStoreTests.swift */; };
 		29C503BA29752DF6A4DB2A02 /* iTermBlurRowBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19537E68A2ADEB03B3086882 /* iTermBlurRowBuffer.swift */; };
 		2AB0AC886DE3F1F616F92D2F /* CharacterAtomIterator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02CF16386D8605E6BC44ED81 /* CharacterAtomIterator.swift */; };
+		3538DE1D25D0E62BBD3612E3 /* TideyBrowserNavigationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */; };
 		4705C05130977E2C81FD75E8 /* iTermUnicodeNormalization.h in Sources */ = {isa = PBXBuildFile; fileRef = 3335AD96138BA74CC79D25A8 /* iTermUnicodeNormalization.h */; };
 		4887C7B3CAB5465296225860 /* MenuTips.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 904AE312A0E0489899D9ECB8 /* MenuTips.xcassets */; };
 		49A6E4091211CC6000D9AD6F /* Compatability.h in Headers */ = {isa = PBXBuildFile; fileRef = 49A6E4081211CC6000D9AD6F /* Compatability.h */; };
@@ -964,6 +965,7 @@
 		92738CD9A08C339E8F473394 /* IntervalTreeGraphEncodingTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F78529322C819CAD15A19251 /* IntervalTreeGraphEncodingTests.swift */; };
 		938836D845839C6693AC639C /* TideyBrowserAutomationEngineTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = FBD4B4F6113275A0C965F05B /* TideyBrowserAutomationEngineTests.swift */; };
 		98063D9BFF61AB290BEE435C /* iTermCursorSlideAnimator.m in Sources */ = {isa = PBXBuildFile; fileRef = 479FDFE9C0F424FEC10526EC /* iTermCursorSlideAnimator.m */; };
+		99BFD576CA7D163127793811 /* TideyBrowserNavigationGate.swift in Sources */ = {isa = PBXBuildFile; fileRef = 38BC6E4FFFBFF4AEEA99EDEB /* TideyBrowserNavigationGate.swift */; };
 		9C2DA778D246D42A1DC362CC /* iTermUploadIndicator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 698B6ED16A3CD11D402C364B /* iTermUploadIndicator.swift */; };
 		9D737D5F17495B4100B3334D /* PrefsGeneral.png in Resources */ = {isa = PBXBuildFile; fileRef = 9D737D5D17495B4100B3334D /* PrefsGeneral.png */; };
 		9D737D6017495B4100B3334D /* PrefsGeneral@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = 9D737D5E17495B4100B3334D /* PrefsGeneral@2x.png */; };
@@ -5207,6 +5209,7 @@
 		F7C626F9C65F19A1BEE800DA /* iTermWordExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF1E9C79C30008CC546F987 /* iTermWordExtractor.swift */; };
 		FB4CEC973C7E9235362E3F26 /* iTermRemotePreferences.h in Headers */ = {isa = PBXBuildFile; fileRef = FB4CECF4AC4392B21E87A07B /* iTermRemotePreferences.h */; };
 		FF77847D9D838865BB1E1327 /* TideySidebarStatusRefreshPolicyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E2373E98F2FAB30D5EE949AA /* TideySidebarStatusRefreshPolicyTests.m */; };
+		T1DEY00001BIN0BRWMCP002 /* tidey-browser-mcp in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */; };
 		T1DEY00001BIN0CDXHOOK002 /* codex-hook-dispatch in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */; };
 		T1DEY00001BIN0CLAHARG002 /* claude-hook-argv-session-id in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAHARG001 /* claude-hook-argv-session-id */; };
 		T1DEY00001BIN0CLAHDSP002 /* claude-hook-dispatch in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAHDSP001 /* claude-hook-dispatch */; };
@@ -5214,7 +5217,6 @@
 		T1DEY00001BIN0CLAUDE0002 /* claude in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CLAUDE0001 /* claude */; };
 		T1DEY00001BIN0CODEX0002 /* codex in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0CODEX0001 /* codex */; };
 		T1DEY00001BIN0TMUXID0002 /* tidey-tmux-pane-identity in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */; };
-		T1DEY00001BIN0BRWMCP002 /* tidey-browser-mcp in CopyFiles */ = {isa = PBXBuildFile; fileRef = T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */; };
 		TIDE7B00001A000000000001 /* TideyBrowserPanelTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */; };
 		TIDEAPP0001A00000000001 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
 		TIDEAPP0001A00000000002 /* TideyAppShortcutBehaviorTests.m in Sources */ = {isa = PBXBuildFile; fileRef = TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */; };
@@ -6036,6 +6038,7 @@
 		2B9A9D7BB06953CE9297F1FC /* iTermStreamingScreenshotEncoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermStreamingScreenshotEncoder.swift; sourceTree = "<group>"; };
 		31039BDCA3000FF0DB6B6D7C /* IntervalTreeSmallestLocationBugTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IntervalTreeSmallestLocationBugTests.swift; sourceTree = "<group>"; };
 		3335AD96138BA74CC79D25A8 /* iTermUnicodeNormalization.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = iTermUnicodeNormalization.h; sourceTree = "<group>"; };
+		38BC6E4FFFBFF4AEEA99EDEB /* TideyBrowserNavigationGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserNavigationGate.swift; sourceTree = "<group>"; };
 		40463B3F406C007568BC50DB /* TideyBrowserAutomationEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationEngine.swift; sourceTree = "<group>"; };
 		424FA2350959ED4159AA0568 /* FIFOQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FIFOQueueTests.swift; sourceTree = "<group>"; };
 		426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationState.swift; sourceTree = "<group>"; };
@@ -6305,6 +6308,7 @@
 		53FF984920967805008688D7 /* iTermMetalDeviceProvider.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermMetalDeviceProvider.h; sourceTree = "<group>"; };
 		53FF984A20967805008688D7 /* iTermMetalDeviceProvider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermMetalDeviceProvider.m; sourceTree = "<group>"; };
 		5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationProtocolTests.swift; sourceTree = "<group>"; };
+		5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserNavigationGateTests.swift; sourceTree = "<group>"; };
 		5ECE005D1454E59B004861E9 /* PseudoTerminalRestorer.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = PseudoTerminalRestorer.h; sourceTree = "<group>"; tabWidth = 4; };
 		5ECE005E1454E59B004861E9 /* PseudoTerminalRestorer.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = PseudoTerminalRestorer.m; sourceTree = "<group>"; tabWidth = 4; };
 		5F139DFA4255DC27A1E3E0FF /* AccessibilityDeletionDetectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AccessibilityDeletionDetectionTests.swift; sourceTree = "<group>"; };
@@ -9363,6 +9367,7 @@
 		FBB2EBCD040AC7C201F955DB /* important.png */ = {isa = PBXFileReference; lastKnownFileType = image.jpeg; name = important.png; path = images/important.png; sourceTree = "<group>"; };
 		FBD0AD0A0337A5B701F955DB /* PseudoTerminal.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; lineEnding = 0; path = PseudoTerminal.m; sourceTree = "<group>"; tabWidth = 4; xcLanguageSpecificationIdentifier = xcode.lang.objc; };
 		FBD4B4F6113275A0C965F05B /* TideyBrowserAutomationEngineTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationEngineTests.swift; sourceTree = "<group>"; };
+		T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "tidey-browser-mcp"; sourceTree = "<group>"; };
 		T1DEY00001BIN0CDXHOOK001 /* codex-hook-dispatch */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "codex-hook-dispatch"; sourceTree = "<group>"; };
 		T1DEY00001BIN0CLAHARG001 /* claude-hook-argv-session-id */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "claude-hook-argv-session-id"; sourceTree = "<group>"; };
 		T1DEY00001BIN0CLAHDSP001 /* claude-hook-dispatch */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "claude-hook-dispatch"; sourceTree = "<group>"; };
@@ -9370,7 +9375,6 @@
 		T1DEY00001BIN0CLAUDE0001 /* claude */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = claude; sourceTree = "<group>"; };
 		T1DEY00001BIN0CODEX0001 /* codex */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = codex; sourceTree = "<group>"; };
 		T1DEY00001BIN0TMUXID0001 /* tidey-tmux-pane-identity */ = {isa = PBXFileReference; lastKnownFileType = text.script.sh; path = "tidey-tmux-pane-identity"; sourceTree = "<group>"; };
-		T1DEY00001BIN0BRWMCP001 /* tidey-browser-mcp */ = {isa = PBXFileReference; lastKnownFileType = text.script.python; path = "tidey-browser-mcp"; sourceTree = "<group>"; };
 		TIDE7B00001A000000000000 /* TideyBrowserPanelTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyBrowserPanelTests.m; sourceTree = "<group>"; };
 		TIDEAPP0001A00000000000 /* TideyAppShortcutBehaviorTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyAppShortcutBehaviorTests.m; sourceTree = "<group>"; };
 		TIDEBOOT0001A00000000000 /* TideyFirstRunCompatibilityBootstrapTests.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyFirstRunCompatibilityBootstrapTests.m; sourceTree = "<group>"; };
@@ -10079,6 +10083,7 @@
 				C604B2C8CF6F324C8E3E8C3C /* TideyBrowserAutomationControllerTests.swift */,
 				FBD4B4F6113275A0C965F05B /* TideyBrowserAutomationEngineTests.swift */,
 				98BCD51E782F66126F79616E /* TideySocketBrowserAutomationTests.m */,
+				5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -11290,6 +11295,7 @@
 				90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */,
 				40463B3F406C007568BC50DB /* TideyBrowserAutomationEngine.swift */,
 				F0BA00000000000000000002 /* tidey-browser-automation.js */,
+				38BC6E4FFFBFF4AEEA99EDEB /* TideyBrowserNavigationGate.swift */,
 			);
 			name = Automation;
 			path = Automation;
@@ -20411,6 +20417,7 @@
 				14F87F0582EB0D7EDBBAA30D /* TideyBrowserAutomationProtocol.swift in Sources */,
 				5E671E2FA838E668A33564BC /* TideyBrowserAutomationController.swift in Sources */,
 				CB70AF3C87FF32326EE98992 /* TideyBrowserAutomationEngine.swift in Sources */,
+				99BFD576CA7D163127793811 /* TideyBrowserNavigationGate.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20484,6 +20491,7 @@
 				BC2B166D41FFCD65B6E8E5F4 /* TideyBrowserAutomationControllerTests.swift in Sources */,
 				938836D845839C6693AC639C /* TideyBrowserAutomationEngineTests.swift in Sources */,
 				EC525AFF8C7AB5F14BF248E5 /* TideySocketBrowserAutomationTests.m in Sources */,
+				3538DE1D25D0E62BBD3612E3 /* TideyBrowserNavigationGateTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
