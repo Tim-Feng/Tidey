@@ -173,6 +173,7 @@ run_profile_config_test() {
 from pathlib import Path
 import json
 import sys
+import tomllib
 
 profile_path = sys.argv[1]
 hooks_path = Path(sys.argv[2])
@@ -180,6 +181,7 @@ sqlite_home = sys.argv[3]
 dispatch_script = sys.argv[4]
 browser_mcp_script = sys.argv[5]
 text = Path(profile_path).read_text()
+profile = tomllib.loads(text)
 hooks_root = json.loads(hooks_path.read_text())
 
 if f"sqlite_home = \"{sqlite_home}\"" not in text:
@@ -198,6 +200,16 @@ if "env_vars = [\"TIDEY_SOCKET_PATH\", \"TIDEY_WORKSPACE_ID\"]" not in text:
     raise SystemExit("profile config did not forward Tidey browser identity")
 if "default_tools_approval_mode = \"approve\"" not in text:
     raise SystemExit("profile config did not preapprove the bounded Tidey browser tools")
+browser_mcp = profile.get("mcp_servers", {}).get("tidey_browser", {})
+if browser_mcp != {
+    "command": browser_mcp_script,
+    "env_vars": ["TIDEY_SOCKET_PATH", "TIDEY_WORKSPACE_ID"],
+    "required": True,
+    "startup_timeout_sec": 5,
+    "tool_timeout_sec": 45,
+    "default_tools_approval_mode": "approve",
+}:
+    raise SystemExit(f"parsed Tidey browser MCP config is invalid: {browser_mcp!r}")
 if "\n[hooks]\n" in text or "[[hooks." in text:
     raise SystemExit("profile config should not declare hooks")
 if "notify" in text:
