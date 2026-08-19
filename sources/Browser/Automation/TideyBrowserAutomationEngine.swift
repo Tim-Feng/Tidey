@@ -112,6 +112,45 @@ extension TideyBrowserEngine {
         return pngData
     }
 
+    func automationPerformPotentialNavigation(
+        startupGrace: TimeInterval = 0.15,
+        timeout: TimeInterval = 30,
+        action: @MainActor () async throws -> Void
+    ) async throws {
+        let previousEpoch = automationNavigationEpoch
+        var actionError: Error?
+        do {
+            try await action()
+        } catch {
+            actionError = error
+        }
+
+        let startupDeadline = Date().addingTimeInterval(startupGrace)
+        var navigationStarted = isLoading || automationNavigationEpoch > previousEpoch
+        while !navigationStarted && Date() < startupDeadline {
+            try await Task.sleep(nanoseconds: 10_000_000)
+            navigationStarted = isLoading || automationNavigationEpoch > previousEpoch
+        }
+        guard navigationStarted else {
+            if let actionError {
+                throw actionError
+            }
+            return
+        }
+
+        let completionDeadline = Date().addingTimeInterval(timeout)
+        while Date() < completionDeadline {
+            if !isLoading {
+                return
+            }
+            try await Task.sleep(nanoseconds: 50_000_000)
+        }
+        throw TideyBrowserAutomationProtocolError(
+            code: .timeout,
+            message: "Browser navigation timed out"
+        )
+    }
+
     private func validateAutomationReference(
         _ target: TideyBrowserAutomationElementReference
     ) throws {

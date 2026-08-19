@@ -12,6 +12,8 @@ struct TideyBrowserNavigationGateSnapshot: Equatable, Sendable {
 }
 
 actor TideyBrowserNavigationGate {
+    static let shared = TideyBrowserNavigationGate()
+
     private struct Waiter {
         let origin: String
         let continuation: CheckedContinuation<TideyBrowserNavigationPermit, Error>

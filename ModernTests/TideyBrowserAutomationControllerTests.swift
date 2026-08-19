@@ -50,6 +50,47 @@ private final class TideyBrowserAutomationHostStub: NSObject, TideyBrowserAutoma
 
 final class TideyBrowserAutomationControllerTests: XCTestCase {
     @MainActor
+    func testOpenWaitsForNavigationCapacityBeforeCreatingPrivateEngine() async throws {
+        let host = TideyBrowserAutomationHostStub()
+        let gate = TideyBrowserNavigationGate(
+            maximumConcurrent: 1,
+            maximumPerOrigin: 1,
+            maximumQueued: 1
+        )
+        let blockingPermit = try await gate.acquire(origin: "https://blocking.example")
+        let controller = TideyBrowserAutomationController(
+            host: host,
+            tabIDGenerator: { "private-tab-1" },
+            engineFactory: { TideyBrowserEngine(configuration: $0) },
+            navigationGate: gate
+        )
+
+        let openTask = Task { @MainActor in
+            try await controller.handle(
+                request: TideyBrowserAutomationRequest(
+                    workspaceID: "workspace-1",
+                    command: .open(url: try XCTUnwrap(URL(string: "http://127.0.0.1:1/private")))
+                ),
+                ownerSessionID: "session-1"
+            )
+        }
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline {
+            if await gate.snapshot().queuedCount > 0 {
+                break
+            }
+            try await Task.sleep(nanoseconds: 1_000_000)
+        }
+        let queuedSnapshot = await gate.snapshot()
+        XCTAssertEqual(queuedSnapshot.queuedCount, 1)
+        XCTAssertTrue(controller.privateEnginesByID.isEmpty)
+
+        await gate.release(blockingPermit)
+        _ = try await openTask.value
+        XCTAssertNotNil(controller.privateEnginesByID["private-tab-1"])
+    }
+
+    @MainActor
     func testControllerOwnershipSeam() {
         let host = TideyBrowserAutomationHostStub()
         let controller = TideyBrowserAutomationController(
