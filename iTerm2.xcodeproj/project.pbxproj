@@ -12,6 +12,7 @@
 		0E917DB125F460B221026B56 /* iTermCharacterSourceTestHelper.h in Sources */ = {isa = PBXBuildFile; fileRef = 2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */; };
 		10AAA7668EA8FBDD64696AB7 /* iTermEventTriggerParameterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7B0AE10E1598EDE1E01795 /* iTermEventTriggerParameterView.swift */; };
 		10D567B3DD4E3FB05673BF65 /* iTermAnnotatedScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C74C12959E7040AF3A3B12F /* iTermAnnotatedScreenshot.swift */; };
+		14F87F0582EB0D7EDBBAA30D /* TideyBrowserAutomationProtocol.swift in Sources */ = {isa = PBXBuildFile; fileRef = 88DE50834DCFD50354FD591D /* TideyBrowserAutomationProtocol.swift */; };
 		1D027C111CD1867000B0FBFF /* iTermColorPresets.h in Headers */ = {isa = PBXBuildFile; fileRef = 1D027C0F1CD1867000B0FBFF /* iTermColorPresets.h */; };
 		1D0318281A42563A00932107 /* iTermImageWell.h in Headers */ = {isa = PBXBuildFile; fileRef = 1D0318261A42563A00932107 /* iTermImageWell.h */; };
 		1D0318291A42563A00932107 /* iTermImageWell.h in Headers */ = {isa = PBXBuildFile; fileRef = 1D0318261A42563A00932107 /* iTermImageWell.h */; };
@@ -5132,6 +5133,7 @@
 		A7B1001B2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A7B1001C2F0A000100000001 /* WebExtensionsFramework in Frameworks */ = {isa = PBXBuildFile; productRef = A6C7C96C2E172F3E00AA7668 /* WebExtensionsFramework */; };
 		A7E25DCB1956D4A7FA738CB9 /* iTermStreamingPNGWriter.h in Sources */ = {isa = PBXBuildFile; fileRef = CB2F48F836C5732146BCEDD9 /* iTermStreamingPNGWriter.h */; };
+		B76D4483DD74A31838098767 /* TideyBrowserAutomationProtocolTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */; };
 		BB6261274C73ED1AAACA751C /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
 		C472BB71AF7F3F957C28474A /* TideySessionViewRedrawTests.m in Sources */ = {isa = PBXBuildFile; fileRef = 51E45EA5078C7CA32BE9EA3B /* TideySessionViewRedrawTests.m */; };
 		C48D7AA2E70B019313C401F3 /* WordSelectionAtom.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */; };
@@ -6292,6 +6294,7 @@
 		53FF98292093C823008688D7 /* iTermSignatureVerifier.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermSignatureVerifier.m; sourceTree = "<group>"; };
 		53FF984920967805008688D7 /* iTermMetalDeviceProvider.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = iTermMetalDeviceProvider.h; sourceTree = "<group>"; };
 		53FF984A20967805008688D7 /* iTermMetalDeviceProvider.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = iTermMetalDeviceProvider.m; sourceTree = "<group>"; };
+		5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationProtocolTests.swift; sourceTree = "<group>"; };
 		5ECE005D1454E59B004861E9 /* PseudoTerminalRestorer.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = PseudoTerminalRestorer.h; sourceTree = "<group>"; tabWidth = 4; };
 		5ECE005E1454E59B004861E9 /* PseudoTerminalRestorer.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = PseudoTerminalRestorer.m; sourceTree = "<group>"; tabWidth = 4; };
 		5F139DFA4255DC27A1E3E0FF /* AccessibilityDeletionDetectionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = AccessibilityDeletionDetectionTests.swift; sourceTree = "<group>"; };
@@ -6320,6 +6323,7 @@
 		86F85D24451C27760B7C75BC /* PrivateIPCheckerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = PrivateIPCheckerTests.swift; sourceTree = "<group>"; };
 		8742065A0564169600CFC3F1 /* iTerm2.app */ = {isa = PBXFileReference; explicitFileType = wrapper.application; includeInIndex = 0; path = iTerm2.app; sourceTree = BUILT_PRODUCTS_DIR; };
 		889A9128E944B618CDE75E18 /* iTermCursorSlideAnimator.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; name = iTermCursorSlideAnimator.h; path = sources/iTermCursorSlideAnimator.h; sourceTree = SOURCE_ROOT; };
+		88DE50834DCFD50354FD591D /* TideyBrowserAutomationProtocol.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationProtocol.swift; sourceTree = "<group>"; };
 		904AE312A0E0489899D9ECB8 /* MenuTips.xcassets */ = {isa = PBXFileReference; lastKnownFileType = folder.assetcatalog; path = MenuTips.xcassets; sourceTree = "<group>"; };
 		90A1E139186F9EA4003EC3E8 /* AppleScriptTest.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = AppleScriptTest.h; sourceTree = "<group>"; };
 		90A1E13A186F9EA4003EC3E8 /* AppleScriptTest.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = AppleScriptTest.m; sourceTree = "<group>"; };
@@ -10053,6 +10057,7 @@
 				31039BDCA3000FF0DB6B6D7C /* IntervalTreeSmallestLocationBugTests.swift */,
 				110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */,
 				F4ED0C4AF3AE475286D75846 /* TideyBrowserAutomationStoreTests.swift */,
+				5924E82F30E05417661B839C /* TideyBrowserAutomationProtocolTests.swift */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -11260,6 +11265,7 @@
 			isa = PBXGroup;
 			children = (
 				426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */,
+				88DE50834DCFD50354FD591D /* TideyBrowserAutomationProtocol.swift */,
 			);
 			name = Automation;
 			path = Automation;
@@ -20376,6 +20382,7 @@
 				A7538B418331D32A3C38281F /* FIFOQueue.swift in Sources */,
 				EDD2335A6BDA84CE2B29C285 /* Box.swift in Sources */,
 				C553EACADC5ADCED8853BAD9 /* TideyBrowserAutomationState.swift in Sources */,
+				14F87F0582EB0D7EDBBAA30D /* TideyBrowserAutomationProtocol.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20444,6 +20451,7 @@
 				FF77847D9D838865BB1E1327 /* TideySidebarStatusRefreshPolicyTests.m in Sources */,
 				C472BB71AF7F3F957C28474A /* TideySessionViewRedrawTests.m in Sources */,
 				289021114B126DAD12FA9EDA /* TideyBrowserAutomationStoreTests.swift in Sources */,
+				B76D4483DD74A31838098767 /* TideyBrowserAutomationProtocolTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
