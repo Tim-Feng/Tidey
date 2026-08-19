@@ -22,6 +22,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
     private let engineFactory: (WKWebViewConfiguration) -> TideyBrowserEngine
     private let navigationGate: TideyBrowserNavigationGate
     private var popupTabIDsByParentID: [String: [String]] = [:]
+    private var handoffExpiryTasksByTabID: [String: Task<Void, Never>] = [:]
     private(set) var actionLog: [String] = []
 
     @objc convenience init(host: TideyBrowserAutomationHost,
@@ -187,6 +188,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
                     now: Date()
                 )
             }
+            handoffExpiryTasksByTabID.removeValue(forKey: tabID)?.cancel()
             return response(["reclaimed": true, "tab_id": tabID])
         case .mark(let tabID, let mark):
             try mapStateError {
@@ -378,6 +380,9 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
             privateFallbackURLsByID.removeValue(forKey: tabID)
             engine.host = host
         }
+        for tabID in plan.privateTabIDsRetainedForHandoff {
+            scheduleHandoffExpiry(tabID: tabID)
+        }
     }
 
     func browserEngine(_ engine: TideyBrowserEngine,
@@ -455,11 +460,31 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
     }
 
     private func removePrivateEngine(tabID: String) {
+        handoffExpiryTasksByTabID.removeValue(forKey: tabID)?.cancel()
         let engine = privateEnginesByID.removeValue(forKey: tabID)
         privateFallbackURLsByID.removeValue(forKey: tabID)
         popupTabIDsByParentID.removeValue(forKey: tabID)
         engine?.webView.stopLoading()
         engine?.host = nil
+    }
+
+    private func scheduleHandoffExpiry(tabID: String) {
+        handoffExpiryTasksByTabID.removeValue(forKey: tabID)?.cancel()
+        let nanoseconds = UInt64(max(0, state.handoffTTL) * 1_000_000_000)
+        handoffExpiryTasksByTabID[tabID] = Task { @MainActor [weak self] in
+            do {
+                try await Task.sleep(nanoseconds: nanoseconds)
+            } catch {
+                return
+            }
+            guard let self else {
+                return
+            }
+            self.handoffExpiryTasksByTabID.removeValue(forKey: tabID)
+            for expiredTabID in self.state.expireHandoffs(now: Date()) {
+                self.removePrivateEngine(tabID: expiredTabID)
+            }
+        }
     }
 
     private func response(_ result: [String: Any],

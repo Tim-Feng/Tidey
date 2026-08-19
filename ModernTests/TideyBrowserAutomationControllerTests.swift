@@ -91,6 +91,39 @@ final class TideyBrowserAutomationControllerTests: XCTestCase {
     }
 
     @MainActor
+    func testDisconnectedHandoffClosesWhenTTLExpiresWithoutAnotherRequest() async throws {
+        let host = TideyBrowserAutomationHostStub()
+        let controller = TideyBrowserAutomationController(
+            host: host,
+            handoffTTL: 0.02,
+            tabIDGenerator: { "handoff-tab" },
+            engineFactory: { TideyBrowserEngine(configuration: $0) }
+        )
+        let tabID = try controller.openPrivate(
+            url: try XCTUnwrap(URL(string: "http://127.0.0.1:1/handoff")),
+            workspaceID: "workspace-1",
+            ownerSessionID: "session-1"
+        )
+        _ = try await controller.handle(
+            request: TideyBrowserAutomationRequest(
+                workspaceID: "workspace-1",
+                command: .mark(tabID: tabID, mark: .handoff)
+            ),
+            ownerSessionID: "session-1"
+        )
+
+        controller.cleanupSession(ownerSessionID: "session-1")
+        XCTAssertNotNil(controller.privateEnginesByID[tabID])
+        let deadline = Date().addingTimeInterval(1)
+        while Date() < deadline && controller.privateEnginesByID[tabID] != nil {
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        XCTAssertNil(controller.privateEnginesByID[tabID])
+        XCTAssertNil(controller.state.privateTabsByID[tabID])
+    }
+
+    @MainActor
     func testControllerOwnershipSeam() {
         let host = TideyBrowserAutomationHostStub()
         let controller = TideyBrowserAutomationController(
