@@ -210,7 +210,7 @@
   - 補證：`aa75413df`
 - 寫進 Tidey Unix socket 成功前的狀態不能視為已交付
   - `TideyStatusStore` 是 App process 內記憶體；Bridge 若比 Tidey 早啟動，bootstrap 算出的 Idle 即使正確，也可能因 socket 尚未出現而整批丟失，之後 direct hook 的 Running 就會長留在 sidebar
-  - Bridge 要保存 session lifecycle 的權威狀態，依 workspace／panel／session owner 回報；socket 從 unavailable 變成可用或 device／inode identity 改變時，每個 owner 重播一次，同一 generation 內則去重，send 失敗不可標成 delivered
+  - Bridge 要保存 session lifecycle 的權威狀態，依 workspace／panel／session owner 回報；socket 從 unavailable 變成可用或 device／inode identity 改變時，先清掉 workspace 的 legacy unowned `shell_state` cell，再重播所有 active owners，同一 generation 內則去重，send 失敗不可標成 delivered
   - 實機補證：2026-08-21 Tidey 啟動比 Remote Bridge 晚約 16 秒，Bridge log 的 bootstrap prompt 全部是 `socketUnavailable`，造成多個 Idle workspace 顯示 Running
 - GUI app 背景 `NSTask` 不會繼承互動 shell 裡的 Homebrew PATH
   - Tidey 從 LaunchServices 啟動時只有 `/usr/bin:/bin:/usr/sbin:/sbin`；`/bin/sh -c "tmux ..."` 這類 cleanup job 直接跑會 `command not found`

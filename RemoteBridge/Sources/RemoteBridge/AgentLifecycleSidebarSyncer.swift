@@ -11,6 +11,7 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
     private var observerToken: UUID?
     private var activeIdentities = Set<AgentSessionLifecycleIdentity>()
     private var pendingClears = Set<AgentSessionLifecycleIdentity>()
+    private var pendingWorkspaceResets = Set<String>()
     private var deliveredCommands = [AgentSessionLifecycleIdentity: String]()
     private var socketIdentity: String?
 
@@ -47,22 +48,18 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
         lock.lock()
         defer { lock.unlock() }
 
+        let previousWorkspaceIDs = Set(activeIdentities.map(\.workspaceID))
         let nextIdentities = Set(records.compactMap(Self.identity(for:)))
+        let nextWorkspaceIDs = Set(nextIdentities.map(\.workspaceID))
         pendingClears.formUnion(activeIdentities.subtracting(nextIdentities))
         pendingClears.subtract(nextIdentities)
+        pendingWorkspaceResets.formUnion(nextWorkspaceIDs.subtracting(previousWorkspaceIDs))
         activeIdentities = nextIdentities
 
         guard refreshSocketIdentityLocked() != nil else {
             return
         }
-
-        for identity in Self.sorted(pendingClears) {
-            deliverLocked(command: Self.clearCommand(for: identity), identity: identity)
-        }
-        for identity in Self.sorted(activeIdentities) {
-            let command = Self.command(for: store.snapshot(identity), identity: identity)
-            deliverLocked(command: command, identity: identity)
-        }
+        reconcileLocked()
     }
 
     private func lifecycleDidChange(_ snapshot: AgentSessionLifecycleSnapshot) {
@@ -72,8 +69,7 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
               refreshSocketIdentityLocked() != nil else {
             return
         }
-        deliverLocked(command: Self.command(for: snapshot, identity: snapshot.identity),
-                      identity: snapshot.identity)
+        reconcileLocked()
     }
 
     @discardableResult
@@ -82,8 +78,40 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
         if current != socketIdentity {
             socketIdentity = current
             deliveredCommands.removeAll()
+            if current != nil {
+                pendingWorkspaceResets.formUnion(activeIdentities.map(\.workspaceID))
+            }
         }
         return current
+    }
+
+    private func reconcileLocked() {
+        for workspaceID in pendingWorkspaceResets.sorted() {
+            deliverWorkspaceResetLocked(workspaceID: workspaceID)
+        }
+        let blockedWorkspaceIDs = pendingWorkspaceResets
+        for identity in Self.sorted(pendingClears)
+            where !blockedWorkspaceIDs.contains(identity.workspaceID) {
+            deliverLocked(command: Self.clearCommand(for: identity), identity: identity)
+        }
+        for identity in Self.sorted(activeIdentities)
+            where !blockedWorkspaceIDs.contains(identity.workspaceID) {
+            let command = Self.command(for: store.snapshot(identity), identity: identity)
+            deliverLocked(command: command, identity: identity)
+        }
+    }
+
+    private func deliverWorkspaceResetLocked(workspaceID: String) {
+        guard let command = Self.clearWorkspaceCommand(workspaceID: workspaceID) else {
+            return
+        }
+        do {
+            try commandSender(command)
+            pendingWorkspaceResets.remove(workspaceID)
+            deliveredCommands = deliveredCommands.filter { $0.key.workspaceID != workspaceID }
+        } catch {
+            BridgeLogger.server.error("lifecycle sidebar workspace reset failed workspace_id=\(workspaceID, privacy: .public) error=\(String(describing: error), privacy: .public)")
+        }
     }
 
     private func deliverLocked(command: String?, identity: AgentSessionLifecycleIdentity) {
@@ -144,6 +172,19 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
         if !identity.panelID.isEmpty {
             message["panel_id"] = identity.panelID
         }
+        guard JSONSerialization.isValidJSONObject(message),
+              let data = try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
+    }
+
+    private static func clearWorkspaceCommand(workspaceID: String) -> String? {
+        let message = [
+            "action": "clear_status",
+            "workspace_id": workspaceID,
+            "key": "shell_state",
+        ]
         guard JSONSerialization.isValidJSONObject(message),
               let data = try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]) else {
             return nil
