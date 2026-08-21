@@ -209,6 +209,10 @@ final class TideyBrowserAutomationControllerTests: XCTestCase {
         XCTAssertTrue(host.visibleTabs.isEmpty)
         XCTAssertTrue(host.presentations.isEmpty)
         let privateEngine = try XCTUnwrap(controller.privateEnginesByID[tabID])
+        XCTAssertEqual(
+            privateEngine.webView.frame.size,
+            TideyBrowserAutomationController.privateViewportSize
+        )
 
         try controller.presentPrivate(
             tabID: tabID,
@@ -221,6 +225,40 @@ final class TideyBrowserAutomationControllerTests: XCTestCase {
         XCTAssertEqual(host.presentations[0].tabID, tabID)
         XCTAssertNil(controller.privateEnginesByID[tabID])
         XCTAssertNil(controller.state.privateTabsByID[tabID])
+    }
+
+    @MainActor
+    func testPrivateEngineCanCaptureScreenshotWhileHidden() async throws {
+        let host = TideyBrowserAutomationHostStub()
+        let controller = TideyBrowserAutomationController(
+            host: host,
+            tabIDGenerator: { "private-tab-1" },
+            engineFactory: { TideyBrowserEngine(configuration: $0) }
+        )
+        let tabID = try controller.openPrivate(
+            url: try XCTUnwrap(URL(string: "https://fixture.invalid/")),
+            workspaceID: "workspace-1",
+            ownerSessionID: "session-1",
+            startLoading: false
+        )
+        let engine = try XCTUnwrap(controller.privateEnginesByID[tabID])
+        let previousEpoch = engine.automationNavigationEpoch
+
+        engine.webView.loadHTMLString("<div>Hidden screenshot fixture</div>", baseURL: nil)
+        let deadline = Date().addingTimeInterval(3)
+        while Date() < deadline {
+            if engine.automationNavigationEpoch > previousEpoch && !engine.isLoading {
+                break
+            }
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+        XCTAssertGreaterThan(engine.automationNavigationEpoch, previousEpoch)
+        XCTAssertFalse(engine.isLoading)
+
+        let png = try await engine.automationScreenshotPNG()
+        XCTAssertEqual(Array(png.prefix(8)), [137, 80, 78, 71, 13, 10, 26, 10])
+        XCTAssertTrue(host.visibleTabs.isEmpty)
+        XCTAssertTrue(host.presentations.isEmpty)
     }
 
     @MainActor

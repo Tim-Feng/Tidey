@@ -14,6 +14,8 @@ import WebKit
 @MainActor
 @objc(TideyBrowserAutomationController)
 final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
+    static let privateViewportSize = NSSize(width: 1280, height: 800)
+
     weak var host: TideyBrowserAutomationHost?
     private(set) var state: TideyBrowserAutomationState
     private(set) var privateEnginesByID: [String: TideyBrowserEngine] = [:]
@@ -72,6 +74,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
 
         let engine = engineFactory(configuration ?? TideyBrowserEngine.defaultConfiguration())
         engine.host = self
+        engine.webView.setFrameSize(Self.privateViewportSize)
         engine.webView.customUserAgent = TideyBrowserEngine.sessionCompatibleUserAgent()
         if #available(macOS 13.3, *) {
             engine.webView.isInspectable = true
