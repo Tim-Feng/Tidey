@@ -299,6 +299,37 @@ private enum TideyBrowserTransferDestination {
     }
 }
 
+struct TideyBrowserTransferOpenedDestination: @unchecked Sendable {
+    let url: URL
+    let fileHandle: FileHandle
+}
+
+protocol TideyBrowserTransferDestinationOpening {
+    func open(_ request: TideyBrowserTransferStartRequest) async throws
+        -> TideyBrowserTransferOpenedDestination
+}
+
+struct TideyBrowserTransferDestinationOpeningExecutor: TideyBrowserTransferDestinationOpening {
+    typealias Operation = @Sendable (TideyBrowserTransferStartRequest) throws
+        -> TideyBrowserTransferOpenedDestination
+
+    private let operation: Operation
+
+    init(operation: @escaping Operation = { request in
+        let opened = try TideyBrowserTransferDestination.open(request)
+        return TideyBrowserTransferOpenedDestination(url: opened.0, fileHandle: opened.1)
+    }) {
+        self.operation = operation
+    }
+
+    func open(_ request: TideyBrowserTransferStartRequest) async throws
+        -> TideyBrowserTransferOpenedDestination {
+        try await Task.detached(priority: .utility) {
+            try operation(request)
+        }.value
+    }
+}
+
 private enum TideyBrowserTransferState: String {
     case running
     case paused
@@ -578,6 +609,17 @@ private final class TideyBrowserStreamingTransfer: NSObject,
 @MainActor
 final class TideyBrowserAuthenticatedTransferManager {
     private var transfers: [String: TideyBrowserStreamingTransfer] = [:]
+    private let destinationOpener: any TideyBrowserTransferDestinationOpening
+
+    init(destinationOpener: any TideyBrowserTransferDestinationOpening =
+         TideyBrowserTransferDestinationOpeningExecutor()) {
+        self.destinationOpener = destinationOpener
+    }
+
+    func openDestination(_ request: TideyBrowserTransferStartRequest) async throws
+        -> TideyBrowserTransferOpenedDestination {
+        try await destinationOpener.open(request)
+    }
 
     func start(engine: TideyBrowserEngine,
                request: TideyBrowserTransferStartRequest,
@@ -597,9 +639,9 @@ final class TideyBrowserAuthenticatedTransferManager {
         } catch {
             throw protocolError(.invalidURL, "Transfer source is outside the official Vault")
         }
-        let opened: (URL, FileHandle)
+        let opened: TideyBrowserTransferOpenedDestination
         do {
-            opened = try TideyBrowserTransferDestination.open(request)
+            opened = try await openDestination(request)
         } catch {
             throw protocolError(.invalidRequest, "Transfer destination is unsafe or unavailable")
         }
@@ -612,7 +654,7 @@ final class TideyBrowserAuthenticatedTransferManager {
             sourceURL: sourceURL,
             destinationRelativePath: request.destinationRelativePath,
             request: request,
-            fileHandle: opened.1
+            fileHandle: opened.fileHandle
         )
         transfers[transferID] = transfer
         transfer.start(cookies: cookies, ifRange: request.ifRange)

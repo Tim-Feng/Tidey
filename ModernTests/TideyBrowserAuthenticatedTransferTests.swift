@@ -2,6 +2,26 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    @MainActor
+    func testDestinationOpeningExecutorLeavesMainActor() async throws {
+        enum Expected: Error {
+            case stopped
+        }
+        let executor = TideyBrowserTransferDestinationOpeningExecutor { _ in
+            XCTAssertFalse(Thread.isMainThread)
+            throw Expected.stopped
+        }
+        let manager = TideyBrowserAuthenticatedTransferManager(destinationOpener: executor)
+
+        do {
+            _ = try await manager.openDestination(makeTransferRequest())
+            XCTFail("Expected the test opener to stop")
+        } catch Expected.stopped {
+        } catch {
+            XCTFail("Unexpected error: \(error)")
+        }
+    }
+
     func testAcceptsOnlyOfficialSameOriginVaultLinksWithoutSecrets() throws {
         let page = try XCTUnwrap(URL(string: "https://studio.blender.org/vault/browse/wing-it/"))
         XCTAssertEqual(
@@ -108,5 +128,21 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertFalse(message.contains("top-secret"))
         XCTAssertFalse(message.contains("session=private"))
         XCTAssertFalse(message.contains("token=secret"))
+    }
+
+    private func makeTransferRequest() -> TideyBrowserTransferStartRequest {
+        TideyBrowserTransferStartRequest(
+            target: TideyBrowserAutomationElementReference(
+                tabID: "tab-1",
+                navigationEpoch: 1,
+                elementID: "element-1"
+            ),
+            archiveRoot: "/Volumes/External/Archive",
+            expectedVolumeUUID: "volume-uuid",
+            destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+            resumeOffset: 0,
+            ifRange: nil,
+            pauseAfterBytes: nil
+        )
     }
 }
