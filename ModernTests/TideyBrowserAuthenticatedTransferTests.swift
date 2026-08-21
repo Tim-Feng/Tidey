@@ -2,6 +2,16 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    func testDiskInspectionTargetsContainingVolume() {
+        XCTAssertEqual(
+            TideyBrowserTransferDiskInspector.inspectionTarget(
+                archiveRoot: "/Volumes/My Book/BlenderStudioVaultArchive-v01",
+                containingMountPoint: "/Volumes/My Book"
+            ),
+            "/Volumes/My Book"
+        )
+    }
+
     @MainActor
     func testDestinationOpeningExecutorLeavesMainActor() async throws {
         enum Expected: Error {

@@ -253,17 +253,26 @@ struct TideyBrowserTransferVolumeInfo {
 enum TideyBrowserTransferDiskInspector {
     static func inspectionTarget(archiveRoot: String,
                                  containingMountPoint: String?) -> String {
-        archiveRoot
+        containingMountPoint ?? archiveRoot
     }
 
     static func inspect(path: String) throws -> TideyBrowserTransferVolumeInfo {
+        let archiveRoot = URL(fileURLWithPath: path, isDirectory: true).standardizedFileURL
+        let resourceValues = try archiveRoot.resourceValues(forKeys: [.volumeURLKey])
+        guard let containingMountPoint = resourceValues.volume?.standardizedFileURL.path,
+              !containingMountPoint.isEmpty else {
+            throw TideyBrowserTransferValidationError.invalidDestination
+        }
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
         process.arguments = [
             "info",
             "-plist",
-            inspectionTarget(archiveRoot: path, containingMountPoint: nil),
+            inspectionTarget(
+                archiveRoot: archiveRoot.path,
+                containingMountPoint: containingMountPoint
+            ),
         ]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
