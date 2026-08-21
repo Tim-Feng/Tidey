@@ -85,6 +85,10 @@ with tempfile.TemporaryDirectory(prefix="tidey-browser-mcp-tests.") as temp_dir:
         assert names == expected
         assert all(item["inputSchema"].get("additionalProperties") is False
                    for item in tools["result"]["tools"])
+        transfer_start = next(item for item in tools["result"]["tools"]
+                              if item["name"] == "transfer_start")
+        assert "expected_total_bytes" in transfer_start["inputSchema"]["required"]
+        assert transfer_start["inputSchema"]["properties"]["expected_total_bytes"]["minimum"] == 1
 
         opened = send(process, {
             "jsonrpc": "2.0", "id": "call-1", "method": "tools/call",

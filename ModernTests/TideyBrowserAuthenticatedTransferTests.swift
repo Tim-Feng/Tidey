@@ -70,6 +70,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: 200,
                 resumeOffset: 0,
+                expectedTotalBytes: 120_817_568,
                 headers: ["Content-Length": "120817568"]
             ),
             .fresh(expectedTotal: 120817568)
@@ -78,6 +79,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: 206,
                 resumeOffset: 33_554_432,
+                expectedTotalBytes: 120_817_568,
                 headers: ["Content-Range": "bytes 33554432-120817567/120817568"]
             ),
             .resumed(expectedTotal: 120817568)
@@ -86,6 +88,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: 416,
                 resumeOffset: 120_817_568,
+                expectedTotalBytes: 120_817_568,
                 headers: ["Content-Range": "bytes */120817568"]
             ),
             .rangeNotSatisfiable(remoteTotal: 120817568)
@@ -95,6 +98,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: 200,
                 resumeOffset: 1,
+                expectedTotalBytes: 10,
                 headers: ["Content-Length": "10"]
             )
         )
@@ -102,6 +106,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: 206,
                 resumeOffset: 5,
+                expectedTotalBytes: 10,
                 headers: ["Content-Range": "bytes 4-9/10"]
             )
         )
@@ -109,9 +114,63 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: 302,
                 resumeOffset: 0,
+                expectedTotalBytes: 10,
                 headers: [:]
             )
         )
+    }
+
+    func testResponsePolicyRejectsServerTotalMismatch() throws {
+        XCTAssertThrowsError(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: ["Content-Length": "11"]
+            )
+        )
+        XCTAssertThrowsError(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 206,
+                resumeOffset: 4,
+                expectedTotalBytes: 10,
+                headers: ["Content-Range": "bytes 4-10/11"]
+            )
+        )
+        XCTAssertThrowsError(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 416,
+                resumeOffset: 10,
+                expectedTotalBytes: 10,
+                headers: ["Content-Range": "bytes */11"]
+            )
+        )
+    }
+
+    func testByteBudgetStopsHeaderlessOverflowBeforeAcceptingBytes() throws {
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: [:]
+            ),
+            .fresh(expectedTotal: nil)
+        )
+        var budget = TideyBrowserTransferByteBudget(expectedTotalBytes: 10, resumeOffset: 4)
+        XCTAssertThrowsError(try budget.accept(chunkByteCount: 7))
+        XCTAssertEqual(budget.partialSize, 4)
+    }
+
+    func testByteBudgetRequiresExactCompletion() throws {
+        var exact = TideyBrowserTransferByteBudget(expectedTotalBytes: 10, resumeOffset: 4)
+        try exact.accept(chunkByteCount: 6)
+        XCTAssertEqual(exact.partialSize, 10)
+        XCTAssertNoThrow(try exact.validateCompletion())
+
+        var short = TideyBrowserTransferByteBudget(expectedTotalBytes: 10, resumeOffset: 4)
+        try short.accept(chunkByteCount: 5)
+        XCTAssertThrowsError(try short.validateCompletion())
     }
 
     func testRedactionNeverReturnsQueryCredentialsOrAuthorizationValues() throws {
@@ -140,6 +199,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             archiveRoot: "/Volumes/External/Archive",
             expectedVolumeUUID: "volume-uuid",
             destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+            expectedTotalBytes: 120_817_568,
             resumeOffset: 0,
             ifRange: nil,
             pauseAfterBytes: nil

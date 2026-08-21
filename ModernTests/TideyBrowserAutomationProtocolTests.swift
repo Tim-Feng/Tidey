@@ -78,6 +78,7 @@ final class TideyBrowserAutomationProtocolTests: XCTestCase {
                 "archive_root": "/Volumes/External/Archive",
                 "expected_volume_uuid": "volume-uuid",
                 "destination_relative_path": "_incoming/item/attempt/file.zip.partial",
+                "expected_total_bytes": 120_817_568,
                 "resume_offset": 33_554_432,
                 "if_range": "etag-1",
                 "pause_after_bytes": 67_108_864,
@@ -94,6 +95,7 @@ final class TideyBrowserAutomationProtocolTests: XCTestCase {
                 archiveRoot: "/Volumes/External/Archive",
                 expectedVolumeUUID: "volume-uuid",
                 destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+                expectedTotalBytes: 120_817_568,
                 resumeOffset: 33_554_432,
                 ifRange: "etag-1",
                 pauseAfterBytes: 67_108_864
@@ -115,6 +117,26 @@ final class TideyBrowserAutomationProtocolTests: XCTestCase {
                 parameters: ["transfer_id": "transfer-1"]
             ).command,
             .transferPause(transferID: "transfer-1")
+        )
+
+        var missingTotal = [
+            "tab_id": "tab-1",
+            "navigation_epoch": 7,
+            "element_id": "element-3",
+            "archive_root": "/Volumes/External/Archive",
+            "expected_volume_uuid": "volume-uuid",
+            "destination_relative_path": "_incoming/item/attempt/file.zip.partial",
+        ] as [String: Any]
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: missingTotal
+        )
+        missingTotal["expected_total_bytes"] = 0
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: missingTotal
         )
     }
 

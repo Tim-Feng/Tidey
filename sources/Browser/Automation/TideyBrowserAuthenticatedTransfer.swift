@@ -7,6 +7,7 @@ struct TideyBrowserTransferStartRequest: Equatable {
     let archiveRoot: String
     let expectedVolumeUUID: String
     let destinationRelativePath: String
+    let expectedTotalBytes: Int
     let resumeOffset: Int
     let ifRange: String?
     let pauseAfterBytes: Int?
@@ -22,6 +23,9 @@ enum TideyBrowserTransferValidationError: Error, Equatable {
     case invalidSource
     case invalidDestination
     case invalidResponse
+    case declaredTotalMismatch
+    case declaredTotalExceeded
+    case incompleteTransfer
 }
 
 enum TideyBrowserTransferRouteValidator {
@@ -83,8 +87,11 @@ enum TideyBrowserTransferRouteValidator {
 enum TideyBrowserTransferResponsePolicy {
     static func evaluate(statusCode: Int,
                          resumeOffset: Int,
+                         expectedTotalBytes: Int,
                          headers: [String: String]) throws -> TideyBrowserTransferResponseDecision {
-        guard resumeOffset >= 0 else {
+        guard expectedTotalBytes > 0,
+              resumeOffset >= 0,
+              resumeOffset <= expectedTotalBytes else {
             throw TideyBrowserTransferValidationError.invalidResponse
         }
         switch statusCode {
@@ -92,18 +99,24 @@ enum TideyBrowserTransferResponsePolicy {
             guard resumeOffset == 0 else {
                 throw TideyBrowserTransferValidationError.invalidResponse
             }
-            return .fresh(expectedTotal: positiveInteger(header("Content-Length", in: headers)))
+            let total = try optionalPositiveIntegerHeader("Content-Length", in: headers)
+            try validateServerTotal(total, expectedTotalBytes: expectedTotalBytes)
+            return .fresh(expectedTotal: total)
         case 206:
             guard let rawRange = header("Content-Range", in: headers),
                   let range = parseSatisfiedContentRange(rawRange),
-                  range.start == resumeOffset else {
+                  range.start == resumeOffset,
+                  range.end < expectedTotalBytes else {
                 throw TideyBrowserTransferValidationError.invalidResponse
             }
+            try validateServerTotal(range.total, expectedTotalBytes: expectedTotalBytes)
             return .resumed(expectedTotal: range.total)
         case 416:
-            return .rangeNotSatisfiable(
-                remoteTotal: parseUnsatisfiedContentRange(header("Content-Range", in: headers))
+            let total = try parseOptionalUnsatisfiedContentRange(
+                header("Content-Range", in: headers)
             )
+            try validateServerTotal(total, expectedTotalBytes: expectedTotalBytes)
+            return .rangeNotSatisfiable(remoteTotal: total)
         default:
             throw TideyBrowserTransferValidationError.invalidResponse
         }
@@ -120,7 +133,24 @@ enum TideyBrowserTransferResponsePolicy {
         return value
     }
 
-    private static func parseSatisfiedContentRange(_ raw: String) -> (start: Int, total: Int?)? {
+    private static func optionalPositiveIntegerHeader(_ name: String,
+                                                      in headers: [String: String]) throws -> Int? {
+        guard let raw = header(name, in: headers) else { return nil }
+        guard let value = positiveInteger(raw) else {
+            throw TideyBrowserTransferValidationError.invalidResponse
+        }
+        return value
+    }
+
+    private static func validateServerTotal(_ total: Int?,
+                                            expectedTotalBytes: Int) throws {
+        guard total == nil || total == expectedTotalBytes else {
+            throw TideyBrowserTransferValidationError.declaredTotalMismatch
+        }
+    }
+
+    private static func parseSatisfiedContentRange(_ raw: String)
+        -> (start: Int, end: Int, total: Int?)? {
         let parts = raw.split(separator: " ", maxSplits: 1).map(String.init)
         guard parts.count == 2, parts[0].lowercased() == "bytes" else {
             return nil
@@ -139,14 +169,52 @@ enum TideyBrowserTransferResponsePolicy {
         guard rangeAndTotal[1] == "*" || total != nil else {
             return nil
         }
-        return (start, total)
+        return (start, end, total)
     }
 
-    private static func parseUnsatisfiedContentRange(_ raw: String?) -> Int? {
+    private static func parseOptionalUnsatisfiedContentRange(_ raw: String?) throws -> Int? {
         guard let raw else { return nil }
         let normalized = raw.lowercased()
-        guard normalized.hasPrefix("bytes */") else { return nil }
-        return positiveInteger(String(normalized.dropFirst("bytes */".count)))
+        guard normalized.hasPrefix("bytes */"),
+              let value = positiveInteger(String(normalized.dropFirst("bytes */".count))) else {
+            throw TideyBrowserTransferValidationError.invalidResponse
+        }
+        return value
+    }
+}
+
+struct TideyBrowserTransferByteBudget {
+    let expectedTotalBytes: Int
+    let resumeOffset: Int
+    private(set) var bytesWritten = 0
+
+    var partialSize: Int {
+        resumeOffset + bytesWritten
+    }
+
+    mutating func accept(chunkByteCount: Int) throws {
+        try validate(chunkByteCount: chunkByteCount)
+        recordAccepted(chunkByteCount: chunkByteCount)
+    }
+
+    func validate(chunkByteCount: Int) throws {
+        guard expectedTotalBytes > 0,
+              resumeOffset >= 0,
+              resumeOffset <= expectedTotalBytes,
+              chunkByteCount >= 0,
+              chunkByteCount <= expectedTotalBytes - partialSize else {
+            throw TideyBrowserTransferValidationError.declaredTotalExceeded
+        }
+    }
+
+    mutating func recordAccepted(chunkByteCount: Int) {
+        bytesWritten += chunkByteCount
+    }
+
+    func validateCompletion() throws {
+        guard partialSize == expectedTotalBytes else {
+            throw TideyBrowserTransferValidationError.incompleteTransfer
+        }
     }
 }
 
@@ -382,13 +450,14 @@ private final class TideyBrowserStreamingTransfer: NSObject,
     private let sourceURL: URL
     private let destinationRelativePath: String
     private let resumeOffset: Int
+    private let expectedTotalBytes: Int
     private let ifRange: String?
     private let pauseAfterBytes: Int?
     private var fileHandle: FileHandle?
     private var session: URLSession?
     private var task: URLSessionDataTask?
     private var state: TideyBrowserTransferState = .running
-    private var bytesWritten = 0
+    private var byteBudget: TideyBrowserTransferByteBudget
     private var statusCode: Int?
     private var expectedTotal: Int?
     private var etag: String?
@@ -408,8 +477,13 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         self.sourceURL = sourceURL
         self.destinationRelativePath = destinationRelativePath
         self.resumeOffset = request.resumeOffset
+        self.expectedTotalBytes = request.expectedTotalBytes
         self.ifRange = request.ifRange
         self.pauseAfterBytes = request.pauseAfterBytes
+        self.byteBudget = TideyBrowserTransferByteBudget(
+            expectedTotalBytes: request.expectedTotalBytes,
+            resumeOffset: request.resumeOffset
+        )
         self.fileHandle = fileHandle
     }
 
@@ -499,6 +573,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
             let decision = try TideyBrowserTransferResponsePolicy.evaluate(
                 statusCode: response.statusCode,
                 resumeOffset: resumeOffset,
+                expectedTotalBytes: expectedTotalBytes,
                 headers: headers
             )
             lock.withLock {
@@ -519,6 +594,9 @@ private final class TideyBrowserStreamingTransfer: NSObject,
             } else {
                 completionHandler(.allow)
             }
+        } catch TideyBrowserTransferValidationError.declaredTotalMismatch {
+            fail(code: "declared_total_mismatch")
+            completionHandler(.cancel)
         } catch {
             fail(code: resumeOffset > 0 && response.statusCode == 200
                  ? "range_not_honored" : "invalid_response")
@@ -532,14 +610,20 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         lock.withLock {
             guard state == .running, let fileHandle else { return }
             do {
+                try byteBudget.validate(chunkByteCount: data.count)
                 try fileHandle.write(contentsOf: data)
-                bytesWritten += data.count
+                byteBudget.recordAccepted(chunkByteCount: data.count)
                 if let pauseAfterBytes,
-                   resumeOffset + bytesWritten >= pauseAfterBytes {
+                   byteBudget.partialSize >= pauseAfterBytes {
                     state = .paused
                     task?.cancel()
                     closeFileLocked()
                 }
+            } catch TideyBrowserTransferValidationError.declaredTotalExceeded {
+                state = .failed
+                errorCode = "declared_total_exceeded"
+                task?.cancel()
+                closeFileLocked()
             } catch {
                 state = .failed
                 errorCode = "write_failed"
@@ -555,7 +639,13 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         lock.withLock {
             if state == .running {
                 if error == nil {
-                    state = .completed
+                    do {
+                        try byteBudget.validateCompletion()
+                        state = .completed
+                    } catch {
+                        state = .failed
+                        errorCode = "incomplete_transfer"
+                    }
                 } else {
                     state = .failed
                     errorCode = "network_failed"
@@ -590,7 +680,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
             transferID: transferID,
             state: state,
             resumeOffset: resumeOffset,
-            bytesWritten: bytesWritten,
+            bytesWritten: byteBudget.bytesWritten,
             statusCode: statusCode,
             expectedTotal: expectedTotal,
             etag: etag,

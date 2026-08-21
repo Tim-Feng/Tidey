@@ -107,11 +107,12 @@ TOOLS = [
             "archive_root": {"type": "string", "minLength": 1},
             "expected_volume_uuid": {"type": "string", "minLength": 1},
             "destination_relative_path": {"type": "string", "minLength": 1},
+            "expected_total_bytes": {"type": "integer", "minimum": 1},
             "resume_offset": {"type": "integer", "minimum": 0, "default": 0},
             "if_range": {"type": "string", "minLength": 1, "maxLength": 1024},
             "pause_after_bytes": {"type": "integer", "minimum": 1},
         }, ["tab_id", "navigation_epoch", "element_id", "archive_root",
-            "expected_volume_uuid", "destination_relative_path"]),
+            "expected_volume_uuid", "destination_relative_path", "expected_total_bytes"]),
     ),
     tool(
         "transfer_status",

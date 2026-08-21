@@ -196,8 +196,11 @@ enum TideyBrowserAutomationProtocol {
             command = .screenshot(tabID: try tabID(parameters))
         case .transferStart:
             let resumeOffset = try integer(parameters, key: "resume_offset", defaultValue: 0)
+            let expectedTotalBytes = try integer(parameters, key: "expected_total_bytes")
             let pauseAfterBytes = try optionalInteger(parameters, key: "pause_after_bytes")
-            guard resumeOffset >= 0,
+            guard expectedTotalBytes > 0,
+                  resumeOffset >= 0,
+                  resumeOffset <= expectedTotalBytes,
                   pauseAfterBytes == nil || pauseAfterBytes! > resumeOffset else {
                 throw error(.invalidRequest, "Transfer offsets are invalid")
             }
@@ -207,6 +210,7 @@ enum TideyBrowserAutomationProtocol {
                 archiveRoot: try string(parameters, key: "archive_root"),
                 expectedVolumeUUID: try string(parameters, key: "expected_volume_uuid"),
                 destinationRelativePath: try string(parameters, key: "destination_relative_path"),
+                expectedTotalBytes: expectedTotalBytes,
                 resumeOffset: resumeOffset,
                 ifRange: ifRange,
                 pauseAfterBytes: pauseAfterBytes
