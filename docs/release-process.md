@@ -145,7 +145,14 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
 固定流程：
 
 1. 確認 `SavedState/restorable-state.sqlite` 已更新，並確認 agent 本身在獨立 tmux session；不要終止 `iTermServer` 或 tmux server。
-2. 驗證候選 app 的 Developer ID 簽章與執行檔雜湊；將舊 `/Applications/Tidey.app` 移到可復原的備份位置後，再安裝候選版。
+2. 驗證候選 app 的 Developer ID 簽章與執行檔雜湊；production Tidey 結束後，用 `tools/archive_production_app.sh` 將舊 `/Applications/Tidey.app` 移到可復原的備份，再安裝候選版。備份名稱必須以 `.bundle-archive` 結尾，且不得包含 `.app`，例如：
+
+   ```bash
+   tools/archive_production_app.sh \
+     --archive-name Tidey-production-before-browser-fix-20260821-210500.bundle-archive
+   ```
+
+   helper 會在移動前向 LaunchServices unregister 精確的 production bundle，並在 unregister 失敗、bundle ID 不符、來源或目的地是 symbolic link、目的地已存在時停止。不要用 `Tidey.app-*` 或另一個 `.app` 目錄保存 production bundle；只改副檔名也無法清除已存在的 LaunchServices registration，所以每次都必須走 helper。
 3. 將候選 app 內的 `Contents/Resources/RemoteBridge/tidey-remote-bridge` 部署到 `~/Library/Application Support/Tidey Remote Bridge/tidey-remote-bridge`。部署前後都要驗證 binary，且內建版與實際安裝版的 SHA-256 必須一致。
 4. 重新載入或 kickstart 這兩個 launchd job，兩個都不可漏：
    - `com.tidey.remote-bridge`
@@ -157,6 +164,7 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
    - Bridge 主服務是新 PID，正在監聽 TCP 4817。
    - Cloudflare supervisor 與 `cloudflared` 都是新 PID，`cloudflared-state.json` 顯示 `online`。
    - Bridge log 沒有新的 `socket_unavailable`，手機能實際取得 workspace list。
+   - LaunchServices 不再列出剛建立的 deployment backup；production `com.tidey.app` 的可用路徑仍是 `/Applications/Tidey.app`。
 
 受控部署若用 `SIGTERM`／`SIGKILL` 終止 GUI，下一次啟動可能顯示「Tidey did not shut down cleanly」的 restoration modal。這個 modal 會占住 main thread；此時 `tidey.sock` 檔案與 listener 可能都存在，但 socket accept queue 會等待 main queue，Remote 只會收到 `socket_unavailable`。
 

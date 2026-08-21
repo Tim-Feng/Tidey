@@ -209,6 +209,12 @@
   - `__CFBundleIdentifier` cleanup 只能防止舊 terminal 身分繼續污染新 session，不能把已經活著的 tmux server 從 `cmux` 改回 Tidey
   - 真正驗證要先 `tmux kill-server`，再讓 Tidey 重開新的 server；這時 TCC attribution 才會回到 Tidey
   - 補證：`b97fadf61` `e75c1b6c3` `394a293d1`
+- TCC prompt 顯示的 responsible app 名稱不能只靠整理 LaunchServices 修正
+  - accessing process、responsible audit token 與 LaunchServices 顯示名稱是不同層：長存 tmux server 會把第一次建立時的 responsible process ancestry 傳給後續 Claude／Codex；LaunchServices 再用已註冊的相同 bundle identifier 選擇顯示路徑與名稱
+  - unregister 舊 bundle 或清掉 `__CFBundleIdentifier` 不會改寫已存活程序的 audit token；要先讓 production Tidey 建立隔離 tmux server，再以 durable resume ID 搬移 agent，最後才終止舊 server
+  - deployment backup 在移動前必須先 unregister，並保存成名稱不含 `.app` 的 `.bundle-archive`；只把已註冊 bundle 改副檔名，LaunchServices database 仍可能保留舊路徑
+  - production 替換固定使用 `tools/archive_production_app.sh`，不得再建立 `Tidey.app-*` 或另一個 `.app` 備份
+  - 補證：2026-08-21 Claude Code PID 67356 的 TCC log、舊 tmux server PID 779，以及 app-owned tmux server PID 92364 的實機切換
 - prod / dev socket path 要硬分離，不要靠 fallback 猜
   - 同機同時有 Tidey prod / dev 時，如果兩邊共用同一個 socket path，wrapper / hook / sidebar 會誤打到另一個 instance
   - socket naming policy 要在啟動時就決定，不能等 wrapper 檢查失敗再臨時 fallback
