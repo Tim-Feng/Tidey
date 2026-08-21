@@ -45,7 +45,7 @@ def tool(name: str, description: str, schema: dict[str, Any]) -> dict[str, Any]:
 
 
 TOOLS = [
-    tool("tabs", "List visible tabs plus private tabs owned by this Codex session.", object_schema({})),
+    tool("tabs", "List visible tabs plus private tabs owned by this agent session.", object_schema({})),
     tool("open", "Open an HTTP(S) page in a hidden, session-owned Tidey browser tab.",
          object_schema({"url": URL}, ["url"])),
     tool("claim", "Atomically claim a user-visible Tidey browser tab before automating it.",

@@ -83,6 +83,9 @@ with tempfile.TemporaryDirectory(prefix="tidey-browser-mcp-tests.") as temp_dir:
                     "fill", "type", "key", "scroll", "wait", "screenshot", "transfer_start",
                     "transfer_status", "transfer_pause"}
         assert names == expected
+        tabs = next(item for item in tools["result"]["tools"] if item["name"] == "tabs")
+        assert "agent session" in tabs["description"]
+        assert all("Codex" not in item["description"] for item in tools["result"]["tools"])
         assert all(item["inputSchema"].get("additionalProperties") is False
                    for item in tools["result"]["tools"])
         transfer_start = next(item for item in tools["result"]["tools"]

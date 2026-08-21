@@ -2,11 +2,11 @@
 
 ## Status
 
-This document is the source of truth for Tidey's first-party browser automation path. It covers the Tidey macOS app and the Codex CLI processes launched inside a Tidey workspace. It does not claim that the Codex desktop app uses this adapter or MCP internally.
+This document is the source of truth for Tidey's first-party browser automation path. It covers the Tidey macOS app and Codex CLI or Claude Code processes launched inside a Tidey workspace. It does not claim that the Codex desktop app or Claude Desktop uses this adapter or MCP internally, and it makes no claim about upstream client internals.
 
 ## Product model
 
-Codex CLI remains the agent runtime. Tidey owns the browser runtime and exposes a bounded set of typed browser operations through its existing local Unix socket. A bundled stdio MCP adapter translates Codex tool calls into that socket protocol.
+A Tidey-launched Codex CLI or Claude Code process remains the agent runtime. Tidey owns the browser runtime and exposes a bounded set of typed browser operations through its existing local Unix socket. A bundled stdio MCP adapter translates agent tool calls into that socket protocol.
 
 Browser work has two distinct surfaces:
 
@@ -18,7 +18,8 @@ Browser work has two distinct surfaces:
 ## Boundaries
 
 ```text
-Codex CLI
+Tidey-launched agent CLI
+  (Codex CLI or Claude Code)
   -> bundled stdio MCP adapter
   -> Tidey workspace Unix socket
   -> typed browser protocol
@@ -77,7 +78,7 @@ The app-wide navigation gate allows at most four active agent-initiated navigati
 
 Permits remain held until WebKit finishes loading. Explicit navigation, private popup loads, link clicks, and key actions that can submit a page use the same gate. A non-navigating click or key releases its permit after a short startup grace period.
 
-## Codex registration
+## Registration
 
 The Tidey Codex wrapper generates this server entry in its session-scoped profile:
 
@@ -91,7 +92,15 @@ tool_timeout_sec = 45
 default_tools_approval_mode = "approve"
 ```
 
-The adapter speaks newline-delimited MCP JSON-RPC over stdin/stdout and uses one Tidey socket connection for its lifetime. That connection is the ownership boundary for the Codex session.
+The Tidey Claude wrapper passes the same adapter as one session-local inline JSON argument to `--mcp-config`:
+
+```json
+{"mcpServers":{"tidey_browser":{"type":"stdio","command":"/path/inside/Tidey.app/Contents/Resources/bin/tidey-browser-mcp","args":[],"env":{"TIDEY_SOCKET_PATH":"<socket-path>","TIDEY_WORKSPACE_ID":"<workspace-id>"}}}}
+```
+
+The Claude wrapper injects this additive config only when `TIDEY_WORKSPACE_ID` is non-empty and `TIDEY_SOCKET_PATH` names a live socket. It does not pass `--strict-mcp-config`, alter the user's persistent MCP or settings files, or auto-approve the browser tools; Claude Code's normal permission flow remains in effect.
+
+The adapter speaks newline-delimited MCP JSON-RPC over stdin/stdout and uses one Tidey socket connection for its lifetime. That connection is the ownership boundary for the agent session.
 
 ## Verification matrix
 
@@ -100,7 +109,7 @@ The adapter speaks newline-delimited MCP JSON-RPC over stdin/stdout and uses one
 - WebKit tests cover snapshot, click, fill, type, stale references, waits, screenshots, and attachment/non-displayable response policy on an unattached engine
 - controller tests cover hidden creation, same-engine presentation, popups, command routing, cleanup, and navigation admission
 - socket tests cover workspace/session binding, async responses, and disconnect cleanup
-- MCP tests cover initialization, exact tool inventory, call forwarding, workspace inheritance, error mapping, missing environment, and generated Codex profile registration
+- MCP and wrapper tests cover initialization, exact tool inventory, agent-neutral descriptions, call forwarding, workspace inheritance, error mapping, missing environment, generated Codex profile registration, and Claude's exact inline config argument
 - the navigation-gate suite covers global, per-origin, fairness, and bounded-queue behavior
 
 ## Non-goals for v1
@@ -110,4 +119,4 @@ The adapter speaks newline-delimited MCP JSON-RPC over stdin/stdout and uses one
 - arbitrary JavaScript evaluation
 - non-HTTP(S) navigation
 - remote/cloud MCP transport
-- assuming implementation details of the Codex desktop app
+- assuming implementation details of the Codex desktop app or Claude Desktop
