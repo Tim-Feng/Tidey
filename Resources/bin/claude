@@ -27,6 +27,17 @@ json_escape() {
     printf '%s' "$s"
 }
 
+build_tidey_browser_mcp_json() {
+    local adapter_path="$1"
+    local socket_path="$2"
+    local workspace_id="$3"
+
+    printf '{"mcpServers":{"tidey_browser":{"type":"stdio","command":"%s","args":[],"env":{"TIDEY_SOCKET_PATH":"%s","TIDEY_WORKSPACE_ID":"%s"}}}}' \
+        "$(json_escape "$adapter_path")" \
+        "$(json_escape "$socket_path")" \
+        "$(json_escape "$workspace_id")"
+}
+
 tmux_pane_id_from_env() {
     if [[ -n "${TMUX_PANE:-}" ]]; then
         printf '%s' "$TMUX_PANE"
@@ -364,4 +375,12 @@ cleanup() {
 
 trap cleanup EXIT
 
-"$REAL_CLAUDE" --settings "$HOOKS_JSON" "$@"
+if [[ -n "${TIDEY_WORKSPACE_ID:-}" && -S "${TIDEY_SOCKET_PATH:-}" ]]; then
+    TIDEY_BROWSER_MCP_JSON="$(build_tidey_browser_mcp_json \
+        "$HOOK_DIR/tidey-browser-mcp" \
+        "$TIDEY_SOCKET_PATH" \
+        "$TIDEY_WORKSPACE_ID")"
+    "$REAL_CLAUDE" --settings "$HOOKS_JSON" --mcp-config "$TIDEY_BROWSER_MCP_JSON" "$@"
+else
+    "$REAL_CLAUDE" --settings "$HOOKS_JSON" "$@"
+fi

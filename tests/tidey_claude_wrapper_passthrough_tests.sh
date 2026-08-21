@@ -169,4 +169,53 @@ done
 [[ "$claude_args" == *" interactive-sentinel" ]] ||
     fail "interactive invocation did not preserve the original argument"
 
+mcp_flag_count="$(grep -c -x -- '--mcp-config' "$real_claude_log" || true)"
+[[ "$mcp_flag_count" == "1" ]] ||
+    fail "interactive invocation did not inject exactly one --mcp-config flag"
+mcp_flag_line="$(grep -n -x -- '--mcp-config' "$real_claude_log" | cut -d: -f1)"
+mcp_config="$(sed -n "$((mcp_flag_line + 1))p" "$real_claude_log")"
+[[ -n "$mcp_config" ]] ||
+    fail "interactive invocation did not pass the MCP JSON as the next argv item"
+
+python3 - "$mcp_config" "$SOCKET_PATH" "$(dirname "$WRAPPER")/tidey-browser-mcp" <<'PY' ||
+import json
+import sys
+
+config = json.loads(sys.argv[1])
+server = config["mcpServers"]["tidey_browser"]
+assert server == {
+    "type": "stdio",
+    "command": sys.argv[3],
+    "args": [],
+    "env": {
+        "TIDEY_SOCKET_PATH": sys.argv[2],
+        "TIDEY_WORKSPACE_ID": "workspace-delayed",
+    },
+}
+PY
+    fail "interactive invocation passed an invalid Tidey Browser MCP config"
+
+if grep -q -x -- '--strict-mcp-config' "$real_claude_log"; then
+    fail "interactive invocation unexpectedly isolated Claude from other MCP configs"
+fi
+
+# A live Tidey socket alone is insufficient. Without a workspace identity,
+# Claude still gets Tidey's hooks but must not get a browser server that would
+# fail closed on every operation.
+no_workspace_log="$TMP_ROOT/no-workspace.real-claude.log"
+env -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID -u TMUX -u TMUX_PANE \
+    HOME="$TMP_ROOT/home-no-workspace" \
+    PATH="$REAL_BIN:/usr/bin:/bin" \
+    TIDEY_SOCKET_PATH="$SOCKET_PATH" \
+    TIDEY_TEST_REAL_CLAUDE_LOG="$no_workspace_log" \
+    "$WRAPPER" no-workspace-sentinel
+
+grep -q -x -- '--settings' "$no_workspace_log" ||
+    fail "live-socket invocation without a workspace lost Tidey's hooks"
+if grep -q -x -- '--mcp-config' "$no_workspace_log"; then
+    fail "live-socket invocation without a workspace injected browser MCP"
+fi
+grep -q -x -- 'no-workspace-sentinel' "$no_workspace_log" ||
+    fail "live-socket invocation without a workspace lost the original argument"
+
 echo "PASS"
