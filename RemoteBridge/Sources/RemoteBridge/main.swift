@@ -30,6 +30,7 @@ let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
                                                              sidebarMessageSender: { command in
                                                                  try socketClient.send(command: command)
                                                              })
+let registryRuntimeSyncer = AgentSessionRuntimeSyncGroup(syncers: [codexRuntimeSyncer])
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   socketClient: socketClient,
                                                   ordinaryTmuxCarrierIdentityResolver: { record in
@@ -38,7 +39,7 @@ let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   livePanelListProjector: { result in
                                                       ordinaryTmuxProjectionContext.projector.projectPanelListResult(result)
                                                   },
-                                                  runtimeSyncer: codexRuntimeSyncer)
+                                                  runtimeSyncer: registryRuntimeSyncer)
 codexRuntimeSyncer.activeThreadHandler = { [weak registryMonitor] sessionID, threadID in
     registryMonitor?.appServerActiveThreadDidChange(sessionID: sessionID, threadID: threadID)
 }
