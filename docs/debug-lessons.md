@@ -90,6 +90,11 @@
   - 症狀是 automation `click`／`navigate` 都回成功、頁面仍停在原處，但 Downloads 沒有檔案；這只證明操作已送進 WebKit，沒有證明 response 已被任何 download owner 接手
   - 新增 browser engine 時要逐項 audit navigation action policy、navigation response policy、兩種 `didBecome WKDownload` callback、下載物件 retention 與完成後 quarantine；response 判斷要抽成新舊 engine 共用 policy，避免兩邊 MIME 清單 drift
   - 補證：Blender Studio `wing_it-caches.zip` 實機驗收（2026-08-21）
+- `diskutil info` 的查詢目標必須是 volume／device，不是 archive 子目錄
+  - 外接碟本身可讀寫、UUID 也正確時，若 scoped transfer 仍在第一個 byte 前回 `destination unsafe or unavailable`，先檢查是否把 nested archive root 直接交給 `diskutil info -plist`
+  - 用 `URLResourceKey.volumeURLKey` 先解析 containing volume，再把該 volume URL 交給 disk inspector；archive root realpath 與 root-relative destination 的驗證仍保留原路徑
+  - regression 要直接斷言 disk inspector 收到 containing volume，live acceptance 另用真正的 nested external archive root 驗第一個 byte，不能只在 volume root 或 internal temp directory 測
+  - 補證：`6aeb88552` `75886d266` 與 Blender Studio `wing_it-caches.zip` external first-byte probe（2026-08-21）
 - `WKWebView` 不是普通 sibling view
   - 它有自己的 compositing layer，`NSView` sibling 的 z-order 和 `layer.zPosition` 不足以保證蓋在它上面
   - 需要真正的 panel-level overlay，或更高層的 overlay 容器
