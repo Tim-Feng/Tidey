@@ -137,6 +137,28 @@ extension TideyBrowserEngine: WKNavigationDelegate {
         automationNavigationEpoch += 1
         notifyStateDidChange()
     }
+
+    func webView(_ webView: WKWebView,
+                 decidePolicyFor navigationResponse: WKNavigationResponse,
+                 decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
+        if TideyBrowserDownloadPolicy.shouldDownload(navigationResponse.response) {
+            decisionHandler(.download)
+            return
+        }
+        decisionHandler(.allow)
+    }
+
+    func webView(_ webView: WKWebView,
+                 navigationAction: WKNavigationAction,
+                 didBecome download: WKDownload) {
+        TideyBrowserDownloadHandler.start(download, sourceURL: navigationAction.request.url)
+    }
+
+    func webView(_ webView: WKWebView,
+                 navigationResponse: WKNavigationResponse,
+                 didBecome download: WKDownload) {
+        TideyBrowserDownloadHandler.start(download, sourceURL: navigationResponse.response.url)
+    }
 }
 
 extension TideyBrowserEngine: WKUIDelegate {

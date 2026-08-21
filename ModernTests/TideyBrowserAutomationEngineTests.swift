@@ -4,6 +4,35 @@ import WebKit
 
 @MainActor
 final class TideyBrowserAutomationEngineTests: XCTestCase {
+    func testDownloadPolicyRecognizesAttachmentsAndNonDisplayableContent() throws {
+        let url = try XCTUnwrap(URL(string: "https://fixture.invalid/file"))
+        let attachment = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: [
+                "Content-Disposition": "attachment; filename=fixture.html",
+                "Content-Type": "text/html",
+            ]
+        ))
+        let archive = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "application/zip"]
+        ))
+        let document = try XCTUnwrap(HTTPURLResponse(
+            url: url,
+            statusCode: 200,
+            httpVersion: nil,
+            headerFields: ["Content-Type": "text/html; charset=utf-8"]
+        ))
+
+        XCTAssertTrue(TideyBrowserDownloadPolicy.shouldDownload(attachment))
+        XCTAssertTrue(TideyBrowserDownloadPolicy.shouldDownload(archive))
+        XCTAssertFalse(TideyBrowserDownloadPolicy.shouldDownload(document))
+    }
+
     func testNavigationEpochAndSnapshotSeam() throws {
         let engine = TideyBrowserEngine(configuration: WKWebViewConfiguration())
 

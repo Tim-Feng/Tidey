@@ -8,6 +8,63 @@
 import Foundation
 @preconcurrency import WebKit
 
+enum TideyBrowserDownloadPolicy {
+    private static let displayableContentTypes = [
+        "text/html",
+        "text/plain",
+        "text/css",
+        "text/javascript",
+        "application/javascript",
+        "application/json",
+        "application/xml",
+        "text/xml",
+        "image/png",
+        "image/jpeg",
+        "image/jpg",
+        "image/gif",
+        "image/svg+xml",
+        "image/webp",
+        "application/pdf",
+        "video/mp4",
+        "video/webm",
+        "audio/mp3",
+        "audio/mpeg",
+        "audio/wav",
+        "audio/webm",
+    ]
+
+    static func shouldDownload(_ response: URLResponse) -> Bool {
+        guard let response = response as? HTTPURLResponse else {
+            return false
+        }
+        let contentDisposition = response.value(forHTTPHeaderField: "Content-Disposition") ?? ""
+        if contentDisposition.lowercased().contains("attachment") {
+            return true
+        }
+        let contentType = response.mimeType?.lowercased() ?? ""
+        guard !contentType.isEmpty else {
+            return false
+        }
+        return !displayableContentTypes.contains { contentType.hasPrefix($0) }
+    }
+}
+
+enum TideyBrowserDownloadHandler {
+    static func start(_ download: WKDownload, sourceURL: URL?) {
+        guard let sourceURL else {
+            return
+        }
+        let suggestedFilename = sourceURL.lastPathComponent.isEmpty
+            ? "download"
+            : sourceURL.lastPathComponent
+        iTermBrowserDownload(
+            wkDownload: download,
+            sourceURL: sourceURL,
+            suggestedFilename: suggestedFilename
+        ).download()
+    }
+}
+
 @available(macOS 11.3, *)
 @objc(iTermBrowserDownload)
 class iTermBrowserDownload: TransferrableFile {

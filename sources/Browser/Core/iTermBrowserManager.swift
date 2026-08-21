@@ -1421,22 +1421,8 @@ extension iTermBrowserManager: WKNavigationDelegate {
                  decidePolicyFor navigationResponse: WKNavigationResponse,
                  decisionHandler: @escaping (WKNavigationResponsePolicy) -> Void) {
 
-        // Check if this should be downloaded instead of displayed
-        guard let response = navigationResponse.response as? HTTPURLResponse else {
-            decisionHandler(.allow)
-            return
-        }
-
-        // Check content disposition and content type for download triggers
-        let contentDisposition = response.allHeaderFields["Content-Disposition"] as? String ?? ""
-        let contentType = response.mimeType ?? ""
-
-        // Download if:
-        // 1. Content-Disposition header indicates attachment
-        // 2. Content type is not something WKWebView can display well
         if #available(macOS 11.3, *) {
-            if contentDisposition.lowercased().contains("attachment") ||
-                !canWebViewDisplay(contentType: contentType) {
+            if TideyBrowserDownloadPolicy.shouldDownload(navigationResponse.response) {
                 decisionHandler(.download)
                 return
             }
@@ -1449,68 +1435,14 @@ extension iTermBrowserManager: WKNavigationDelegate {
     func webView(_ webView: WKWebView,
                  navigationAction: WKNavigationAction,
                  didBecome download: WKDownload) {
-        handleDownload(download, sourceURL: navigationAction.request.url)
+        TideyBrowserDownloadHandler.start(download, sourceURL: navigationAction.request.url)
     }
 
     @available(macOS 11.3, *)
     func webView(_ webView: WKWebView,
                  navigationResponse: WKNavigationResponse,
                  didBecome download: WKDownload) {
-        handleDownload(download, sourceURL: navigationResponse.response.url)
-    }
-
-    @available(macOS 11.3, *)
-    private func canWebViewDisplay(contentType: String) -> Bool {
-        let lowerContentType = contentType.lowercased()
-
-        // Content types that WKWebView can display well
-        let displayableTypes = [
-            "text/html",
-            "text/plain",
-            "text/css",
-            "text/javascript",
-            "application/javascript",
-            "application/json",
-            "application/xml",
-            "text/xml",
-            "image/png",
-            "image/jpeg",
-            "image/jpg",
-            "image/gif",
-            "image/svg+xml",
-            "image/webp",
-            "application/pdf",
-            "video/mp4",
-            "video/webm",
-            "audio/mp3",
-            "audio/mpeg",
-            "audio/wav",
-            "audio/webm"
-        ]
-
-        // If no content type specified, assume it can be displayed (let WKWebView decide)
-        if lowerContentType.isEmpty {
-            return true
-        }
-
-        return displayableTypes.contains { lowerContentType.hasPrefix($0) }
-    }
-
-    @available(macOS 11.3, *)
-    private func handleDownload(_ download: WKDownload, sourceURL: URL?) {
-        guard let sourceURL = sourceURL else { return }
-
-        let suggestedFilename = sourceURL.lastPathComponent.isEmpty ?
-        "download" : sourceURL.lastPathComponent
-
-        let browserDownload = iTermBrowserDownload(
-            wkDownload: download,
-            sourceURL: sourceURL,
-            suggestedFilename: suggestedFilename
-        )
-
-        // Start the download (adds to FileTransferManager)
-        browserDownload.download()
+        TideyBrowserDownloadHandler.start(download, sourceURL: navigationResponse.response.url)
     }
 }
 

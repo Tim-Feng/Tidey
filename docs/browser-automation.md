@@ -67,6 +67,8 @@ Only HTTP and HTTPS URLs are accepted. There is no arbitrary-JavaScript operatio
 
 `snapshot` returns bounded page text and interactive elements. Element IDs are meaningful only with the returned `navigation_epoch`; any navigation commit invalidates prior references.
 
+The automation engine and the regular Browser share one response-download policy. A navigation or click whose HTTP response is an attachment, or whose content type is not displayable by WebKit, becomes a `WKDownload`. Tidey keeps the current page in place and hands the transfer to the existing Browser download pipeline, which chooses the Downloads destination and applies quarantine after completion.
+
 Waits are capped at 30 seconds. Snapshots are capped at 500 interactive elements and 50,000 text characters. The in-memory action log is capped at 200 entries and never records typed or filled text.
 
 ## Capacity and fairness
@@ -95,7 +97,7 @@ The adapter speaks newline-delimited MCP JSON-RPC over stdin/stdout and uses one
 
 - pure state tests cover private ownership, visible claims, marks, disconnect cleanup, reclaim, TTL, workspace mismatch, and tab limits
 - protocol tests cover every command plus malformed input, URL schemes, wait bounds, and stable error codes
-- WebKit tests cover snapshot, click, fill, type, stale references, waits, and screenshots on an unattached engine
+- WebKit tests cover snapshot, click, fill, type, stale references, waits, screenshots, and attachment/non-displayable response policy on an unattached engine
 - controller tests cover hidden creation, same-engine presentation, popups, command routing, cleanup, and navigation admission
 - socket tests cover workspace/session binding, async responses, and disconnect cleanup
 - MCP tests cover initialization, exact tool inventory, call forwarding, workspace inheritance, error mapping, missing environment, and generated Codex profile registration
