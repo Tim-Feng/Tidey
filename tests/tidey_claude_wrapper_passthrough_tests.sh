@@ -67,7 +67,7 @@ SH
 cat > "$REAL_BIN/claude" <<'SH'
 #!/usr/bin/env bash
 set -euo pipefail
-printf '%s\n' "$*" > "${TIDEY_TEST_REAL_CLAUDE_LOG:?}"
+printf '%s\n' "$@" > "${TIDEY_TEST_REAL_CLAUDE_LOG:?}"
 SH
 
 chmod +x "$MOCK_BIN/tmux" "$REAL_BIN/claude"
@@ -101,7 +101,9 @@ for subcommand in mcp config api-key; do
         TIDEY_TMUX_IDENTITY_WAIT_INTERVAL=0 \
         "$WRAPPER" "$subcommand" sentinel
 
-    [[ "$(<"$real_claude_log")" == "$subcommand sentinel" ]] ||
+    expected_args="$TMP_ROOT/$subcommand.expected-args"
+    printf '%s\n' "$subcommand" sentinel > "$expected_args"
+    cmp -s "$expected_args" "$real_claude_log" ||
         fail "$subcommand did not pass through unchanged"
     [[ ! -e "$wait_marker" ]] ||
         fail "$subcommand entered the late pane-identity wait"
@@ -139,7 +141,7 @@ env -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID \
 [[ "$(<"$identity_count_file")" -gt 1 ]] ||
     fail "interactive invocation did not retry pane identity hydration"
 
-claude_args="$(<"$real_claude_log")"
+claude_args="$(paste -sd ' ' "$real_claude_log")"
 [[ "$claude_args" == --settings\ * ]] ||
     fail "interactive invocation did not inject --settings"
 hook_epoch="$(printf '%s\n' "$claude_args" | grep -Eo '[0-9]+-[0-9]{10,}' | head -n 1 || true)"
