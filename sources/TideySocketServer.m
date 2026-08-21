@@ -8,6 +8,7 @@
 #import "iTermController.h"
 #import "iTermSocket.h"
 #import "iTermSocketAddress.h"
+#import "iTerm2SharedARC-Swift.h"
 
 #include <sys/stat.h>
 #include <sys/socket.h>
@@ -16,6 +17,18 @@
 #include <unistd.h>
 
 static NSString *gTideyActiveSocketPath = nil;
+
+static dispatch_queue_t TideyRuntimeTmuxServerPreparationQueue(void) {
+    static dispatch_queue_t queue;
+    static dispatch_once_t onceToken;
+    dispatch_once(&onceToken, ^{
+        queue = dispatch_queue_create(
+            "com.tidey.runtime-tmux-server-preparation",
+            DISPATCH_QUEUE_SERIAL
+        );
+    });
+    return queue;
+}
 
 static NSString *TideyDefaultSocketPath(void) {
     return [[TideySocketServer socketDirectory] stringByAppendingPathComponent:@"tidey.sock"];
@@ -145,6 +158,8 @@ typedef void (^TideySocketBrowserAutomationHandler)(
     NSDictionary *parameters,
     NSString *sessionID,
     void (^completion)(NSDictionary * _Nullable result, NSDictionary * _Nullable error));
+typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandler)(
+    NSString *serverIdentifier);
 
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
@@ -167,6 +182,9 @@ typedef void (^TideySocketBrowserAutomationHandler)(
                                                sessionID:(NSString *)sessionID
                                                  handler:(TideySocketBrowserAutomationHandler)handler
                                               completion:(void (^)(NSDictionary *response))completion;
++ (NSDictionary *)tideyRuntimeTmuxServerPreparationResponseForRequestID:(NSString *)requestID
+                                                                  source:(NSDictionary *)source
+                                                                 handler:(TideySocketRuntimeTmuxServerPreparationHandler)handler;
 @end
 
 @implementation TideySocketServer
@@ -593,6 +611,52 @@ typedef void (^TideySocketBrowserAutomationHandler)(
             return;
         }
         [self sendSuccessResponseForRequestID:requestID result:result onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"prepare_isolated_tmux_server"]) {
+        NSString *supportDirectory = [[self class] socketDirectory];
+        NSString *homeDirectory = NSHomeDirectory();
+        NSString *binDirectory = [[[NSBundle mainBundle] resourcePath]
+            stringByAppendingPathComponent:@"bin"] ?: @"";
+        TideyRuntimeTaskEnvironmentBuilder *environmentBuilder =
+            [[TideyRuntimeTaskEnvironmentBuilder alloc] init];
+        NSDictionary<NSString *, NSString *> *environment =
+            [environmentBuilder
+                environmentWithParentEnvironment:
+                    [NSProcessInfo processInfo].environment
+                canonicalSocketPath:[[self class] socketPath] ?: @""
+                canonicalBinDirectory:binDirectory];
+        TideyRuntimeTmuxExecutableLocator *locator =
+            [[TideyRuntimeTmuxExecutableLocator alloc] init];
+        NSString *tmuxExecutable = [locator
+            executablePathWithEnvironmentPath:environment[@"PATH"]
+            fallbackPaths:@[
+                @"/opt/homebrew/bin/tmux",
+                @"/usr/local/bin/tmux",
+                @"/usr/bin/tmux",
+            ]] ?: @"";
+        dispatch_async(TideyRuntimeTmuxServerPreparationQueue(), ^{
+            NSDictionary *response = [[self class]
+                tideyRuntimeTmuxServerPreparationResponseForRequestID:requestID
+                source:source
+                handler:^NSDictionary *(NSString *serverIdentifier) {
+                    TideyRuntimeTmuxServerPreparer *preparer =
+                        [[TideyRuntimeTmuxServerPreparer alloc] init];
+                    TideyRuntimeTmuxServerPreparationResult *result =
+                        [preparer
+                            prepareWithServerIdentifier:serverIdentifier
+                            supportDirectory:supportDirectory
+                            homeDirectory:homeDirectory
+                            tmuxExecutable:tmuxExecutable
+                            environment:environment
+                            timeout:10];
+                    return [result responseDictionary];
+                }];
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [connection sendJSONObject:response];
+            });
+        });
         return;
     }
 
@@ -1467,6 +1531,34 @@ typedef void (^TideySocketBrowserAutomationHandler)(
         }
     }
     return filtered;
+}
+
++ (NSDictionary *)tideyRuntimeTmuxServerPreparationResponseForRequestID:(NSString *)requestID
+                                                                  source:(NSDictionary *)source
+                                                                 handler:(TideySocketRuntimeTmuxServerPreparationHandler)handler {
+    if (requestID.length == 0) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"invalid_request"
+                                            message:@"Missing request id."];
+    }
+    NSString *serverIdentifier = TideySocketStringParam(source, @"server_id");
+    if (serverIdentifier.length == 0) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"invalid_params"
+                                            message:@"prepare_isolated_tmux_server requires server_id."];
+    }
+    NSDictionary *outcome = handler ? handler(serverIdentifier) : nil;
+    if (![outcome[@"prepared"] boolValue]) {
+        NSString *errorCode =
+            [outcome[@"error_code"] isKindOfClass:[NSString class]]
+                ? outcome[@"error_code"]
+                : @"preparation_failed";
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:errorCode
+                                            message:@"The isolated tmux server could not be prepared."];
+    }
+    return [self tideySuccessResponseForRequestID:requestID
+                                           result:outcome];
 }
 
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message

@@ -137,6 +137,146 @@ final class TideyRuntimeTmuxExecutableLocatorTests: XCTestCase {
     }
 }
 
+final class TideyRuntimeTmuxServerPreparerTests: XCTestCase {
+    func testPlanDerivesBoundedSocketAndFixedCanaryTopology() {
+        let plan = TideyRuntimeTmuxServerPreparationPlanBuilder().plan(
+            serverIdentifier: "tcc-20260821",
+            supportDirectory: "/Users/test/Library/Application Support/Tidey",
+            homeDirectory: "/Users/test"
+        )
+
+        XCTAssertEqual(
+            plan?.runtimeDirectory,
+            "/Users/test/Library/Application Support/Tidey/Runtime"
+        )
+        XCTAssertEqual(
+            plan?.socketPath,
+            "/Users/test/Library/Application Support/Tidey/Runtime/" +
+                "tmux-tcc-20260821.sock"
+        )
+        XCTAssertEqual(plan?.sessionName, "tidey-runtime-canary")
+        XCTAssertEqual(
+            plan?.newSessionArguments,
+            [
+                "-S",
+                "/Users/test/Library/Application Support/Tidey/Runtime/" +
+                    "tmux-tcc-20260821.sock",
+                "new-session", "-d", "-P", "-F",
+                "#{pid}|#{session_name}|#{window_index}",
+                "-s", "tidey-runtime-canary",
+                "-n", "canary",
+                "-c", "/Users/test",
+            ]
+        )
+        XCTAssertEqual(
+            plan?.exactSessionProbeArguments,
+            [
+                "-S",
+                "/Users/test/Library/Application Support/Tidey/Runtime/" +
+                    "tmux-tcc-20260821.sock",
+                "has-session", "-t", "=tidey-runtime-canary",
+            ]
+        )
+    }
+
+    func testPlanRejectsUnsafeIdentifiersAndPaths() {
+        let builder = TideyRuntimeTmuxServerPreparationPlanBuilder()
+        for identifier in [
+            "",
+            "../escape",
+            "contains/slash",
+            "contains space",
+            ".starts-with-dot",
+            String(repeating: "a", count: 49),
+        ] {
+            XCTAssertNil(
+                builder.plan(
+                    serverIdentifier: identifier,
+                    supportDirectory: "/Users/test/Tidey",
+                    homeDirectory: "/Users/test"
+                ),
+                "Unexpectedly accepted: \(identifier)"
+            )
+        }
+        XCTAssertNil(
+            builder.plan(
+                serverIdentifier: "valid-id",
+                supportDirectory: "relative/support",
+                homeDirectory: "/Users/test"
+            )
+        )
+        XCTAssertNil(
+            builder.plan(
+                serverIdentifier: "valid-id",
+                supportDirectory: "/Users/test/Tidey",
+                homeDirectory: "relative/home"
+            )
+        )
+    }
+
+    func testPreparerCreatesAndReusesOneIsolatedServer() throws {
+        let tmuxExecutable = TideyRuntimeTmuxExecutableLocator()
+            .executablePath(
+                environmentPath: ProcessInfo.processInfo.environment["PATH"]
+            )
+        guard let tmuxExecutable else {
+            throw XCTSkip("tmux is unavailable")
+        }
+        let suffix = UUID().uuidString.prefix(8).lowercased()
+        let supportDirectory = "/tmp/tidey-prep-\(suffix)"
+        let serverIdentifier = "test-\(suffix)"
+        let environment = [
+            "HOME": "/tmp",
+            "PATH": "/usr/bin:/bin:/usr/sbin:/sbin",
+            "SHELL": "/bin/zsh",
+        ]
+        let plan = TideyRuntimeTmuxServerPreparationPlanBuilder().plan(
+            serverIdentifier: serverIdentifier,
+            supportDirectory: supportDirectory,
+            homeDirectory: "/tmp"
+        )!
+        let runner = TideyRuntimeTaskRunner()
+        defer {
+            _ = runner.run(
+                executable: tmuxExecutable,
+                arguments: ["-S", plan.socketPath, "kill-server"],
+                environment: environment,
+                timeout: 2
+            )
+            try? FileManager.default.removeItem(
+                atPath: supportDirectory
+            )
+        }
+
+        let preparer = TideyRuntimeTmuxServerPreparer()
+        let first = preparer.prepare(
+            serverIdentifier: serverIdentifier,
+            supportDirectory: supportDirectory,
+            homeDirectory: "/tmp",
+            tmuxExecutable: tmuxExecutable,
+            environment: environment,
+            timeout: 3
+        )
+        let second = preparer.prepare(
+            serverIdentifier: serverIdentifier,
+            supportDirectory: supportDirectory,
+            homeDirectory: "/tmp",
+            tmuxExecutable: tmuxExecutable,
+            environment: environment,
+            timeout: 3
+        )
+
+        XCTAssertTrue(first.succeeded, first.errorCode ?? "")
+        XCTAssertTrue(first.created)
+        XCTAssertGreaterThan(first.serverPID, 1)
+        XCTAssertEqual(first.socketPath, plan.socketPath)
+        XCTAssertEqual(first.sessionName, plan.sessionName)
+        XCTAssertTrue(second.succeeded, second.errorCode ?? "")
+        XCTAssertFalse(second.created)
+        XCTAssertEqual(second.serverPID, first.serverPID)
+    }
+}
+
 final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
     private let controllerEnvironmentUnsetCommand =
         "unset NO_COLOR CODEX_CI CODEX_THREAD_ID " +

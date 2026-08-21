@@ -28,6 +28,8 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
     NSString * _Nullable token,
     NSInteger columns,
     NSInteger rows);
+typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandler)(
+    NSString *serverIdentifier);
 
 @interface TideySocketServer (Testing)
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
@@ -38,6 +40,9 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
                                                         action:(NSString *)action
                                                         source:(NSDictionary *)source
                                                        handler:(TideySocketNativeTerminalSizeHandler)handler;
++ (NSDictionary *)tideyRuntimeTmuxServerPreparationResponseForRequestID:(NSString *)requestID
+                                                                  source:(NSDictionary *)source
+                                                                 handler:(TideySocketRuntimeTmuxServerPreparationHandler)handler;
 + (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                  filteredToWindowForListWorkspacesSource:(NSDictionary *)source;
 - (void)acceptFileDescriptor:(int)fd;
@@ -655,6 +660,61 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertEqualObjects(response[@"id"], @"req-1");
     XCTAssertEqualObjects(response[@"ok"], @YES);
     XCTAssertEqualObjects(response[@"result"][@"pong"], @YES);
+}
+
+- (void)testRuntimeTmuxServerPreparationRequiresServerIdentifier {
+    __block BOOL invoked = NO;
+    NSDictionary *response = [TideySocketServer
+        tideyRuntimeTmuxServerPreparationResponseForRequestID:@"prepare-1"
+        source:@{}
+        handler:^NSDictionary *(NSString *serverIdentifier) {
+            invoked = YES;
+            return @{};
+        }];
+
+    XCTAssertFalse(invoked);
+    XCTAssertEqualObjects(response[@"ok"], @NO);
+    XCTAssertEqualObjects(response[@"error"][@"code"], @"invalid_params");
+}
+
+- (void)testRuntimeTmuxServerPreparationReturnsBoundedOutcome {
+    __block NSString *receivedIdentifier = nil;
+    NSDictionary *response = [TideySocketServer
+        tideyRuntimeTmuxServerPreparationResponseForRequestID:@"prepare-2"
+        source:@{ @"server_id": @"tcc-20260821" }
+        handler:^NSDictionary *(NSString *serverIdentifier) {
+            receivedIdentifier = serverIdentifier;
+            return @{
+                @"prepared": @YES,
+                @"created": @YES,
+                @"socket_path": @"/Users/test/Tidey/Runtime/tmux.sock",
+                @"canary_session": @"tidey-runtime-canary",
+                @"server_pid": @42,
+            };
+        }];
+
+    XCTAssertEqualObjects(receivedIdentifier, @"tcc-20260821");
+    XCTAssertEqualObjects(response[@"ok"], @YES);
+    XCTAssertEqualObjects(response[@"result"][@"prepared"], @YES);
+    XCTAssertEqualObjects(response[@"result"][@"server_pid"], @42);
+}
+
+- (void)testRuntimeTmuxServerPreparationMapsFailureCode {
+    NSDictionary *response = [TideySocketServer
+        tideyRuntimeTmuxServerPreparationResponseForRequestID:@"prepare-3"
+        source:@{ @"server_id": @"../escape" }
+        handler:^NSDictionary *(NSString *serverIdentifier) {
+            return @{
+                @"prepared": @NO,
+                @"error_code": @"invalid_server_identifier",
+            };
+        }];
+
+    XCTAssertEqualObjects(response[@"ok"], @NO);
+    XCTAssertEqualObjects(
+        response[@"error"][@"code"],
+        @"invalid_server_identifier"
+    );
 }
 
 - (void)testListWorkspacesReturnsWorkspacesArray {

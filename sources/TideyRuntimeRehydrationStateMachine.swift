@@ -22,6 +22,297 @@ final class TideyRuntimeTmuxExecutableLocator: NSObject {
     }
 }
 
+@objc(TideyRuntimeTmuxServerPreparationPlan)
+@objcMembers
+final class TideyRuntimeTmuxServerPreparationPlan: NSObject {
+    let runtimeDirectory: String
+    let socketPath: String
+    let sessionName: String
+    let newSessionArguments: [String]
+    let exactSessionProbeArguments: [String]
+    let serverPIDProbeArguments: [String]
+
+    init(
+        runtimeDirectory: String,
+        socketPath: String,
+        sessionName: String,
+        newSessionArguments: [String],
+        exactSessionProbeArguments: [String],
+        serverPIDProbeArguments: [String]
+    ) {
+        self.runtimeDirectory = runtimeDirectory
+        self.socketPath = socketPath
+        self.sessionName = sessionName
+        self.newSessionArguments = newSessionArguments
+        self.exactSessionProbeArguments = exactSessionProbeArguments
+        self.serverPIDProbeArguments = serverPIDProbeArguments
+    }
+}
+
+@objc(TideyRuntimeTmuxServerPreparationPlanBuilder)
+@objcMembers
+final class TideyRuntimeTmuxServerPreparationPlanBuilder: NSObject {
+    private static let maximumIdentifierBytes = 48
+    private static let maximumUnixSocketPathBytes = 103
+    private static let allowedIdentifierScalars = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyz" +
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789._-"
+    )
+    private static let leadingIdentifierScalars = CharacterSet(
+        charactersIn: "abcdefghijklmnopqrstuvwxyz" +
+            "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789"
+    )
+
+    func plan(
+        serverIdentifier: String,
+        supportDirectory: String,
+        homeDirectory: String
+    ) -> TideyRuntimeTmuxServerPreparationPlan? {
+        guard isValidIdentifier(serverIdentifier),
+              supportDirectory.hasPrefix("/"),
+              homeDirectory.hasPrefix("/") else {
+            return nil
+        }
+        let canonicalSupportDirectory = URL(
+            fileURLWithPath: supportDirectory,
+            isDirectory: true
+        ).standardizedFileURL.path
+        let canonicalHomeDirectory = URL(
+            fileURLWithPath: homeDirectory,
+            isDirectory: true
+        ).standardizedFileURL.path
+        let runtimeDirectory = URL(
+            fileURLWithPath: canonicalSupportDirectory,
+            isDirectory: true
+        ).appendingPathComponent(
+            "Runtime",
+            isDirectory: true
+        ).path
+        let socketPath = URL(
+            fileURLWithPath: runtimeDirectory,
+            isDirectory: true
+        ).appendingPathComponent(
+            "tmux-\(serverIdentifier).sock",
+            isDirectory: false
+        ).path
+        guard socketPath.utf8.count <= Self.maximumUnixSocketPathBytes else {
+            return nil
+        }
+
+        let sessionName = "tidey-runtime-canary"
+        let socketArguments = ["-S", socketPath]
+        let exactTarget = "=\(sessionName)"
+        return TideyRuntimeTmuxServerPreparationPlan(
+            runtimeDirectory: runtimeDirectory,
+            socketPath: socketPath,
+            sessionName: sessionName,
+            newSessionArguments: socketArguments + [
+                "new-session", "-d", "-P", "-F",
+                "#{pid}|#{session_name}|#{window_index}",
+                "-s", sessionName,
+                "-n", "canary",
+                "-c", canonicalHomeDirectory,
+            ],
+            exactSessionProbeArguments: socketArguments + [
+                "has-session", "-t", exactTarget,
+            ],
+            serverPIDProbeArguments: socketArguments + [
+                "display-message", "-p", "-t", exactTarget, "#{pid}",
+            ]
+        )
+    }
+
+    private func isValidIdentifier(_ identifier: String) -> Bool {
+        guard !identifier.isEmpty,
+              identifier.utf8.count <= Self.maximumIdentifierBytes,
+              let first = identifier.unicodeScalars.first,
+              Self.leadingIdentifierScalars.contains(first) else {
+            return false
+        }
+        return identifier.unicodeScalars.allSatisfy {
+            Self.allowedIdentifierScalars.contains($0)
+        }
+    }
+}
+
+@objc(TideyRuntimeTmuxServerPreparationResult)
+@objcMembers
+final class TideyRuntimeTmuxServerPreparationResult: NSObject {
+    let succeeded: Bool
+    let created: Bool
+    let socketPath: String
+    let sessionName: String
+    let serverPID: Int32
+    let errorCode: String?
+
+    init(
+        succeeded: Bool,
+        created: Bool,
+        socketPath: String,
+        sessionName: String,
+        serverPID: Int32,
+        errorCode: String?
+    ) {
+        self.succeeded = succeeded
+        self.created = created
+        self.socketPath = socketPath
+        self.sessionName = sessionName
+        self.serverPID = serverPID
+        self.errorCode = errorCode
+    }
+
+    func responseDictionary() -> [String: Any] {
+        if succeeded {
+            return [
+                "prepared": true,
+                "created": created,
+                "socket_path": socketPath,
+                "canary_session": sessionName,
+                "server_pid": serverPID,
+            ]
+        }
+        return [
+            "prepared": false,
+            "error_code": errorCode ?? "preparation_failed",
+        ]
+    }
+}
+
+@objc(TideyRuntimeTmuxServerPreparer)
+@objcMembers
+final class TideyRuntimeTmuxServerPreparer: NSObject {
+    func prepare(
+        serverIdentifier: String,
+        supportDirectory: String,
+        homeDirectory: String,
+        tmuxExecutable: String,
+        environment: [String: String],
+        timeout: TimeInterval
+    ) -> TideyRuntimeTmuxServerPreparationResult {
+        guard let plan = TideyRuntimeTmuxServerPreparationPlanBuilder().plan(
+            serverIdentifier: serverIdentifier,
+            supportDirectory: supportDirectory,
+            homeDirectory: homeDirectory
+        ) else {
+            return failure(errorCode: "invalid_server_identifier")
+        }
+        guard tmuxExecutable.hasPrefix("/"),
+              FileManager.default.isExecutableFile(
+                atPath: tmuxExecutable
+              ),
+              timeout.isFinite,
+              timeout > 0 else {
+            return failure(
+                plan: plan,
+                errorCode: "tmux_unavailable"
+            )
+        }
+        guard prepareRuntimeDirectory(plan.runtimeDirectory) else {
+            return failure(
+                plan: plan,
+                errorCode: "runtime_directory_unavailable"
+            )
+        }
+
+        let runner = TideyRuntimeTaskRunner()
+        let socketExists = FileManager.default.fileExists(
+            atPath: plan.socketPath
+        )
+        var created = false
+        if !socketExists {
+            let creation = runner.run(
+                executable: tmuxExecutable,
+                arguments: plan.newSessionArguments,
+                environment: environment,
+                timeout: timeout
+            )
+            guard creation.succeeded else {
+                return failure(
+                    plan: plan,
+                    errorCode: "server_launch_failed"
+                )
+            }
+            created = true
+        }
+
+        let sessionProbe = runner.run(
+            executable: tmuxExecutable,
+            arguments: plan.exactSessionProbeArguments,
+            environment: environment,
+            timeout: timeout
+        )
+        guard sessionProbe.succeeded else {
+            return failure(
+                plan: plan,
+                errorCode: socketExists
+                    ? "socket_in_use"
+                    : "server_postcondition_failed"
+            )
+        }
+        let pidProbe = runner.run(
+            executable: tmuxExecutable,
+            arguments: plan.serverPIDProbeArguments,
+            environment: environment,
+            timeout: timeout
+        )
+        let pidText = pidProbe.standardOutput
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard pidProbe.succeeded,
+              let serverPID = Int32(pidText),
+              serverPID > 1 else {
+            return failure(
+                plan: plan,
+                errorCode: "server_identity_unavailable"
+            )
+        }
+        return TideyRuntimeTmuxServerPreparationResult(
+            succeeded: true,
+            created: created,
+            socketPath: plan.socketPath,
+            sessionName: plan.sessionName,
+            serverPID: serverPID,
+            errorCode: nil
+        )
+    }
+
+    private func prepareRuntimeDirectory(_ path: String) -> Bool {
+        do {
+            try FileManager.default.createDirectory(
+                atPath: path,
+                withIntermediateDirectories: true,
+                attributes: [.posixPermissions: 0o700]
+            )
+            let attributes = try FileManager.default.attributesOfItem(
+                atPath: path
+            )
+            guard attributes[.type] as? FileAttributeType == .typeDirectory else {
+                return false
+            }
+            try FileManager.default.setAttributes(
+                [.posixPermissions: 0o700],
+                ofItemAtPath: path
+            )
+            return true
+        } catch {
+            return false
+        }
+    }
+
+    private func failure(
+        plan: TideyRuntimeTmuxServerPreparationPlan? = nil,
+        errorCode: String
+    ) -> TideyRuntimeTmuxServerPreparationResult {
+        TideyRuntimeTmuxServerPreparationResult(
+            succeeded: false,
+            created: false,
+            socketPath: plan?.socketPath ?? "",
+            sessionName: plan?.sessionName ?? "",
+            serverPID: 0,
+            errorCode: errorCode
+        )
+    }
+}
+
 @objc(TideyRuntimeTaskEnvironmentBuilder)
 @objcMembers
 final class TideyRuntimeTaskEnvironmentBuilder: NSObject {
