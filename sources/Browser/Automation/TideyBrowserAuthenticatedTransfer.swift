@@ -243,19 +243,28 @@ enum TideyBrowserTransferRedaction {
     }
 }
 
-private struct TideyBrowserTransferVolumeInfo {
+struct TideyBrowserTransferVolumeInfo {
     let uuid: String
     let mountPoint: String
     let isInternal: Bool
     let isWritable: Bool
 }
 
-private enum TideyBrowserTransferDiskInspector {
+enum TideyBrowserTransferDiskInspector {
+    static func inspectionTarget(archiveRoot: String,
+                                 containingMountPoint: String?) -> String {
+        archiveRoot
+    }
+
     static func inspect(path: String) throws -> TideyBrowserTransferVolumeInfo {
         let process = Process()
         let output = Pipe()
         process.executableURL = URL(fileURLWithPath: "/usr/sbin/diskutil")
-        process.arguments = ["info", "-plist", path]
+        process.arguments = [
+            "info",
+            "-plist",
+            inspectionTarget(archiveRoot: path, containingMountPoint: nil),
+        ]
         process.standardOutput = output
         process.standardError = FileHandle.nullDevice
         try process.run()
