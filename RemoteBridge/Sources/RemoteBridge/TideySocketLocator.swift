@@ -1,3 +1,4 @@
+import Darwin
 import Foundation
 
 final class TideySocketLocator {
@@ -35,6 +36,17 @@ final class TideySocketLocator {
             }
         }
         return nil
+    }
+
+    func resolveLiveSocketIdentity() -> String? {
+        guard let path = resolveLiveSocketPath() else {
+            return nil
+        }
+        var metadata = stat()
+        guard lstat(path, &metadata) == 0 else {
+            return nil
+        }
+        return "\(path)|\(metadata.st_dev)|\(metadata.st_ino)"
     }
 
     private static func pathHasLiveListener(_ path: String) -> Bool {

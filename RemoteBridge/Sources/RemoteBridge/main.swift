@@ -30,7 +30,16 @@ let codexRuntimeSyncer = CodexAppServerRegistryRuntimeSyncer(eventHub: eventHub,
                                                              sidebarMessageSender: { command in
                                                                  try socketClient.send(command: command)
                                                              })
-let registryRuntimeSyncer = AgentSessionRuntimeSyncGroup(syncers: [codexRuntimeSyncer])
+let lifecycleSidebarSyncer = AgentLifecycleSidebarSyncer(store: AgentSessionLifecycle.store,
+                                                         socketIdentityProvider: {
+                                                             locator.resolveLiveSocketIdentity()
+                                                         },
+                                                         commandSender: { command in
+                                                             try socketClient.send(command: command)
+                                                         })
+lifecycleSidebarSyncer.attach()
+let registryRuntimeSyncer = AgentSessionRuntimeSyncGroup(syncers: [codexRuntimeSyncer,
+                                                                   lifecycleSidebarSyncer])
 let registryMonitor = AgentSessionRegistryMonitor(hub: eventHub,
                                                   socketClient: socketClient,
                                                   ordinaryTmuxCarrierIdentityResolver: { record in
