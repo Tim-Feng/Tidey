@@ -235,6 +235,13 @@
   - wrapper 用 `CODEX_HOME` 覆蓋到 `/tmp/tidey-codex-home.XXX` 並塞 hooks.json + config.toml
   - 如果 wrapper 被 exec 兩次（例如使用者在 codex TUI 裡再開 codex），第二次的 real-home 會指向第一次的 overlay，產生 overlay-of-overlay
   - 解法（`cb0d4bb8e`）：`resolve_real_codex_home` 偵測 `tidey-codex-home.*` pattern，找回原始 `~/.codex`
+- Codex app-server 必須自己取得 Tidey Browser MCP 設定
+  - `codex mcp list` 經 wrapper 的 plain CLI 路徑顯示 `tidey_browser` enabled，不代表互動 session 的 app-server 已載入同一份 profile
+  - `codex --profile <name> app-server` 會被真實 CLI 拒絕，因為 named profile 只適用於 runtime commands；app-server 必須用自己的 `-c mcp_servers...` 參數取得同一份 Tidey MCP 設定
+  - `--remote` TUI 仍是 runtime command，要帶 session-scoped profile 取得剛產生的 hook trust；app-server 則不能帶 profile，只能在自己的 argv 取得 MCP overrides
+  - Codex CLI 的 `-c` dotted path 不支援 quoted key segment；`hooks.state."<dynamic-key>".trusted_hash=...` 會被接受卻寫到錯誤節點。動態 hook keys 必須包成單一 `hooks.state={...}` TOML inline table value
+  - wrapper regression test 要讓 fake CLI 同樣拒絕 app-server profile，並分別檢查 app-server 的完整 MCP overrides 與 remote TUI 的 profile
+  - argv 仍只是中間證據，驗收必須由全新 Codex session 實際看到並呼叫 `tidey_browser` tools
 
 ## Socket / Notification / Agent Integration
 

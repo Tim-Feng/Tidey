@@ -414,6 +414,52 @@ PY
     }
 }
 
+tidey_profile_hook_state_override() {
+    local profile_path="$1"
+
+    python3 - "$profile_path" <<'PY'
+from pathlib import Path
+import json
+import re
+import sys
+
+profile_path = Path(sys.argv[1])
+section_key = None
+entries = []
+seen = set()
+
+for line in profile_path.read_text().splitlines():
+    if line.startswith("[") and line.endswith("]"):
+        section_key = None
+        if line.startswith("[hooks.state."):
+            raw_key = line[len("[hooks.state."):-1]
+            key = json.loads(raw_key)
+            if not isinstance(key, str) or key in seen:
+                raise SystemExit(1)
+            section_key = key
+        continue
+    if section_key is None or not line.startswith("trusted_hash = "):
+        continue
+    trusted_hash = json.loads(line.split("=", 1)[1].strip())
+    if not isinstance(trusted_hash, str) or not re.fullmatch(r"sha256:[0-9a-f]{64}", trusted_hash):
+        raise SystemExit(1)
+    entries.append((section_key, trusted_hash))
+    seen.add(section_key)
+    section_key = None
+
+# merge_tidey_hooks_into_user_hooks installs exactly these three Tidey events:
+# SessionStart, UserPromptSubmit, and Stop. A partial profile must not start the
+# app-server path with only some of its generated trust state.
+if len(entries) != 3:
+    raise SystemExit(1)
+items = ",".join(
+    f"{json.dumps(key)}={{trusted_hash={json.dumps(trusted_hash)}}}"
+    for key, trusted_hash in entries
+)
+print(f"hooks.state={{{items}}}")
+PY
+}
+
 resolve_real_codex_home() {
     local candidate="${CODEX_HOME:-$HOME/.codex}"
     local basename=""
@@ -978,6 +1024,7 @@ run_codex_app_server_runtime() {
     local socket_wait_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS:-1200}"
     local socket_wait_interval="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL:-0.05}"
     local socket_wait_iteration=0
+    local hook_state_override=""
 
     socket_dir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-app-server.XXXXXX")"
     socket_path="$socket_dir/app.sock"
@@ -1028,12 +1075,24 @@ run_codex_app_server_runtime() {
     trap 'cleanup_codex_app_server_runtime 130' INT
     trap 'cleanup_codex_app_server_runtime 143' TERM
 
+    hook_state_override="$(tidey_profile_hook_state_override "$real_codex_home/$profile_name.config.toml")" || {
+        fallback_to_plain_codex "failed to project Tidey hook trust into app-server config" 1 "$@"
+    }
+
     if ! [[ "$socket_wait_attempts" =~ ^[0-9]+$ ]] || [[ "$socket_wait_attempts" -lt 1 ]]; then
         socket_wait_attempts=1200
     fi
 
     env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" app-server \
         -c "sqlite_home=$(toml_inline_string "$sqlite_home")" \
+        -c 'features.hooks=true' \
+        -c "mcp_servers.tidey_browser.command=$(toml_inline_string "$HOOK_DIR/tidey-browser-mcp")" \
+        -c 'mcp_servers.tidey_browser.env_vars=["TIDEY_SOCKET_PATH","TIDEY_WORKSPACE_ID"]' \
+        -c 'mcp_servers.tidey_browser.required=true' \
+        -c 'mcp_servers.tidey_browser.startup_timeout_sec=5' \
+        -c 'mcp_servers.tidey_browser.tool_timeout_sec=45' \
+        -c 'mcp_servers.tidey_browser.default_tools_approval_mode="approve"' \
+        -c "$hook_state_override" \
         --listen "unix://$socket_path" >"$app_server_log" 2>&1 &
     app_server_pid="$!"
 
@@ -1058,7 +1117,7 @@ run_codex_app_server_runtime() {
     fi
 
     set +e
-    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" --remote "unix://$socket_path" "$@" &
+    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" --remote "unix://$socket_path" "$@" &
     remote_tui_pid="$!"
     tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"

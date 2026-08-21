@@ -587,6 +587,12 @@ if [[ "${1:-}" == "--help" ]]; then
     printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
     exit 0
 fi
+if [[ "${1:-}" == "--profile" || "${1:-}" == "--profile-v2" ]]; then
+    if [[ " $* " == *" app-server "* ]]; then
+        echo "profile is not valid for app-server" >&2
+        exit 64
+    fi
+fi
 if [[ " $* " == *" app-server "* ]]; then
     listen=""
     while [[ $# -gt 0 ]]; do
@@ -885,7 +891,19 @@ assert remote_lines, "remote TUI was not launched"
 assert any("tidey-codex-sqlite-panel-workspace-1-panel-1" in line for line in app_server_lines), app_server_lines
 assert all("tidey-codex-sqlite-default" not in line for line in app_server_lines), app_server_lines
 assert all("--profile " not in line and "--profile-v2 " not in line for line in app_server_lines), app_server_lines
-assert all("--profile " not in line and "--profile-v2 " not in line for line in remote_lines), remote_lines
+assert all("features.hooks=true" in line for line in app_server_lines), app_server_lines
+assert all("mcp_servers.tidey_browser.command=" in line for line in app_server_lines), app_server_lines
+assert all("tidey-browser-mcp" in line for line in app_server_lines), app_server_lines
+assert all("mcp_servers.tidey_browser.env_vars=" in line for line in app_server_lines), app_server_lines
+assert all("TIDEY_SOCKET_PATH" in line and "TIDEY_WORKSPACE_ID" in line for line in app_server_lines), app_server_lines
+assert all("mcp_servers.tidey_browser.required=true" in line for line in app_server_lines), app_server_lines
+assert all("mcp_servers.tidey_browser.startup_timeout_sec=5" in line for line in app_server_lines), app_server_lines
+assert all("mcp_servers.tidey_browser.tool_timeout_sec=45" in line for line in app_server_lines), app_server_lines
+assert all('mcp_servers.tidey_browser.default_tools_approval_mode="approve"' in line for line in app_server_lines), app_server_lines
+assert all(line.count("hooks.state={") == 1 for line in app_server_lines), app_server_lines
+assert all('hooks.state."' not in line for line in app_server_lines), app_server_lines
+assert all(line.count('trusted_hash="sha256:') >= 3 for line in app_server_lines), app_server_lines
+assert all("--profile tidey-codex-panel-workspace-1-panel-1 --remote" in line for line in remote_lines), remote_lines
 PY
 
     kill "$socket_pid" 2>/dev/null || true
