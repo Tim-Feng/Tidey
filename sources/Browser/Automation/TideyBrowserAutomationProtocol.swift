@@ -22,6 +22,9 @@ enum TideyBrowserAutomationOperation: String, CaseIterable, Equatable {
     case scroll
     case wait
     case screenshot
+    case transferStart = "transfer_start"
+    case transferStatus = "transfer_status"
+    case transferPause = "transfer_pause"
 }
 
 struct TideyBrowserAutomationElementReference: Equatable {
@@ -59,6 +62,9 @@ enum TideyBrowserAutomationCommand: Equatable {
     case scroll(tabID: String, deltaX: Double, deltaY: Double)
     case wait(tabID: String, condition: TideyBrowserAutomationWaitCondition)
     case screenshot(tabID: String)
+    case transferStart(TideyBrowserTransferStartRequest)
+    case transferStatus(transferID: String)
+    case transferPause(transferID: String)
 }
 
 struct TideyBrowserAutomationRequest: Equatable {
@@ -188,6 +194,27 @@ enum TideyBrowserAutomationProtocol {
             )
         case .screenshot:
             command = .screenshot(tabID: try tabID(parameters))
+        case .transferStart:
+            let resumeOffset = try integer(parameters, key: "resume_offset", defaultValue: 0)
+            let pauseAfterBytes = try optionalInteger(parameters, key: "pause_after_bytes")
+            guard resumeOffset >= 0,
+                  pauseAfterBytes == nil || pauseAfterBytes! > resumeOffset else {
+                throw error(.invalidRequest, "Transfer offsets are invalid")
+            }
+            let ifRange = try optionalBoundedString(parameters, key: "if_range", maximumLength: 1_024)
+            command = .transferStart(TideyBrowserTransferStartRequest(
+                target: try elementReference(parameters),
+                archiveRoot: try string(parameters, key: "archive_root"),
+                expectedVolumeUUID: try string(parameters, key: "expected_volume_uuid"),
+                destinationRelativePath: try string(parameters, key: "destination_relative_path"),
+                resumeOffset: resumeOffset,
+                ifRange: ifRange,
+                pauseAfterBytes: pauseAfterBytes
+            ))
+        case .transferStatus:
+            command = .transferStatus(transferID: try string(parameters, key: "transfer_id"))
+        case .transferPause:
+            command = .transferPause(transferID: try string(parameters, key: "transfer_id"))
         }
         return TideyBrowserAutomationRequest(workspaceID: workspaceID, command: command)
     }
@@ -287,6 +314,24 @@ enum TideyBrowserAutomationProtocol {
             throw error(.invalidRequest, "\(key) must be an integer")
         }
         return number.intValue
+    }
+
+    private static func optionalInteger(_ parameters: [String: Any], key: String) throws -> Int? {
+        guard parameters[key] != nil else { return nil }
+        return try integer(parameters, key: key)
+    }
+
+    private static func optionalBoundedString(_ parameters: [String: Any],
+                                              key: String,
+                                              maximumLength: Int) throws -> String? {
+        guard parameters[key] != nil else { return nil }
+        let value = try string(parameters, key: key)
+        guard value.count <= maximumLength,
+              !value.contains("\n"),
+              !value.contains("\r") else {
+            throw error(.invalidRequest, "\(key) is invalid")
+        }
+        return value
     }
 
     private static func number(_ parameters: [String: Any],

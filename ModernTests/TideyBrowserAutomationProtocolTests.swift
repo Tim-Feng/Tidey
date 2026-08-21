@@ -67,6 +67,57 @@ final class TideyBrowserAutomationProtocolTests: XCTestCase {
         XCTAssertEqual(scroll.command, .scroll(tabID: "tab-1", deltaX: 12.5, deltaY: 640))
     }
 
+    func testDecodesScopedAuthenticatedTransferCommands() throws {
+        let start = try TideyBrowserAutomationProtocol.decodeRequest(
+            workspaceID: "workspace-1",
+            operation: "transfer_start",
+            parameters: [
+                "tab_id": "tab-1",
+                "navigation_epoch": 7,
+                "element_id": "element-3",
+                "archive_root": "/Volumes/External/Archive",
+                "expected_volume_uuid": "volume-uuid",
+                "destination_relative_path": "_incoming/item/attempt/file.zip.partial",
+                "resume_offset": 33_554_432,
+                "if_range": "etag-1",
+                "pause_after_bytes": 67_108_864,
+            ]
+        )
+        XCTAssertEqual(
+            start.command,
+            .transferStart(TideyBrowserTransferStartRequest(
+                target: TideyBrowserAutomationElementReference(
+                    tabID: "tab-1",
+                    navigationEpoch: 7,
+                    elementID: "element-3"
+                ),
+                archiveRoot: "/Volumes/External/Archive",
+                expectedVolumeUUID: "volume-uuid",
+                destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+                resumeOffset: 33_554_432,
+                ifRange: "etag-1",
+                pauseAfterBytes: 67_108_864
+            ))
+        )
+
+        XCTAssertEqual(
+            try TideyBrowserAutomationProtocol.decodeRequest(
+                workspaceID: "workspace-1",
+                operation: "transfer_status",
+                parameters: ["transfer_id": "transfer-1"]
+            ).command,
+            .transferStatus(transferID: "transfer-1")
+        )
+        XCTAssertEqual(
+            try TideyBrowserAutomationProtocol.decodeRequest(
+                workspaceID: "workspace-1",
+                operation: "transfer_pause",
+                parameters: ["transfer_id": "transfer-1"]
+            ).command,
+            .transferPause(transferID: "transfer-1")
+        )
+    }
+
     func testRejectsMalformedUnsupportedAndUnsafeRequests() {
         assertProtocolError(
             code: .unsupportedOperation,

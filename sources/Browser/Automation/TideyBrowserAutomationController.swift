@@ -334,6 +334,8 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
                 "mime_type": "image/png",
                 "data_base64": data.base64EncodedString(),
             ], createdBy: tabID)
+        case .transferStart, .transferStatus, .transferPause:
+            throw protocolError(.unsupportedOperation, "Authenticated transfer is not available")
         }
     }
 
