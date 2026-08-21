@@ -2,6 +2,26 @@ import Foundation
 import Darwin
 import OSLog
 
+@objc(TideyRuntimeTmuxExecutableLocator)
+@objcMembers
+final class TideyRuntimeTmuxExecutableLocator: NSObject {
+    func executablePath(
+        environmentPath: String?,
+        fallbackPaths: [String] = [
+            "/opt/homebrew/bin/tmux",
+            "/usr/local/bin/tmux",
+            "/usr/bin/tmux",
+        ]
+    ) -> String? {
+        let pathCandidates = (environmentPath ?? "")
+            .split(separator: ":", omittingEmptySubsequences: true)
+            .map { String($0) + "/tmux" }
+        return (pathCandidates + fallbackPaths).first {
+            FileManager.default.isExecutableFile(atPath: $0)
+        }
+    }
+}
+
 @objc(TideyRuntimeTaskEnvironmentBuilder)
 @objcMembers
 final class TideyRuntimeTaskEnvironmentBuilder: NSObject {

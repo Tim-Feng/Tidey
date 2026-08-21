@@ -307,24 +307,16 @@ static NSString *TideyRuntimeTmuxExecutablePath(void) {
     static NSString *path;
     static dispatch_once_t onceToken;
     dispatch_once(&onceToken, ^{
-        NSMutableArray<NSString *> *candidates = [NSMutableArray array];
-        NSString *environmentPath = [NSProcessInfo processInfo].environment[@"PATH"];
-        for (NSString *directory in [environmentPath componentsSeparatedByString:@":"]) {
-            if (directory.length > 0) {
-                [candidates addObject:[directory stringByAppendingPathComponent:@"tmux"]];
-            }
-        }
-        [candidates addObjectsFromArray:@[
-            @"/opt/homebrew/bin/tmux",
-            @"/usr/local/bin/tmux",
-            @"/usr/bin/tmux",
-        ]];
-        for (NSString *candidate in candidates) {
-            if ([[NSFileManager defaultManager] isExecutableFileAtPath:candidate]) {
-                path = [candidate copy];
-                break;
-            }
-        }
+        TideyRuntimeTmuxExecutableLocator *locator =
+            [[[TideyRuntimeTmuxExecutableLocator alloc] init] autorelease];
+        path = [[locator
+            executablePathWithEnvironmentPath:
+                [NSProcessInfo processInfo].environment[@"PATH"]
+            fallbackPaths:@[
+                @"/opt/homebrew/bin/tmux",
+                @"/usr/local/bin/tmux",
+                @"/usr/bin/tmux",
+            ]] copy];
     });
     return path;
 }

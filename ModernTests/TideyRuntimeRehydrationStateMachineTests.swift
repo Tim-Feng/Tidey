@@ -73,6 +73,70 @@ final class TideyRuntimeTaskEnvironmentBuilderTests: XCTestCase {
     }
 }
 
+final class TideyRuntimeTmuxExecutableLocatorTests: XCTestCase {
+    func testFindsFirstExecutableFromPathBeforeFallbacks() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tidey-tmux-locator-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        let first = root.appendingPathComponent("first", isDirectory: true)
+        let second = root.appendingPathComponent("second", isDirectory: true)
+        try FileManager.default.createDirectory(
+            at: first,
+            withIntermediateDirectories: true
+        )
+        try FileManager.default.createDirectory(
+            at: second,
+            withIntermediateDirectories: true
+        )
+        let executable = second.appendingPathComponent("tmux")
+        XCTAssertTrue(
+            FileManager.default.createFile(
+                atPath: executable.path,
+                contents: Data("fixture".utf8),
+                attributes: [.posixPermissions: 0o700]
+            )
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let located = TideyRuntimeTmuxExecutableLocator().executablePath(
+            environmentPath: "\(first.path):\(second.path)",
+            fallbackPaths: ["/does/not/exist"]
+        )
+
+        XCTAssertEqual(located, executable.path)
+    }
+
+    func testRejectsNonExecutableCandidates() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent(
+                "tidey-tmux-locator-\(UUID().uuidString)",
+                isDirectory: true
+            )
+        try FileManager.default.createDirectory(
+            at: root,
+            withIntermediateDirectories: true
+        )
+        let candidate = root.appendingPathComponent("tmux")
+        XCTAssertTrue(
+            FileManager.default.createFile(
+                atPath: candidate.path,
+                contents: Data("fixture".utf8),
+                attributes: [.posixPermissions: 0o600]
+            )
+        )
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        XCTAssertNil(
+            TideyRuntimeTmuxExecutableLocator().executablePath(
+                environmentPath: root.path,
+                fallbackPaths: []
+            )
+        )
+    }
+}
+
 final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
     private let controllerEnvironmentUnsetCommand =
         "unset NO_COLOR CODEX_CI CODEX_THREAD_ID " +
