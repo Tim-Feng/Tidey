@@ -80,7 +80,8 @@ with tempfile.TemporaryDirectory(prefix="tidey-browser-mcp-tests.") as temp_dir:
         names = {item["name"] for item in tools["result"]["tools"]}
         expected = {"tabs", "open", "claim", "release", "reclaim", "mark", "close", "present",
                     "navigate", "back", "forward", "reload", "current_url", "snapshot", "click",
-                    "fill", "type", "key", "scroll", "wait", "screenshot"}
+                    "fill", "type", "key", "scroll", "wait", "screenshot", "transfer_start",
+                    "transfer_status", "transfer_pause"}
         assert names == expected
         assert all(item["inputSchema"].get("additionalProperties") is False
                    for item in tools["result"]["tools"])

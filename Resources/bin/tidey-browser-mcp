@@ -17,7 +17,8 @@ SERVER_INFO = {"name": "tidey-browser", "version": "1.0.0"}
 SERVER_INSTRUCTIONS = (
     "Tidey browser tabs are workspace-scoped. Opened tabs stay private and hidden until "
     "present is called. Use snapshot to obtain navigation_epoch and element_id values; "
-    "those element references expire after navigation. Only HTTP(S) navigation is allowed."
+    "those element references expire after navigation. Only HTTP(S) navigation is allowed. "
+    "Authenticated Vault transfers are scoped to an owned official link and validated external archive path."
 )
 
 
@@ -36,6 +37,7 @@ TAB_ID = {"type": "string", "minLength": 1, "description": "Canonical Tidey brow
 URL = {"type": "string", "format": "uri", "description": "An HTTP or HTTPS URL."}
 EPOCH = {"type": "integer", "minimum": 0, "description": "Navigation epoch from snapshot."}
 ELEMENT_ID = {"type": "string", "minLength": 1, "description": "Element ID from snapshot."}
+TRANSFER_ID = {"type": "string", "minLength": 1, "description": "Opaque Tidey transfer ID."}
 
 
 def tool(name: str, description: str, schema: dict[str, Any]) -> dict[str, Any]:
@@ -95,6 +97,32 @@ TOOLS = [
              "timeout_ms": {"type": "integer", "minimum": 1, "maximum": 30000, "default": 10000},
          }, ["tab_id", "condition"])),
     tool("screenshot", "Capture an owned tab as PNG.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
+    tool(
+        "transfer_start",
+        "Stream one owned official Vault link directly to a validated external .partial path.",
+        object_schema({
+            "tab_id": TAB_ID,
+            "navigation_epoch": EPOCH,
+            "element_id": ELEMENT_ID,
+            "archive_root": {"type": "string", "minLength": 1},
+            "expected_volume_uuid": {"type": "string", "minLength": 1},
+            "destination_relative_path": {"type": "string", "minLength": 1},
+            "resume_offset": {"type": "integer", "minimum": 0, "default": 0},
+            "if_range": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "pause_after_bytes": {"type": "integer", "minimum": 1},
+        }, ["tab_id", "navigation_epoch", "element_id", "archive_root",
+            "expected_volume_uuid", "destination_relative_path"]),
+    ),
+    tool(
+        "transfer_status",
+        "Read non-secret progress for a transfer owned by this socket session.",
+        object_schema({"transfer_id": TRANSFER_ID}, ["transfer_id"]),
+    ),
+    tool(
+        "transfer_pause",
+        "Pause an owned transfer after flushing its external partial file.",
+        object_schema({"transfer_id": TRANSFER_ID}, ["transfer_id"]),
+    ),
 ]
 TOOL_NAMES = {item["name"] for item in TOOLS}
 

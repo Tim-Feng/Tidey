@@ -63,6 +63,12 @@ if (!globalThis.tideyBrowserAutomation) {
             element.click();
             return { ok: true };
         }
+        case "describe_target": {
+            const element = target(argumentsObject.element_id);
+            if (!element) return { error: "target_gone" };
+            const description = describe(element);
+            return { tag: description.tag, href: description.href };
+        }
         case "fill": {
             const element = target(argumentsObject.element_id);
             if (!element) return { error: "target_gone" };

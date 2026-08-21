@@ -38,6 +38,23 @@ extension TideyBrowserEngine {
         )
     }
 
+    func automationLinkTarget(_ target: TideyBrowserAutomationElementReference) async throws
+        -> (tag: String, href: String) {
+        try validateAutomationReference(target)
+        let result = try await automationExecute(
+            operation: "describe_target",
+            arguments: ["element_id": target.elementID]
+        )
+        guard let tag = result["tag"] as? String,
+              let href = result["href"] as? String else {
+            throw TideyBrowserAutomationProtocolError(
+                code: .invalidRequest,
+                message: "Browser element is not a link"
+            )
+        }
+        return (tag, href)
+    }
+
     func automationFill(_ target: TideyBrowserAutomationElementReference,
                         text: String) async throws {
         try validateAutomationReference(target)

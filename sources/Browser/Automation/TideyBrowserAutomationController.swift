@@ -23,6 +23,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
     private let tabIDGenerator: () -> String
     private let engineFactory: (WKWebViewConfiguration) -> TideyBrowserEngine
     private let navigationGate: TideyBrowserNavigationGate
+    private let transferManager = TideyBrowserAuthenticatedTransferManager()
     private var popupTabIDsByParentID: [String: [String]] = [:]
     private var handoffExpiryTasksByTabID: [String: Task<Void, Never>] = [:]
     private var retiredOwnerSessionIDs: Set<String> = []
@@ -334,8 +335,30 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
                 "mime_type": "image/png",
                 "data_base64": data.base64EncodedString(),
             ], createdBy: tabID)
-        case .transferStart, .transferStatus, .transferPause:
-            throw protocolError(.unsupportedOperation, "Authenticated transfer is not available")
+        case .transferStart(let transferRequest):
+            let engine = try ownedEngine(
+                tabID: transferRequest.target.tabID,
+                workspaceID: workspaceID,
+                ownerSessionID: ownerSessionID
+            )
+            return response(try await transferManager.start(
+                engine: engine,
+                request: transferRequest,
+                workspaceID: workspaceID,
+                ownerSessionID: ownerSessionID
+            ))
+        case .transferStatus(let transferID):
+            return response(try transferManager.status(
+                transferID: transferID,
+                workspaceID: workspaceID,
+                ownerSessionID: ownerSessionID
+            ))
+        case .transferPause(let transferID):
+            return response(try transferManager.pause(
+                transferID: transferID,
+                workspaceID: workspaceID,
+                ownerSessionID: ownerSessionID
+            ))
         }
     }
 
@@ -372,6 +395,7 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
 
     func cleanupSession(ownerSessionID: String, now: Date = Date()) {
         retiredOwnerSessionIDs.insert(ownerSessionID)
+        transferManager.cleanupSession(ownerSessionID: ownerSessionID)
         let plan = state.cleanupSession(ownerSessionID: ownerSessionID, now: now)
         for tabID in plan.privateTabIDsToClose {
             removePrivateEngine(tabID: tabID)
