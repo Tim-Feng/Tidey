@@ -1527,6 +1527,7 @@ final class TideyBrowserAuthenticatedTransferManager {
     ) -> Void
 
     private var transfers: [String: TideyBrowserStreamingTransfer] = [:]
+    private var transferIDsByCanonicalDestination: [String: String] = [:]
     private let destinationOpener: any TideyBrowserTransferDestinationOpening
     private let destinationValidator: any TideyBrowserTransferDestinationValidating
     private let preflightExecutor: any TideyBrowserTransferPreflightExecuting
@@ -1609,6 +1610,28 @@ final class TideyBrowserAuthenticatedTransferManager {
                                 workspaceID: String,
                                 ownerSessionID: String,
                                 cookies: [HTTPCookie]) throws -> [String: Any] {
+        let canonicalDestination = opened.url.standardizedFileURL.path
+        if let existingTransferID = transferIDsByCanonicalDestination[canonicalDestination] {
+            if let existingTransfer = transfers[existingTransferID],
+               !existingTransfer.snapshot().quiescent {
+                do {
+                    try fileQuiescer.synchronizeAndClose(opened.fileHandle)
+                } catch {
+                    throw TideyBrowserAutomationProtocolError(
+                        transferFailure: TideyBrowserTransferFailure(
+                            category: .destination,
+                            code: "quiescence_failed"
+                        )
+                    )
+                }
+                throw protocolError(
+                    .ownershipConflict,
+                    "Transfer destination is not quiescent"
+                )
+            }
+            transferIDsByCanonicalDestination.removeValue(forKey: canonicalDestination)
+        }
+
         let transferID = UUID().uuidString
         let transfer = TideyBrowserStreamingTransfer(
             transferID: transferID,
@@ -1621,6 +1644,7 @@ final class TideyBrowserAuthenticatedTransferManager {
             fileQuiescer: fileQuiescer
         )
         transfers[transferID] = transfer
+        transferIDsByCanonicalDestination[canonicalDestination] = transferID
         transferStarter(transfer, cookies, request.ifRange)
         return transfer.snapshot().dictionary
     }

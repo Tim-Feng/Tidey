@@ -541,7 +541,7 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         }
     }
 
-    func testPauseAndDisconnectReportQuiescenceOnlyAfterClose() throws {
+    func testExplicitPauseReportsQuiescenceOnlyAfterClose() throws {
         let explicitQuiescer = RecordingFileQuiescer()
         let explicit = try makeStreamingTransfer(fileQuiescer: explicitQuiescer)
         let paused = explicit.pause()
@@ -551,13 +551,6 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertTrue(paused.quiescent)
         XCTAssertEqual(paused.dictionary["quiescent"] as? Bool, true)
 
-        // Session disconnect cleanup invokes the same synchronous pause handoff.
-        let disconnectQuiescer = RecordingFileQuiescer()
-        let disconnect = try makeStreamingTransfer(fileQuiescer: disconnectQuiescer)
-        let disconnected = disconnect.pause()
-        XCTAssertEqual(disconnectQuiescer.events, ["synchronize", "close"])
-        XCTAssertTrue(disconnected.quiescent)
-
         let failingQuiescer = RecordingFileQuiescer(failsBeforeClose: true)
         let unsafe = try makeStreamingTransfer(fileQuiescer: failingQuiescer).pause()
         XCTAssertEqual(failingQuiescer.events, ["synchronize"])
@@ -565,6 +558,203 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertFalse(unsafe.quiescent)
         XCTAssertEqual(unsafe.failureCategory, .destination)
         XCTAssertEqual(unsafe.errorCode, "quiescence_failed")
+    }
+
+    @MainActor
+    func testManagerBlocksReplacementOwnerForRunningCanonicalDestination() throws {
+        let fixture = try makeManagerTransferFixture()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer {
+            manager.cleanupSession(ownerSessionID: "owner-old")
+            manager.cleanupSession(ownerSessionID: "owner-new")
+        }
+
+        _ = try admit(fixture, manager: manager, ownerSessionID: "owner-old")
+        let replacement = try openedDestination(fixture)
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: replacement
+        )) { error in
+            let protocolError = error as? TideyBrowserAutomationProtocolError
+            XCTAssertEqual(protocolError?.code, .ownershipConflict)
+            XCTAssertEqual(protocolError?.message, "Transfer destination is not quiescent")
+        }
+        XCTAssertEqual(startedTransferIDs.count, 1)
+    }
+
+    @MainActor
+    func testManagerCleanupSynchronizesAndClosesBeforeReplacementAdmission() throws {
+        let fixture = try makeManagerTransferFixture()
+        let oldOpened = try openedDestination(fixture)
+        let oldDescriptor = oldOpened.fileHandle.fileDescriptor
+        let quiescer = RecordingFileQuiescer()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer { manager.cleanupSession(ownerSessionID: "owner-new") }
+
+        let old = try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-old",
+            opened: oldOpened
+        )
+        let beforeCleanup = try openedDestination(fixture)
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: beforeCleanup
+        ))
+        XCTAssertEqual(quiescer.events(for: oldDescriptor), [])
+
+        manager.cleanupSession(ownerSessionID: "owner-old")
+
+        XCTAssertEqual(quiescer.events(for: oldDescriptor), ["synchronize", "close"])
+        let oldTransferID = try XCTUnwrap(old["transfer_id"] as? String)
+        XCTAssertEqual(
+            try manager.status(
+                transferID: oldTransferID,
+                workspaceID: "workspace-1",
+                ownerSessionID: "owner-old"
+            )["quiescent"] as? Bool,
+            true
+        )
+        XCTAssertNoThrow(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new"
+        ))
+        XCTAssertEqual(startedTransferIDs.count, 2)
+    }
+
+    @MainActor
+    func testManagerQuiescenceFailureKeepsDestinationFenced() throws {
+        let fixture = try makeManagerTransferFixture()
+        let oldOpened = try openedDestination(fixture)
+        let oldDescriptor = oldOpened.fileHandle.fileDescriptor
+        let quiescer = RecordingFileQuiescer(failingFileDescriptor: oldDescriptor)
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        let old = try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-old",
+            opened: oldOpened
+        )
+
+        manager.cleanupSession(ownerSessionID: "owner-old")
+
+        let oldTransferID = try XCTUnwrap(old["transfer_id"] as? String)
+        let failed = try manager.status(
+            transferID: oldTransferID,
+            workspaceID: "workspace-1",
+            ownerSessionID: "owner-old"
+        )
+        XCTAssertEqual(failed["error_code"] as? String, "quiescence_failed")
+        XCTAssertEqual(failed["quiescent"] as? Bool, false)
+        let replacement = try openedDestination(fixture)
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: replacement
+        ))
+        XCTAssertEqual(quiescer.events(for: oldDescriptor), ["synchronize"])
+        XCTAssertEqual(startedTransferIDs.count, 1)
+    }
+
+    @MainActor
+    func testManagerDoesNotFenceDifferentCanonicalDestinations() throws {
+        let first = try makeManagerTransferFixture()
+        let second = try makeManagerTransferFixture()
+        XCTAssertEqual(
+            first.request.destinationRelativePath,
+            second.request.destinationRelativePath
+        )
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer {
+            manager.cleanupSession(ownerSessionID: "owner-first")
+            manager.cleanupSession(ownerSessionID: "owner-second")
+        }
+
+        XCTAssertNoThrow(try admit(first, manager: manager, ownerSessionID: "owner-first"))
+        XCTAssertNoThrow(try admit(second, manager: manager, ownerSessionID: "owner-second"))
+        XCTAssertEqual(startedTransferIDs.count, 2)
+    }
+
+    @MainActor
+    func testReplacementAdmissionBeforeQueuedCleanupCannotCreateTwoWritableOwners() throws {
+        let fixture = try makeManagerTransferFixture()
+        let quiescer = RecordingFileQuiescer()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer { manager.cleanupSession(ownerSessionID: "owner-new") }
+        _ = try admit(fixture, manager: manager, ownerSessionID: "owner-old")
+
+        let earlyReplacement = try openedDestination(fixture)
+        let earlyDescriptor = earlyReplacement.fileHandle.fileDescriptor
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: earlyReplacement
+        ))
+        XCTAssertEqual(startedTransferIDs.count, 1)
+        XCTAssertEqual(quiescer.events(for: earlyDescriptor), ["synchronize", "close"])
+
+        manager.cleanupSession(ownerSessionID: "owner-old")
+
+        XCTAssertNoThrow(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new"
+        ))
+        XCTAssertEqual(startedTransferIDs.count, 2)
+    }
+
+    @MainActor
+    func testManagerClosesUnusedConflictHandleWithoutStartingOrWriting() throws {
+        let fixture = try makeManagerTransferFixture()
+        let quiescer = RecordingFileQuiescer()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer { manager.cleanupSession(ownerSessionID: "owner-old") }
+        _ = try admit(fixture, manager: manager, ownerSessionID: "owner-old")
+        let sizeBeforeConflict = try Data(contentsOf: fixture.destination).count
+        let unused = try openedDestination(fixture)
+        let unusedDescriptor = unused.fileHandle.fileDescriptor
+
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: unused
+        ))
+
+        XCTAssertEqual(startedTransferIDs.count, 1)
+        XCTAssertEqual(quiescer.events(for: unusedDescriptor), ["synchronize", "close"])
+        XCTAssertThrowsError(try unused.fileHandle.offset())
+        XCTAssertEqual(try Data(contentsOf: fixture.destination).count, sizeBeforeConflict)
     }
 
     func testByteBudgetStopsHeaderlessOverflowBeforeAcceptingBytes() throws {
@@ -609,20 +799,73 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertFalse(message.contains("token=secret"))
     }
 
-    private func makeTransferRequest() -> TideyBrowserTransferStartRequest {
+    private func makeTransferRequest(
+        archiveRoot: String = "/Volumes/External/Archive",
+        destinationRelativePath: String = "_incoming/item/attempt/file.zip.partial",
+        resumeOffset: Int = 0
+    ) -> TideyBrowserTransferStartRequest {
         TideyBrowserTransferStartRequest(
             target: TideyBrowserAutomationElementReference(
                 tabID: "tab-1",
                 navigationEpoch: 1,
                 elementID: "element-1"
             ),
-            archiveRoot: "/Volumes/External/Archive",
+            archiveRoot: archiveRoot,
             expectedVolumeUUID: "volume-uuid",
-            destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+            destinationRelativePath: destinationRelativePath,
             expectedTotalBytes: 120_817_568,
-            resumeOffset: 0,
+            resumeOffset: resumeOffset,
             ifRange: nil,
             pauseAfterBytes: nil
+        )
+    }
+
+    private func makeManagerTransferFixture() throws -> ManagerTransferFixture {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let relativePath = "payload.zip.partial"
+        let destination = directory.appendingPathComponent(relativePath, isDirectory: false)
+        let existing = Data(repeating: 0x5a, count: 4)
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: destination.path,
+            contents: existing
+        ))
+        return ManagerTransferFixture(
+            destination: destination,
+            request: makeTransferRequest(
+                archiveRoot: directory.path,
+                destinationRelativePath: relativePath,
+                resumeOffset: existing.count
+            )
+        )
+    }
+
+    private func openedDestination(_ fixture: ManagerTransferFixture) throws
+        -> TideyBrowserTransferOpenedDestination {
+        let fileHandle = try FileHandle(forWritingTo: fixture.destination)
+        _ = try fileHandle.seekToEnd()
+        return TideyBrowserTransferOpenedDestination(
+            url: fixture.destination,
+            fileHandle: fileHandle
+        )
+    }
+
+    @MainActor
+    private func admit(_ fixture: ManagerTransferFixture,
+                       manager: TideyBrowserAuthenticatedTransferManager,
+                       ownerSessionID: String,
+                       opened: TideyBrowserTransferOpenedDestination? = nil) throws -> [String: Any] {
+        try manager.admitOpenedDestination(
+            opened ?? openedDestination(fixture),
+            sourceURL: try XCTUnwrap(URL(
+                string: "https://studio.blender.org/vault/browse/project/payload.zip"
+            )),
+            request: fixture.request,
+            workspaceID: "workspace-1",
+            ownerSessionID: ownerSessionID,
+            cookies: []
         )
     }
 
@@ -676,6 +919,11 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
     }
 }
 
+private struct ManagerTransferFixture {
+    let destination: URL
+    let request: TideyBrowserTransferStartRequest
+}
+
 private final class StubHeaderProbe: TideyBrowserTransferHeaderProbing {
     private var responses: [TideyBrowserTransferHeaderProbeResponse]
     private(set) var requests: [URLRequest] = []
@@ -699,19 +947,29 @@ private final class RecordingFileQuiescer: TideyBrowserTransferFileQuiescing {
     }
 
     private let failsBeforeClose: Bool
+    private let failingFileDescriptor: Int32?
     private(set) var events: [String] = []
+    private(set) var eventsByFileDescriptor: [Int32: [String]] = [:]
 
-    init(failsBeforeClose: Bool = false) {
+    init(failsBeforeClose: Bool = false, failingFileDescriptor: Int32? = nil) {
         self.failsBeforeClose = failsBeforeClose
+        self.failingFileDescriptor = failingFileDescriptor
     }
 
     func synchronizeAndClose(_ fileHandle: FileHandle) throws {
+        let fileDescriptor = fileHandle.fileDescriptor
         events.append("synchronize")
-        if failsBeforeClose {
+        eventsByFileDescriptor[fileDescriptor, default: []].append("synchronize")
+        if failsBeforeClose || failingFileDescriptor == fileDescriptor {
             throw Expected.failedBeforeClose
         }
         try fileHandle.synchronize()
         events.append("close")
+        eventsByFileDescriptor[fileDescriptor, default: []].append("close")
         try fileHandle.close()
+    }
+
+    func events(for fileDescriptor: Int32) -> [String] {
+        eventsByFileDescriptor[fileDescriptor] ?? []
     }
 }
