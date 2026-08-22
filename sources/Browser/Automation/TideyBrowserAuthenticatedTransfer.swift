@@ -25,6 +25,58 @@ struct TideyBrowserTransferRepresentationBinding: Equatable {
     let validatorValue: String
 }
 
+struct TideyBrowserTransferFailure: Error, Equatable {
+    let category: TideyBrowserTransferFailureCategory
+    let code: String
+}
+
+enum TideyBrowserTransferPreflightMethod: String, Equatable {
+    case head = "HEAD"
+    case range = "GET_RANGE"
+}
+
+struct TideyBrowserTransferPreflightMetadata: Equatable {
+    let exactTotalBytes: Int
+    let method: TideyBrowserTransferPreflightMethod
+    let statusCode: Int
+    let contentEncoding: String
+    let contentType: String?
+    let filename: String?
+    let acceptRanges: String?
+    let etag: String?
+    let etagClassification: TideyBrowserTransferValidatorKind
+    let lastModified: String?
+    let resumeValidatorKind: TideyBrowserTransferValidatorKind
+    let resumeValidatorValue: String?
+    let redirectProvenance: [String]
+}
+
+enum TideyBrowserTransferHeadPreflightDecision: Equatable {
+    case accept(TideyBrowserTransferPreflightMetadata)
+    case fallbackToRange
+}
+
+enum TideyBrowserTransferPreflightPolicy {
+    static func evaluateHEAD(statusCode: Int,
+                             headers: [String: String],
+                             redirectProvenance: [String]) throws
+        -> TideyBrowserTransferHeadPreflightDecision {
+        throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+    }
+
+    static func evaluateRange(statusCode: Int,
+                              headers: [String: String],
+                              redirectProvenance: [String]) throws
+        -> TideyBrowserTransferPreflightMetadata {
+        throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+    }
+}
+
+protocol TideyBrowserTransferPreflightExecuting {
+    func execute(sourceURL: URL, cookies: [HTTPCookie]) async throws
+        -> TideyBrowserTransferPreflightMetadata
+}
+
 struct TideyBrowserTransferDestinationRequest: Equatable {
     let archiveRoot: String
     let expectedVolumeUUID: String
