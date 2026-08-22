@@ -86,4 +86,10 @@
         (@[ @72, @72, @72 ]));
 }
 
+- (void)testCloseVisibilityUsesComputedWidthAndAlwaysShowsSelectedClose {
+    XCTAssertTrue([iTermRootTerminalView tideyRightPanelShouldShowCloseButtonForWidth:112 selected:NO]);
+    XCTAssertFalse([iTermRootTerminalView tideyRightPanelShouldShowCloseButtonForWidth:111 selected:NO]);
+    XCTAssertTrue([iTermRootTerminalView tideyRightPanelShouldShowCloseButtonForWidth:72 selected:YES]);
+}
+
 @end

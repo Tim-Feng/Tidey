@@ -1593,7 +1593,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 }
 
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {
-    return YES;
+    return selected || width >= 112;
 }
 
 + (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
