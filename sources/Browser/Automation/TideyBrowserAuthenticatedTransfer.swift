@@ -213,6 +213,31 @@ protocol TideyBrowserTransferPreflightExecuting {
         -> TideyBrowserTransferPreflightMetadata
 }
 
+struct TideyBrowserTransferHeaderProbeResponse: Equatable {
+    let statusCode: Int
+    let headers: [String: String]
+    let redirectProvenance: [String]
+    let cancelledBeforeBody: Bool
+}
+
+protocol TideyBrowserTransferHeaderProbing {
+    func probe(_ request: URLRequest) async throws -> TideyBrowserTransferHeaderProbeResponse
+}
+
+struct TideyBrowserTransferPreflightExecutor: TideyBrowserTransferPreflightExecuting {
+    private let headerProbe: any TideyBrowserTransferHeaderProbing
+
+    init(headerProbe: any TideyBrowserTransferHeaderProbing) {
+        self.headerProbe = headerProbe
+    }
+
+    func execute(sourceURL: URL, cookies: [HTTPCookie]) async throws
+        -> TideyBrowserTransferPreflightMetadata {
+        _ = headerProbe
+        throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+    }
+}
+
 struct TideyBrowserTransferDestinationRequest: Equatable {
     let archiveRoot: String
     let expectedVolumeUUID: String
