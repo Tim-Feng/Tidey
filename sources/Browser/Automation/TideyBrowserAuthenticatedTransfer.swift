@@ -95,6 +95,26 @@ struct TideyBrowserTransferPreflightMetadata: Equatable {
     let resumeValidatorKind: TideyBrowserTransferValidatorKind
     let resumeValidatorValue: String?
     let redirectProvenance: [String]
+
+    var dictionary: [String: Any] {
+        var result: [String: Any] = [
+            "exact_total_bytes": exactTotalBytes,
+            "method": method.rawValue,
+            "http_status": statusCode,
+            "content_encoding": contentEncoding,
+            "etag_classification": etagClassification.rawValue,
+            "resume_validator_kind": resumeValidatorKind.rawValue,
+            "redirect_provenance": redirectProvenance,
+            "payload_bytes_written": 0,
+        ]
+        if let contentType { result["content_type"] = contentType }
+        if let filename { result["filename"] = filename }
+        if let acceptRanges { result["accept_ranges"] = acceptRanges }
+        if let etag { result["etag"] = etag }
+        if let lastModified { result["last_modified"] = lastModified }
+        if let resumeValidatorValue { result["resume_validator"] = resumeValidatorValue }
+        return result
+    }
 }
 
 enum TideyBrowserTransferHeadPreflightDecision: Equatable {
@@ -363,6 +383,149 @@ struct TideyBrowserTransferPreflightExecutor: TideyBrowserTransferPreflightExecu
         guard response.cancelledBeforeBody else {
             throw TideyBrowserTransferFailure(category: .validation, code: "probe_body_not_cancelled")
         }
+    }
+}
+
+final class TideyBrowserTransferHeaderProbe: TideyBrowserTransferHeaderProbing {
+    func probe(_ request: URLRequest) async throws -> TideyBrowserTransferHeaderProbeResponse {
+        try await TideyBrowserTransferOneShotHeaderProbe(request: request).run()
+    }
+}
+
+private final class TideyBrowserTransferOneShotHeaderProbe: NSObject,
+                                                            URLSessionDataDelegate,
+                                                            URLSessionTaskDelegate,
+                                                            @unchecked Sendable {
+    private let lock = NSLock()
+    private let request: URLRequest
+    private var continuation: CheckedContinuation<TideyBrowserTransferHeaderProbeResponse, Error>?
+    private var session: URLSession?
+    private var capturedResponse: HTTPURLResponse?
+    private var receivedBody = false
+    private var completed = false
+    private var redirectProvenance: [String]
+
+    init(request: URLRequest) {
+        self.request = request
+        self.redirectProvenance = request.url.map { [TideyBrowserTransferRedaction.url($0)] } ?? []
+    }
+
+    func run() async throws -> TideyBrowserTransferHeaderProbeResponse {
+        try await withCheckedThrowingContinuation { continuation in
+            lock.withLock {
+                self.continuation = continuation
+                let configuration = URLSessionConfiguration.ephemeral
+                configuration.httpCookieAcceptPolicy = .never
+                configuration.httpShouldSetCookies = false
+                configuration.urlCache = nil
+                configuration.requestCachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+                let queue = OperationQueue()
+                queue.maxConcurrentOperationCount = 1
+                queue.qualityOfService = .utility
+                let session = URLSession(
+                    configuration: configuration,
+                    delegate: self,
+                    delegateQueue: queue
+                )
+                self.session = session
+                session.dataTask(with: request).resume()
+            }
+        }
+    }
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    willPerformHTTPRedirection response: HTTPURLResponse,
+                    newRequest request: URLRequest,
+                    completionHandler: @escaping (URLRequest?) -> Void) {
+        guard let redirectedURL = request.url,
+              let components = URLComponents(url: redirectedURL, resolvingAgainstBaseURL: false),
+              components.scheme?.lowercased() == "https",
+              components.user == nil,
+              components.password == nil else {
+            completionHandler(nil)
+            return
+        }
+        var redirected = request
+        redirected.httpMethod = self.request.httpMethod
+        redirected.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        redirected.setValue(self.request.value(forHTTPHeaderField: "Range"),
+                            forHTTPHeaderField: "Range")
+        if redirectedURL.host?.lowercased() != self.request.url?.host?.lowercased() {
+            redirected.setValue(nil, forHTTPHeaderField: "Cookie")
+            redirected.setValue(nil, forHTTPHeaderField: "Authorization")
+        }
+        lock.withLock {
+            if let responseURL = response.url {
+                redirectProvenance.append(TideyBrowserTransferRedaction.url(responseURL))
+            }
+            redirectProvenance.append(TideyBrowserTransferRedaction.url(redirectedURL))
+        }
+        completionHandler(redirected)
+    }
+
+    func urlSession(_ session: URLSession,
+                    dataTask: URLSessionDataTask,
+                    didReceive response: URLResponse,
+                    completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
+        guard let httpResponse = response as? HTTPURLResponse else {
+            completionHandler(.cancel)
+            finish(.failure(TideyBrowserTransferFailure(
+                category: .validation,
+                code: "invalid_preflight_response"
+            )))
+            return
+        }
+        lock.withLock {
+            capturedResponse = httpResponse
+        }
+        completionHandler(.cancel)
+    }
+
+    func urlSession(_ session: URLSession,
+                    dataTask: URLSessionDataTask,
+                    didReceive data: Data) {
+        lock.withLock {
+            receivedBody = receivedBody || !data.isEmpty
+        }
+        dataTask.cancel()
+    }
+
+    func urlSession(_ session: URLSession,
+                    task: URLSessionTask,
+                    didCompleteWithError error: Error?) {
+        let result: Result<TideyBrowserTransferHeaderProbeResponse, Error> = lock.withLock {
+            guard let response = capturedResponse else {
+                return .failure(TideyBrowserTransferFailurePolicy.network(
+                    error ?? URLError(.badServerResponse)
+                ))
+            }
+            let headers = response.allHeaderFields.reduce(into: [String: String]()) {
+                partial, item in
+                partial[String(describing: item.key)] = String(describing: item.value)
+            }
+            return .success(TideyBrowserTransferHeaderProbeResponse(
+                statusCode: response.statusCode,
+                headers: headers,
+                redirectProvenance: Array(redirectProvenance.prefix(8)),
+                cancelledBeforeBody: !receivedBody
+            ))
+        }
+        finish(result)
+    }
+
+    private func finish(_ result: Result<TideyBrowserTransferHeaderProbeResponse, Error>) {
+        let completion: CheckedContinuation<TideyBrowserTransferHeaderProbeResponse, Error>? =
+            lock.withLock {
+                guard !completed else { return nil }
+                completed = true
+                let completion = continuation
+                continuation = nil
+                return completion
+            }
+        session?.invalidateAndCancel()
+        session = nil
+        completion?.resume(with: result)
     }
 }
 
@@ -1303,10 +1466,18 @@ final class TideyBrowserStreamingTransfer: NSObject,
 final class TideyBrowserAuthenticatedTransferManager {
     private var transfers: [String: TideyBrowserStreamingTransfer] = [:]
     private let destinationOpener: any TideyBrowserTransferDestinationOpening
+    private let destinationValidator: any TideyBrowserTransferDestinationValidating
+    private let preflightExecutor: any TideyBrowserTransferPreflightExecuting
 
     init(destinationOpener: any TideyBrowserTransferDestinationOpening =
-         TideyBrowserTransferDestinationOpeningExecutor()) {
+         TideyBrowserTransferDestinationOpeningExecutor(),
+         destinationValidator: any TideyBrowserTransferDestinationValidating =
+         TideyBrowserTransferDestinationValidationExecutor(),
+         preflightExecutor: any TideyBrowserTransferPreflightExecuting =
+         TideyBrowserTransferPreflightExecutor(headerProbe: TideyBrowserTransferHeaderProbe())) {
         self.destinationOpener = destinationOpener
+        self.destinationValidator = destinationValidator
+        self.preflightExecutor = preflightExecutor
     }
 
     func openDestination(_ request: TideyBrowserTransferStartRequest) async throws
@@ -1314,29 +1485,42 @@ final class TideyBrowserAuthenticatedTransferManager {
         try await destinationOpener.open(request)
     }
 
+    func preflight(engine: TideyBrowserEngine,
+                   request: TideyBrowserTransferPreflightRequest) async throws -> [String: Any] {
+        let sourceURL = try await validatedSourceURL(engine: engine, target: request.target)
+        do {
+            _ = try await destinationValidator.validate(request.destination)
+        } catch {
+            throw TideyBrowserAutomationProtocolError(
+                transferFailure: TideyBrowserTransferFailurePolicy.classify(error)
+            )
+        }
+        let cookies = await matchingCookies(for: sourceURL, engine: engine)
+        do {
+            return try await preflightExecutor.execute(sourceURL: sourceURL, cookies: cookies)
+                .dictionary
+        } catch {
+            throw TideyBrowserAutomationProtocolError(
+                transferFailure: TideyBrowserTransferFailurePolicy.classify(error)
+            )
+        }
+    }
+
     func start(engine: TideyBrowserEngine,
                request: TideyBrowserTransferStartRequest,
                workspaceID: String,
                ownerSessionID: String) async throws -> [String: Any] {
-        let target = try await engine.automationLinkTarget(request.target)
-        guard target.tag == "a",
-              let pageURL = engine.url else {
-            throw protocolError(.invalidRequest, "Transfer target must be a page link")
-        }
-        let sourceURL: URL
-        do {
-            sourceURL = try TideyBrowserTransferRouteValidator.sourceURL(
-                pageURL: pageURL,
-                href: target.href
-            )
-        } catch {
-            throw protocolError(.invalidURL, "Transfer source is outside the official Vault")
-        }
+        let sourceURL = try await validatedSourceURL(engine: engine, target: request.target)
         let opened: TideyBrowserTransferOpenedDestination
         do {
             opened = try await openDestination(request)
         } catch {
-            throw protocolError(.invalidRequest, "Transfer destination is unsafe or unavailable")
+            throw TideyBrowserAutomationProtocolError(
+                transferFailure: TideyBrowserTransferFailure(
+                    category: .destination,
+                    code: "destination_validation_failed"
+                )
+            )
         }
         let cookies = await matchingCookies(for: sourceURL, engine: engine)
         let transferID = UUID().uuidString
@@ -1387,6 +1571,24 @@ final class TideyBrowserAuthenticatedTransferManager {
             throw protocolError(.ownershipConflict, "Transfer is owned by another session")
         }
         return transfer
+    }
+
+    private func validatedSourceURL(engine: TideyBrowserEngine,
+                                    target targetReference: TideyBrowserAutomationElementReference)
+        async throws -> URL {
+        let target = try await engine.automationLinkTarget(targetReference)
+        guard target.tag == "a",
+              let pageURL = engine.url else {
+            throw protocolError(.invalidRequest, "Transfer target must be a page link")
+        }
+        do {
+            return try TideyBrowserTransferRouteValidator.sourceURL(
+                pageURL: pageURL,
+                href: target.href
+            )
+        } catch {
+            throw protocolError(.invalidURL, "Transfer source is outside the official Vault")
+        }
     }
 
     private func matchingCookies(for url: URL, engine: TideyBrowserEngine) async -> [HTTPCookie] {

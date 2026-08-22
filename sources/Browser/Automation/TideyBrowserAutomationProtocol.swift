@@ -22,6 +22,7 @@ enum TideyBrowserAutomationOperation: String, CaseIterable, Equatable {
     case scroll
     case wait
     case screenshot
+    case transferPreflight = "transfer_preflight"
     case transferStart = "transfer_start"
     case transferStatus = "transfer_status"
     case transferPause = "transfer_pause"
@@ -62,6 +63,7 @@ enum TideyBrowserAutomationCommand: Equatable {
     case scroll(tabID: String, deltaX: Double, deltaY: Double)
     case wait(tabID: String, condition: TideyBrowserAutomationWaitCondition)
     case screenshot(tabID: String)
+    case transferPreflight(TideyBrowserTransferPreflightRequest)
     case transferStart(TideyBrowserTransferStartRequest)
     case transferStatus(transferID: String)
     case transferPause(transferID: String)
@@ -86,6 +88,13 @@ enum TideyBrowserAutomationErrorCode: String, Equatable {
     case timeout
     case navigationFailed = "navigation_failed"
     case internalError = "internal_error"
+    case transferAuthentication = "auth_or_entitlement"
+    case transferRateLimited = "rate_limited"
+    case transferRetryable = "retryable"
+    case transferInvalidRange = "invalid_range"
+    case transferRepresentationMismatch = "representation_mismatch"
+    case transferDestinationFailure = "destination_failure"
+    case transferValidationFailure = "validation_failure"
 }
 
 struct TideyBrowserAutomationProtocolError: Error, Equatable {
@@ -194,6 +203,23 @@ enum TideyBrowserAutomationProtocol {
             )
         case .screenshot:
             command = .screenshot(tabID: try tabID(parameters))
+        case .transferPreflight:
+            let resumeOffset = try integer(parameters, key: "resume_offset", defaultValue: 0)
+            guard resumeOffset >= 0 else {
+                throw error(.invalidRequest, "Transfer offset is invalid")
+            }
+            command = .transferPreflight(TideyBrowserTransferPreflightRequest(
+                target: try elementReference(parameters),
+                destination: TideyBrowserTransferDestinationRequest(
+                    archiveRoot: try string(parameters, key: "archive_root"),
+                    expectedVolumeUUID: try string(parameters, key: "expected_volume_uuid"),
+                    destinationRelativePath: try string(
+                        parameters,
+                        key: "destination_relative_path"
+                    ),
+                    resumeOffset: resumeOffset
+                )
+            ))
         case .transferStart:
             let resumeOffset = try integer(parameters, key: "resume_offset", defaultValue: 0)
             let expectedTotalBytes = try integer(parameters, key: "expected_total_bytes")
@@ -205,6 +231,35 @@ enum TideyBrowserAutomationProtocol {
                 throw error(.invalidRequest, "Transfer offsets are invalid")
             }
             let ifRange = try optionalBoundedString(parameters, key: "if_range", maximumLength: 1_024)
+            let validatorKindRaw = try optionalBoundedString(
+                parameters,
+                key: "representation_validator_kind",
+                maximumLength: 32
+            )
+            let validatorValue = try optionalBoundedString(
+                parameters,
+                key: "representation_validator",
+                maximumLength: 1_024
+            )
+            let representationBinding: TideyBrowserTransferRepresentationBinding?
+            if validatorKindRaw == nil, validatorValue == nil {
+                representationBinding = nil
+            } else {
+                guard let validatorKindRaw,
+                      let validatorValue,
+                      let validatorKind = TideyBrowserTransferValidatorKind(
+                        rawValue: validatorKindRaw
+                      ),
+                      validatorKind == .strongETag || validatorKind == .lastModified,
+                      ifRange == nil || ifRange == validatorValue else {
+                    throw error(.invalidRequest, "Representation binding is invalid")
+                }
+                representationBinding = TideyBrowserTransferRepresentationBinding(
+                    exactTotalBytes: expectedTotalBytes,
+                    validatorKind: validatorKind,
+                    validatorValue: validatorValue
+                )
+            }
             command = .transferStart(TideyBrowserTransferStartRequest(
                 target: try elementReference(parameters),
                 archiveRoot: try string(parameters, key: "archive_root"),
@@ -213,7 +268,8 @@ enum TideyBrowserAutomationProtocol {
                 expectedTotalBytes: expectedTotalBytes,
                 resumeOffset: resumeOffset,
                 ifRange: ifRange,
-                pauseAfterBytes: pauseAfterBytes
+                pauseAfterBytes: pauseAfterBytes,
+                representationBinding: representationBinding
             ))
         case .transferStatus:
             command = .transferStatus(transferID: try string(parameters, key: "transfer_id"))
@@ -358,6 +414,27 @@ enum TideyBrowserAutomationProtocol {
 }
 
 extension TideyBrowserAutomationProtocolError {
+    init(transferFailure: TideyBrowserTransferFailure) {
+        let code: TideyBrowserAutomationErrorCode
+        switch transferFailure.category {
+        case .authentication:
+            code = .transferAuthentication
+        case .rateLimited:
+            code = .transferRateLimited
+        case .retryable:
+            code = .transferRetryable
+        case .invalidRange:
+            code = .transferInvalidRange
+        case .representationMismatch:
+            code = .transferRepresentationMismatch
+        case .destination:
+            code = .transferDestinationFailure
+        case .validation:
+            code = .transferValidationFailure
+        }
+        self.init(code: code, message: transferFailure.code)
+    }
+
     init(stateError: TideyBrowserAutomationStateError) {
         switch stateError {
         case .tabLimitReached:

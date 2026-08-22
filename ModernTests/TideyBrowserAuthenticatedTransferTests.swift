@@ -76,7 +76,8 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
                 "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
             ],
             redirectProvenance: [
-                "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+                "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip",
+                "https://cdn.example.test/download/wing_it-caches.zip?token=secret#fragment",
             ]
         )
 
@@ -96,8 +97,10 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertEqual(metadata.resumeValidatorKind, .strongETag)
         XCTAssertEqual(metadata.resumeValidatorValue, "\"representation-1\"")
         XCTAssertEqual(metadata.redirectProvenance, [
-            "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+            "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip",
+            "https://cdn.example.test/download/wing_it-caches.zip",
         ])
+        XCTAssertFalse(String(describing: metadata.dictionary).contains("secret"))
     }
 
     func testPreflightValidatorClassifications() throws {
