@@ -969,7 +969,7 @@ struct TideyBrowserTransferFileQuiescer: TideyBrowserTransferFileQuiescing {
     }
 }
 
-private enum TideyBrowserTransferState: String {
+enum TideyBrowserTransferState: String {
     case running
     case paused
     case completed
@@ -977,7 +977,7 @@ private enum TideyBrowserTransferState: String {
     case failed
 }
 
-private struct TideyBrowserTransferSnapshot {
+struct TideyBrowserTransferSnapshot {
     let transferID: String
     let state: TideyBrowserTransferState
     let resumeOffset: Int
@@ -1009,7 +1009,7 @@ private struct TideyBrowserTransferSnapshot {
     }
 }
 
-private final class TideyBrowserStreamingTransfer: NSObject,
+final class TideyBrowserStreamingTransfer: NSObject,
                                                     URLSessionDataDelegate,
                                                     URLSessionTaskDelegate,
                                                     @unchecked Sendable {
