@@ -100,6 +100,34 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         ])
     }
 
+    func testPreflightValidatorClassifications() throws {
+        let weakWithDate = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "ETag": "W/\"weak-1\"",
+            "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+        ])
+        XCTAssertEqual(weakWithDate.etagClassification, .weakETag)
+        XCTAssertEqual(weakWithDate.resumeValidatorKind, .lastModified)
+        XCTAssertEqual(weakWithDate.resumeValidatorValue, "Fri, 21 Aug 2026 08:00:00 GMT")
+
+        let lastModifiedOnly = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+        ])
+        XCTAssertEqual(lastModifiedOnly.etagClassification, .unavailable)
+        XCTAssertEqual(lastModifiedOnly.resumeValidatorKind, .lastModified)
+
+        let noValidator = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "ETag": "not-an-http-etag",
+            "Last-Modified": "not-an-http-date",
+        ])
+        XCTAssertNil(noValidator.etag)
+        XCTAssertNil(noValidator.lastModified)
+        XCTAssertEqual(noValidator.resumeValidatorKind, .unavailable)
+        XCTAssertNil(noValidator.resumeValidatorValue)
+    }
+
     func testDiskInspectionTargetsContainingVolume() {
         XCTAssertEqual(
             TideyBrowserTransferDiskInspector.inspectionTarget(
@@ -312,6 +340,19 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             ifRange: nil,
             pauseAfterBytes: nil
         )
+    }
+
+    private func acceptedHeadMetadata(headers: [String: String]) throws
+        -> TideyBrowserTransferPreflightMetadata {
+        let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 200,
+            headers: headers,
+            redirectProvenance: []
+        )
+        guard case .accept(let metadata) = decision else {
+            throw TideyBrowserTransferFailure(category: .validation, code: "unexpected_head_fallback")
+        }
+        return metadata
     }
 }
 
