@@ -84,7 +84,30 @@ enum TideyBrowserTransferPreflightPolicy {
                               headers: [String: String],
                               redirectProvenance: [String]) throws
         -> TideyBrowserTransferPreflightMetadata {
-        throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+        guard statusCode == 206 else {
+            if statusCode == 200 {
+                throw TideyBrowserTransferFailure(category: .invalidRange, code: "range_not_honored")
+            }
+            throw TideyBrowserTransferFailure(category: .validation, code: "preflight_http_status")
+        }
+        guard identityContentEncoding(in: headers) != nil else {
+            throw TideyBrowserTransferFailure(category: .validation, code: "identity_encoding_required")
+        }
+        guard let contentRange = header("Content-Range", in: headers),
+              let exactTotalBytes = exactTotalFromOneByteRange(contentRange) else {
+            throw TideyBrowserTransferFailure(category: .invalidRange, code: "invalid_content_range")
+        }
+        if let contentLength = header("Content-Length", in: headers),
+           contentLength.trimmingCharacters(in: .whitespacesAndNewlines) != "1" {
+            throw TideyBrowserTransferFailure(category: .invalidRange, code: "invalid_range_length")
+        }
+        return metadata(
+            exactTotalBytes: exactTotalBytes,
+            method: .range,
+            statusCode: statusCode,
+            headers: headers,
+            redirectProvenance: redirectProvenance
+        )
     }
 
     private static func metadata(exactTotalBytes: Int,
@@ -132,6 +155,16 @@ enum TideyBrowserTransferPreflightPolicy {
             return nil
         }
         return value
+    }
+
+    private static func exactTotalFromOneByteRange(_ raw: String) -> Int? {
+        let value = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard value.hasPrefix("bytes 0-0/"),
+              let total = Int(value.dropFirst("bytes 0-0/".count)),
+              total > 0 else {
+            return nil
+        }
+        return total
     }
 
     private static func identityContentEncoding(in headers: [String: String]) -> String? {
@@ -233,8 +266,57 @@ struct TideyBrowserTransferPreflightExecutor: TideyBrowserTransferPreflightExecu
 
     func execute(sourceURL: URL, cookies: [HTTPCookie]) async throws
         -> TideyBrowserTransferPreflightMetadata {
-        _ = headerProbe
-        throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+        let headResponse = try await headerProbe.probe(request(
+            sourceURL: sourceURL,
+            method: "HEAD",
+            cookies: cookies,
+            range: nil
+        ))
+        try requireCancelledBeforeBody(headResponse)
+        switch try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: headResponse.statusCode,
+            headers: headResponse.headers,
+            redirectProvenance: headResponse.redirectProvenance
+        ) {
+        case .accept(let metadata):
+            return metadata
+        case .fallbackToRange:
+            let rangeResponse = try await headerProbe.probe(request(
+                sourceURL: sourceURL,
+                method: "GET",
+                cookies: cookies,
+                range: "bytes=0-0"
+            ))
+            try requireCancelledBeforeBody(rangeResponse)
+            return try TideyBrowserTransferPreflightPolicy.evaluateRange(
+                statusCode: rangeResponse.statusCode,
+                headers: rangeResponse.headers,
+                redirectProvenance: rangeResponse.redirectProvenance
+            )
+        }
+    }
+
+    private func request(sourceURL: URL,
+                         method: String,
+                         cookies: [HTTPCookie],
+                         range: String?) -> URLRequest {
+        var request = URLRequest(url: sourceURL)
+        request.httpMethod = method
+        request.cachePolicy = .reloadIgnoringLocalCacheData
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
+        if let range {
+            request.setValue(range, forHTTPHeaderField: "Range")
+        }
+        for (name, value) in HTTPCookie.requestHeaderFields(with: cookies) {
+            request.setValue(value, forHTTPHeaderField: name)
+        }
+        return request
+    }
+
+    private func requireCancelledBeforeBody(_ response: TideyBrowserTransferHeaderProbeResponse) throws {
+        guard response.cancelledBeforeBody else {
+            throw TideyBrowserTransferFailure(category: .validation, code: "probe_body_not_cancelled")
+        }
     }
 }
 

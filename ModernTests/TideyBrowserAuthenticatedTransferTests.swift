@@ -2,6 +2,67 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    func testPreflightFallsBackAndCancelsRangeProbeBeforeBody() async throws {
+        let sourceURL = try XCTUnwrap(URL(
+            string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ))
+        let probe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 405,
+                headers: [:],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-1\"",
+                ],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+        ])
+        let executor = TideyBrowserTransferPreflightExecutor(headerProbe: probe)
+
+        let metadata = try await executor.execute(sourceURL: sourceURL, cookies: [])
+
+        XCTAssertEqual(metadata.exactTotalBytes, 120_817_568)
+        XCTAssertEqual(metadata.method, .range)
+        XCTAssertEqual(metadata.statusCode, 206)
+        XCTAssertEqual(probe.requests.count, 2)
+        XCTAssertEqual(probe.requests[0].httpMethod, "HEAD")
+        XCTAssertEqual(probe.requests[0].value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+        XCTAssertEqual(probe.requests[1].httpMethod, "GET")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Range"), "bytes=0-0")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+
+        let fullBodyProbe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 405,
+                headers: [:],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 200,
+                headers: ["Content-Length": "120817568"],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+        ])
+        do {
+            _ = try await TideyBrowserTransferPreflightExecutor(headerProbe: fullBodyProbe)
+                .execute(sourceURL: sourceURL, cookies: [])
+            XCTFail("Expected a Range probe that returned 200 to be rejected")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .invalidRange)
+            XCTAssertEqual(failure.code, "range_not_honored")
+        }
+        XCTAssertTrue(fullBodyProbe.responsesWereCancelledBeforeBody)
+    }
+
     func testPreflightAcceptsExactHeadMetadata() throws {
         let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
             statusCode: 200,
@@ -251,5 +312,22 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             ifRange: nil,
             pauseAfterBytes: nil
         )
+    }
+}
+
+private final class StubHeaderProbe: TideyBrowserTransferHeaderProbing {
+    private var responses: [TideyBrowserTransferHeaderProbeResponse]
+    private(set) var requests: [URLRequest] = []
+    private(set) var responsesWereCancelledBeforeBody = true
+
+    init(responses: [TideyBrowserTransferHeaderProbeResponse]) {
+        self.responses = responses
+    }
+
+    func probe(_ request: URLRequest) async throws -> TideyBrowserTransferHeaderProbeResponse {
+        requests.append(request)
+        let response = responses.removeFirst()
+        responsesWereCancelledBeforeBody = responsesWereCancelledBeforeBody && response.cancelledBeforeBody
+        return response
     }
 }
