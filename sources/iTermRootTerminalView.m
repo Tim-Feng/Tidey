@@ -91,6 +91,9 @@ static const CGFloat kTideyRightPanelGroupLabelHorizontalPadding = 12;
 static const CGFloat kTideyRightPanelGroupLabelGap = 6;
 static const CGFloat kTideyRightPanelGroupTabsGap = 8;
 static const CGFloat kTideyRightPanelAddButtonTrailingPadding = 12;
+static const CGFloat kTideyRightPanelTabMaxWidth = 240;
+static const CGFloat kTideyRightPanelTabCloseThresholdWidth = 112;
+static const CGFloat kTideyRightPanelTabFloorWidth = 72;
 static NSString *const kTideyBundledMonacoVersion = @"0.52.2";
 static NSString *const kTideyLastEditorFilePathDefaultsKey = @"TideyLastEditorFilePath";
 static NSString *const kTideyLastEditorFileTreeRootDefaultsKey = @"TideyLastEditorFileTreeRoot";
@@ -182,6 +185,7 @@ static NSButton *TideyMakeEditorChromeIconButton(NSString *symbolName,
 - (void)tideyBeginRightPanelTabDragWithTabView:(TideyEditorTabItemView *)tabView event:(NSEvent *)event;
 - (void)tideyUpdateRightPanelTabDragWithEvent:(NSEvent *)event;
 - (void)tideyEndRightPanelTabDragWithEvent:(NSEvent *)event;
+- (NSMenu *)tideyMenuForRightPanelTabView:(TideyEditorTabItemView *)tabView;
 @end
 
 @interface TideyPassthroughLabel : NSTextField
@@ -191,6 +195,44 @@ static NSButton *TideyMakeEditorChromeIconButton(NSString *symbolName,
 
 - (NSView *)hitTest:(NSPoint)point {
     return nil;
+}
+
+@end
+
+@interface TideyFadingPassthroughLabel : TideyPassthroughLabel
+@property(nonatomic) CGFloat tideyFullTextWidth;
+- (void)tideyUpdateFadeMask;
+@end
+
+@implementation TideyFadingPassthroughLabel
+
+- (void)setFrameSize:(NSSize)newSize {
+    [super setFrameSize:newSize];
+    [self tideyUpdateFadeMask];
+}
+
+- (void)setTideyFullTextWidth:(CGFloat)tideyFullTextWidth {
+    _tideyFullTextWidth = tideyFullTextWidth;
+    [self tideyUpdateFadeMask];
+}
+
+- (void)tideyUpdateFadeMask {
+    if (_tideyFullTextWidth <= NSWidth(self.bounds) + 0.5 || NSWidth(self.bounds) <= 0) {
+        self.layer.mask = nil;
+        return;
+    }
+    self.wantsLayer = YES;
+    const CGFloat fadeWidth = MIN(18, NSWidth(self.bounds));
+    const CGFloat fadeStart = MAX(0, 1.0 - fadeWidth / NSWidth(self.bounds));
+    CAGradientLayer *mask = [CAGradientLayer layer];
+    mask.frame = self.bounds;
+    mask.startPoint = CGPointMake(0, 0.5);
+    mask.endPoint = CGPointMake(1, 0.5);
+    mask.colors = @[ (__bridge id)NSColor.blackColor.CGColor,
+                     (__bridge id)NSColor.blackColor.CGColor,
+                     (__bridge id)[NSColor colorWithWhite:0 alpha:0].CGColor ];
+    mask.locations = @[ @0, @(fadeStart), @1 ];
+    self.layer.mask = mask;
 }
 
 @end
@@ -448,6 +490,9 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)reloadTideyRightPanelTabsForPane:(TideyRightPanelPane *)pane;
 - (void)tideyScrollRightPanelTabStripByDelta:(CGFloat)delta inPane:(TideyRightPanelPane *)pane;
 - (void)tideyScrollSelectedRightPanelTabIntoViewForPane:(TideyRightPanelPane *)pane;
+- (CGFloat)tideyRightPanelTrailingOcclusionForPane:(TideyRightPanelPane *)pane;
+- (CGFloat)tideyRightPanelVisibleTabStripWidthForPane:(TideyRightPanelPane *)pane;
+- (CGFloat)tideyRightPanelMaximumTabStripOffsetForPane:(TideyRightPanelPane *)pane;
 - (void)selectTideyRightPanelTabAtIndex:(NSInteger)index inPane:(TideyRightPanelPane *)pane;
 - (void)closeTideyRightPanelTabAtIndex:(NSInteger)index inPane:(TideyRightPanelPane *)pane;
 - (void)tideyApplyRightPanelSelectionState:(id)selectionState inPane:(TideyRightPanelPane *)pane;
@@ -796,6 +841,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @property(nonatomic, weak) id<TideyEditorTabItemViewOwner> tideyOwner;
 @property(nonatomic, assign) TideyRightPanelPane *tideyPane;
 @property(nonatomic) NSInteger tideyTabIndex;
+@property(nonatomic, copy) NSString *tideyTabIdentifier;
+@property(nonatomic) TideyRightPanelTabKind tideyTabKind;
 @property(nonatomic, copy) NSString *tideyDragTitle;
 @property(nonatomic) BOOL tideySelected;
 @property(nonatomic) BOOL tideyHovered;
@@ -1583,8 +1630,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     if (preferredTotal <= MAX(0, tabBodyBudget)) {
         return [preferredWidths copy];
     }
-    const CGFloat minimumWidth = 72;
-    CGFloat equalWidth = MAX(minimumWidth, floor(MAX(0, tabBodyBudget) / preferredWidths.count));
+    CGFloat equalWidth = MAX(kTideyRightPanelTabFloorWidth,
+                             floor(MAX(0, tabBodyBudget) / preferredWidths.count));
     NSMutableArray<NSNumber *> *effectiveWidths = [NSMutableArray arrayWithCapacity:preferredWidths.count];
     for (NSUInteger index = 0; index < preferredWidths.count; index++) {
         [effectiveWidths addObject:@(equalWidth)];
@@ -1593,7 +1640,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 }
 
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {
-    return selected || width >= 112;
+    return selected || width >= kTideyRightPanelTabCloseThresholdWidth;
 }
 
 + (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
