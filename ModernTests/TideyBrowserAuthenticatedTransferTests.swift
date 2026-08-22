@@ -2,6 +2,230 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    func testPreflightFallsBackAndCancelsRangeProbeBeforeBody() async throws {
+        let sourceURL = try XCTUnwrap(URL(
+            string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ))
+        let probe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 405,
+                headers: [:],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-1\"",
+                ],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+        ])
+        let executor = TideyBrowserTransferPreflightExecutor(headerProbe: probe)
+
+        let metadata = try await executor.execute(sourceURL: sourceURL, cookies: [])
+
+        XCTAssertEqual(metadata.exactTotalBytes, 120_817_568)
+        XCTAssertEqual(metadata.method, .range)
+        XCTAssertEqual(metadata.statusCode, 206)
+        XCTAssertEqual(probe.requests.count, 2)
+        XCTAssertEqual(probe.requests[0].httpMethod, "HEAD")
+        XCTAssertEqual(probe.requests[0].value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+        XCTAssertEqual(probe.requests[1].httpMethod, "GET")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Range"), "bytes=0-0")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+
+        let fullBodyProbe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 405,
+                headers: [:],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 200,
+                headers: ["Content-Length": "120817568"],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+        ])
+        do {
+            _ = try await TideyBrowserTransferPreflightExecutor(headerProbe: fullBodyProbe)
+                .execute(sourceURL: sourceURL, cookies: [])
+            XCTFail("Expected a Range probe that returned 200 to be rejected")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .invalidRange)
+            XCTAssertEqual(failure.code, "range_not_honored")
+        }
+        XCTAssertTrue(fullBodyProbe.responsesWereCancelledBeforeBody)
+
+        let encodedProbe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 200,
+                headers: ["Content-Length": "120817568", "Content-Encoding": "gzip"],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Encoding": "gzip",
+                ],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+        ])
+        do {
+            _ = try await TideyBrowserTransferPreflightExecutor(headerProbe: encodedProbe)
+                .execute(sourceURL: sourceURL, cookies: [])
+            XCTFail("Expected encoded representation refusal")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .validation)
+            XCTAssertEqual(failure.code, "identity_encoding_required")
+        }
+    }
+
+    func testPreflightAcceptsExactHeadMetadata() throws {
+        let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 200,
+            headers: [
+                "Content-Length": "120817568",
+                "Content-Encoding": "identity",
+                "Content-Type": "application/zip",
+                "Content-Disposition": "attachment; filename=\"wing_it-caches.zip\"",
+                "Accept-Ranges": "bytes",
+                "ETag": "\"representation-1\"",
+                "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+            ],
+            redirectProvenance: [
+                "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip",
+                "https://cdn.example.test/download/wing_it-caches.zip?token=secret#fragment",
+            ]
+        )
+
+        guard case .accept(let metadata) = decision else {
+            return XCTFail("Expected exact HEAD metadata")
+        }
+        XCTAssertEqual(metadata.exactTotalBytes, 120_817_568)
+        XCTAssertEqual(metadata.method, .head)
+        XCTAssertEqual(metadata.statusCode, 200)
+        XCTAssertEqual(metadata.contentEncoding, "identity")
+        XCTAssertEqual(metadata.contentType, "application/zip")
+        XCTAssertEqual(metadata.filename, "wing_it-caches.zip")
+        XCTAssertEqual(metadata.acceptRanges, "bytes")
+        XCTAssertEqual(metadata.etag, "\"representation-1\"")
+        XCTAssertEqual(metadata.etagClassification, .strongETag)
+        XCTAssertEqual(metadata.lastModified, "Fri, 21 Aug 2026 08:00:00 GMT")
+        XCTAssertEqual(metadata.resumeValidatorKind, .strongETag)
+        XCTAssertEqual(metadata.resumeValidatorValue, "\"representation-1\"")
+        XCTAssertEqual(metadata.redirectProvenance, [
+            "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip",
+            "https://cdn.example.test/download/wing_it-caches.zip",
+        ])
+        XCTAssertFalse(String(describing: metadata.dictionary).contains("secret"))
+    }
+
+    func testPreflightValidatorClassifications() throws {
+        let weakWithDate = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "ETag": "W/\"weak-1\"",
+            "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+        ])
+        XCTAssertEqual(weakWithDate.etagClassification, .weakETag)
+        XCTAssertEqual(weakWithDate.resumeValidatorKind, .lastModified)
+        XCTAssertEqual(weakWithDate.resumeValidatorValue, "Fri, 21 Aug 2026 08:00:00 GMT")
+
+        let lastModifiedOnly = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+        ])
+        XCTAssertEqual(lastModifiedOnly.etagClassification, .unavailable)
+        XCTAssertEqual(lastModifiedOnly.resumeValidatorKind, .lastModified)
+
+        let noValidator = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "ETag": "not-an-http-etag",
+            "Last-Modified": "not-an-http-date",
+        ])
+        XCTAssertNil(noValidator.etag)
+        XCTAssertNil(noValidator.lastModified)
+        XCTAssertEqual(noValidator.resumeValidatorKind, .unavailable)
+        XCTAssertNil(noValidator.resumeValidatorValue)
+    }
+
+    func testEntityTagSyntaxIsSharedByPreflightAndFormalBinding() throws {
+        for value in ["\"\"", "\"opaque!#~\""] {
+            let metadata = try acceptedHeadMetadata(headers: [
+                "Content-Length": "10",
+                "ETag": value,
+            ])
+            XCTAssertEqual(metadata.etagClassification, .strongETag, value)
+            XCTAssertEqual(metadata.resumeValidatorValue, value, value)
+
+            let binding = TideyBrowserTransferRepresentationBinding(
+                exactTotalBytes: 10,
+                validatorKind: .strongETag,
+                validatorValue: value
+            )
+            XCTAssertNoThrow(try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: ["Content-Length": "10", "ETag": value],
+                representationBinding: binding
+            ), value)
+        }
+
+        let weak = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "ETag": "W/\"opaque!#~\"",
+        ])
+        XCTAssertEqual(weak.etagClassification, .weakETag)
+        XCTAssertEqual(weak.etag, "W/\"opaque!#~\"")
+
+        let malformed = [
+            "\"embedded\"quote\"",
+            "\"has space\"",
+            "\"has\ttab\"",
+            "\"control\u{7f}\"",
+            "W/ \"weak\"",
+            "W/\"weak\"trailing\"",
+            "\"strong\"trailing\"",
+            "w/\"weak\"",
+        ]
+        for value in malformed {
+            let metadata = try acceptedHeadMetadata(headers: [
+                "Content-Length": "10",
+                "ETag": value,
+            ])
+            XCTAssertEqual(metadata.etagClassification, .unavailable, value)
+            XCTAssertNil(metadata.etag, value)
+
+            let binding = TideyBrowserTransferRepresentationBinding(
+                exactTotalBytes: 10,
+                validatorKind: .strongETag,
+                validatorValue: value
+            )
+            XCTAssertThrowsError(try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: ["Content-Length": "10", "ETag": value],
+                representationBinding: binding
+            ), value) { error in
+                XCTAssertEqual(
+                    (error as? TideyBrowserTransferFailure)?.category,
+                    .representationMismatch,
+                    value
+                )
+            }
+        }
+    }
+
     func testDiskInspectionTargetsContainingVolume() {
         XCTAssertEqual(
             TideyBrowserTransferDiskInspector.inspectionTarget(
@@ -157,6 +381,382 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         )
     }
 
+    func testResponsePolicyBindsTotalEncodingAndValidator() throws {
+        let binding = TideyBrowserTransferRepresentationBinding(
+            exactTotalBytes: 10,
+            validatorKind: .strongETag,
+            validatorValue: "\"representation-1\""
+        )
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: [
+                    "Content-Length": "10",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-1\"",
+                ],
+                representationBinding: binding
+            ),
+            .fresh(expectedTotal: 10)
+        )
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 206,
+                resumeOffset: 4,
+                expectedTotalBytes: 10,
+                headers: [
+                    "Content-Range": "bytes 4-9/10",
+                    "ETag": "\"representation-1\"",
+                ],
+                representationBinding: binding
+            ),
+            .resumed(expectedTotal: 10)
+        )
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 416,
+                resumeOffset: 10,
+                expectedTotalBytes: 10,
+                headers: [
+                    "Content-Range": "bytes */10",
+                    "ETag": "\"representation-1\"",
+                ],
+                representationBinding: binding
+            ),
+            .rangeNotSatisfiable(remoteTotal: 10)
+        )
+        XCTAssertThrowsError(try TideyBrowserTransferResponsePolicy.evaluate(
+            statusCode: 416,
+            resumeOffset: 4,
+            expectedTotalBytes: 10,
+            headers: [
+                "Content-Range": "bytes */10",
+                "ETag": "\"representation-1\"",
+            ],
+            representationBinding: binding
+        )) { error in
+            XCTAssertEqual((error as? TideyBrowserTransferFailure)?.category, .invalidRange)
+        }
+
+        for headers in [
+            ["Content-Length": "11", "ETag": "\"representation-1\""],
+            ["Content-Length": "10", "ETag": "\"representation-2\""],
+            ["Content-Length": "10", "Content-Encoding": "gzip", "ETag": "\"representation-1\""],
+        ] {
+            XCTAssertThrowsError(
+                try TideyBrowserTransferResponsePolicy.evaluate(
+                    statusCode: 200,
+                    resumeOffset: 0,
+                    expectedTotalBytes: 10,
+                    headers: headers,
+                    representationBinding: binding
+                )
+            ) { error in
+                XCTAssertEqual(
+                    (error as? TideyBrowserTransferFailure)?.category,
+                    .representationMismatch
+                )
+            }
+        }
+
+        let lastModifiedBinding = TideyBrowserTransferRepresentationBinding(
+            exactTotalBytes: 10,
+            validatorKind: .lastModified,
+            validatorValue: "Fri, 21 Aug 2026 08:00:00 GMT"
+        )
+        XCTAssertNoThrow(try TideyBrowserTransferResponsePolicy.evaluate(
+            statusCode: 206,
+            resumeOffset: 4,
+            expectedTotalBytes: 10,
+            headers: [
+                "Content-Range": "bytes 4-9/10",
+                "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+            ],
+            representationBinding: lastModifiedBinding
+        ))
+
+        let malformedValidator = TideyBrowserTransferRepresentationBinding(
+            exactTotalBytes: 10,
+            validatorKind: .strongETag,
+            validatorValue: "not-a-strong-etag"
+        )
+        XCTAssertThrowsError(try TideyBrowserTransferResponsePolicy.evaluate(
+            statusCode: 200,
+            resumeOffset: 0,
+            expectedTotalBytes: 10,
+            headers: ["Content-Length": "10", "ETag": "not-a-strong-etag"],
+            representationBinding: malformedValidator
+        )) { error in
+            XCTAssertEqual(
+                (error as? TideyBrowserTransferFailure)?.category,
+                .representationMismatch
+            )
+        }
+    }
+
+    func testResponsePolicyClassifiesTransferFailures() throws {
+        for status in [401, 403] {
+            XCTAssertEqual(
+                TideyBrowserTransferFailurePolicy.httpStatus(status).category,
+                .authentication
+            )
+        }
+        XCTAssertEqual(TideyBrowserTransferFailurePolicy.httpStatus(429).category, .rateLimited)
+        XCTAssertEqual(TideyBrowserTransferFailurePolicy.httpStatus(503).category, .retryable)
+        XCTAssertEqual(
+            TideyBrowserTransferFailurePolicy.network(URLError(.networkConnectionLost)).category,
+            .retryable
+        )
+        XCTAssertEqual(
+            TideyBrowserTransferFailurePolicy.classify(
+                TideyBrowserTransferValidationError.invalidDestination
+            ).category,
+            .destination
+        )
+
+        do {
+            _ = try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 206,
+                resumeOffset: 4,
+                expectedTotalBytes: 10,
+                headers: ["Content-Range": "bytes malformed"]
+            )
+            XCTFail("Expected malformed Content-Range rejection")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .invalidRange)
+        }
+
+        do {
+            _ = try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 503,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: [:]
+            )
+            XCTFail("Expected retryable HTTP failure")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .retryable)
+        }
+    }
+
+    func testExplicitPauseReportsQuiescenceOnlyAfterClose() throws {
+        let explicitQuiescer = RecordingFileQuiescer()
+        let explicit = try makeStreamingTransfer(fileQuiescer: explicitQuiescer)
+        let paused = explicit.pause()
+
+        XCTAssertEqual(explicitQuiescer.events, ["synchronize", "close"])
+        XCTAssertEqual(paused.state, .paused)
+        XCTAssertTrue(paused.quiescent)
+        XCTAssertEqual(paused.dictionary["quiescent"] as? Bool, true)
+
+        let failingQuiescer = RecordingFileQuiescer(failsBeforeClose: true)
+        let unsafe = try makeStreamingTransfer(fileQuiescer: failingQuiescer).pause()
+        XCTAssertEqual(failingQuiescer.events, ["synchronize"])
+        XCTAssertEqual(unsafe.state, .failed)
+        XCTAssertFalse(unsafe.quiescent)
+        XCTAssertEqual(unsafe.failureCategory, .destination)
+        XCTAssertEqual(unsafe.errorCode, "quiescence_failed")
+    }
+
+    @MainActor
+    func testManagerBlocksReplacementOwnerForRunningCanonicalDestination() throws {
+        let fixture = try makeManagerTransferFixture()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer {
+            manager.cleanupSession(ownerSessionID: "owner-old")
+            manager.cleanupSession(ownerSessionID: "owner-new")
+        }
+
+        _ = try admit(fixture, manager: manager, ownerSessionID: "owner-old")
+        let replacement = try openedDestination(fixture)
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: replacement
+        )) { error in
+            let protocolError = error as? TideyBrowserAutomationProtocolError
+            XCTAssertEqual(protocolError?.code, .ownershipConflict)
+            XCTAssertEqual(protocolError?.message, "Transfer destination is not quiescent")
+        }
+        XCTAssertEqual(startedTransferIDs.count, 1)
+    }
+
+    @MainActor
+    func testManagerCleanupSynchronizesAndClosesBeforeReplacementAdmission() throws {
+        let fixture = try makeManagerTransferFixture()
+        let oldOpened = try openedDestination(fixture)
+        let oldDescriptor = oldOpened.fileHandle.fileDescriptor
+        let quiescer = RecordingFileQuiescer()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer { manager.cleanupSession(ownerSessionID: "owner-new") }
+
+        let old = try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-old",
+            opened: oldOpened
+        )
+        let beforeCleanup = try openedDestination(fixture)
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: beforeCleanup
+        ))
+        XCTAssertEqual(quiescer.events(for: oldDescriptor), [])
+
+        manager.cleanupSession(ownerSessionID: "owner-old")
+
+        XCTAssertEqual(quiescer.events(for: oldDescriptor), ["synchronize", "close"])
+        let oldTransferID = try XCTUnwrap(old["transfer_id"] as? String)
+        XCTAssertEqual(
+            try manager.status(
+                transferID: oldTransferID,
+                workspaceID: "workspace-1",
+                ownerSessionID: "owner-old"
+            )["quiescent"] as? Bool,
+            true
+        )
+        XCTAssertNoThrow(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new"
+        ))
+        XCTAssertEqual(startedTransferIDs.count, 2)
+    }
+
+    @MainActor
+    func testManagerQuiescenceFailureKeepsDestinationFenced() throws {
+        let fixture = try makeManagerTransferFixture()
+        let oldOpened = try openedDestination(fixture)
+        let oldDescriptor = oldOpened.fileHandle.fileDescriptor
+        let quiescer = RecordingFileQuiescer(failingFileDescriptor: oldDescriptor)
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        let old = try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-old",
+            opened: oldOpened
+        )
+
+        manager.cleanupSession(ownerSessionID: "owner-old")
+
+        let oldTransferID = try XCTUnwrap(old["transfer_id"] as? String)
+        let failed = try manager.status(
+            transferID: oldTransferID,
+            workspaceID: "workspace-1",
+            ownerSessionID: "owner-old"
+        )
+        XCTAssertEqual(failed["error_code"] as? String, "quiescence_failed")
+        XCTAssertEqual(failed["quiescent"] as? Bool, false)
+        let replacement = try openedDestination(fixture)
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: replacement
+        ))
+        XCTAssertEqual(quiescer.events(for: oldDescriptor), ["synchronize"])
+        XCTAssertEqual(startedTransferIDs.count, 1)
+    }
+
+    @MainActor
+    func testManagerDoesNotFenceDifferentCanonicalDestinations() throws {
+        let first = try makeManagerTransferFixture()
+        let second = try makeManagerTransferFixture()
+        XCTAssertEqual(
+            first.request.destinationRelativePath,
+            second.request.destinationRelativePath
+        )
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer {
+            manager.cleanupSession(ownerSessionID: "owner-first")
+            manager.cleanupSession(ownerSessionID: "owner-second")
+        }
+
+        XCTAssertNoThrow(try admit(first, manager: manager, ownerSessionID: "owner-first"))
+        XCTAssertNoThrow(try admit(second, manager: manager, ownerSessionID: "owner-second"))
+        XCTAssertEqual(startedTransferIDs.count, 2)
+    }
+
+    @MainActor
+    func testReplacementAdmissionBeforeQueuedCleanupCannotCreateTwoWritableOwners() throws {
+        let fixture = try makeManagerTransferFixture()
+        let quiescer = RecordingFileQuiescer()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer { manager.cleanupSession(ownerSessionID: "owner-new") }
+        _ = try admit(fixture, manager: manager, ownerSessionID: "owner-old")
+
+        let earlyReplacement = try openedDestination(fixture)
+        let earlyDescriptor = earlyReplacement.fileHandle.fileDescriptor
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: earlyReplacement
+        ))
+        XCTAssertEqual(startedTransferIDs.count, 1)
+        XCTAssertEqual(quiescer.events(for: earlyDescriptor), ["synchronize", "close"])
+
+        manager.cleanupSession(ownerSessionID: "owner-old")
+
+        XCTAssertNoThrow(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new"
+        ))
+        XCTAssertEqual(startedTransferIDs.count, 2)
+    }
+
+    @MainActor
+    func testManagerClosesUnusedConflictHandleWithoutStartingOrWriting() throws {
+        let fixture = try makeManagerTransferFixture()
+        let quiescer = RecordingFileQuiescer()
+        var startedTransferIDs: [String] = []
+        let manager = TideyBrowserAuthenticatedTransferManager(
+            fileQuiescer: quiescer,
+            transferStarter: { transfer, _, _ in startedTransferIDs.append(transfer.transferID) }
+        )
+        defer { manager.cleanupSession(ownerSessionID: "owner-old") }
+        _ = try admit(fixture, manager: manager, ownerSessionID: "owner-old")
+        let sizeBeforeConflict = try Data(contentsOf: fixture.destination).count
+        let unused = try openedDestination(fixture)
+        let unusedDescriptor = unused.fileHandle.fileDescriptor
+
+        XCTAssertThrowsError(try admit(
+            fixture,
+            manager: manager,
+            ownerSessionID: "owner-new",
+            opened: unused
+        ))
+
+        XCTAssertEqual(startedTransferIDs.count, 1)
+        XCTAssertEqual(quiescer.events(for: unusedDescriptor), ["synchronize", "close"])
+        XCTAssertThrowsError(try unused.fileHandle.offset())
+        XCTAssertEqual(try Data(contentsOf: fixture.destination).count, sizeBeforeConflict)
+    }
+
     func testByteBudgetStopsHeaderlessOverflowBeforeAcceptingBytes() throws {
         XCTAssertEqual(
             try TideyBrowserTransferResponsePolicy.evaluate(
@@ -199,20 +799,177 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertFalse(message.contains("token=secret"))
     }
 
-    private func makeTransferRequest() -> TideyBrowserTransferStartRequest {
+    private func makeTransferRequest(
+        archiveRoot: String = "/Volumes/External/Archive",
+        destinationRelativePath: String = "_incoming/item/attempt/file.zip.partial",
+        resumeOffset: Int = 0
+    ) -> TideyBrowserTransferStartRequest {
         TideyBrowserTransferStartRequest(
             target: TideyBrowserAutomationElementReference(
                 tabID: "tab-1",
                 navigationEpoch: 1,
                 elementID: "element-1"
             ),
-            archiveRoot: "/Volumes/External/Archive",
+            archiveRoot: archiveRoot,
             expectedVolumeUUID: "volume-uuid",
-            destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+            destinationRelativePath: destinationRelativePath,
             expectedTotalBytes: 120_817_568,
+            resumeOffset: resumeOffset,
+            ifRange: nil,
+            pauseAfterBytes: nil
+        )
+    }
+
+    private func makeManagerTransferFixture() throws -> ManagerTransferFixture {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        addTeardownBlock { try? FileManager.default.removeItem(at: directory) }
+        let relativePath = "payload.zip.partial"
+        let destination = directory.appendingPathComponent(relativePath, isDirectory: false)
+        let existing = Data(repeating: 0x5a, count: 4)
+        XCTAssertTrue(FileManager.default.createFile(
+            atPath: destination.path,
+            contents: existing
+        ))
+        return ManagerTransferFixture(
+            destination: destination,
+            request: makeTransferRequest(
+                archiveRoot: directory.path,
+                destinationRelativePath: relativePath,
+                resumeOffset: existing.count
+            )
+        )
+    }
+
+    private func openedDestination(_ fixture: ManagerTransferFixture) throws
+        -> TideyBrowserTransferOpenedDestination {
+        let fileHandle = try FileHandle(forWritingTo: fixture.destination)
+        _ = try fileHandle.seekToEnd()
+        return TideyBrowserTransferOpenedDestination(
+            url: fixture.destination,
+            fileHandle: fileHandle
+        )
+    }
+
+    @MainActor
+    private func admit(_ fixture: ManagerTransferFixture,
+                       manager: TideyBrowserAuthenticatedTransferManager,
+                       ownerSessionID: String,
+                       opened: TideyBrowserTransferOpenedDestination? = nil) throws -> [String: Any] {
+        try manager.admitOpenedDestination(
+            opened ?? openedDestination(fixture),
+            sourceURL: try XCTUnwrap(URL(
+                string: "https://studio.blender.org/vault/browse/project/payload.zip"
+            )),
+            request: fixture.request,
+            workspaceID: "workspace-1",
+            ownerSessionID: ownerSessionID,
+            cookies: []
+        )
+    }
+
+    private func acceptedHeadMetadata(headers: [String: String]) throws
+        -> TideyBrowserTransferPreflightMetadata {
+        let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 200,
+            headers: headers,
+            redirectProvenance: []
+        )
+        guard case .accept(let metadata) = decision else {
+            throw TideyBrowserTransferFailure(category: .validation, code: "unexpected_head_fallback")
+        }
+        return metadata
+    }
+
+    private func makeStreamingTransfer(fileQuiescer: any TideyBrowserTransferFileQuiescing) throws
+        -> TideyBrowserStreamingTransfer {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let destination = directory.appendingPathComponent("payload.zip.partial")
+        XCTAssertTrue(FileManager.default.createFile(atPath: destination.path, contents: Data()))
+        let fileHandle = try FileHandle(forWritingTo: destination)
+        let request = TideyBrowserTransferStartRequest(
+            target: TideyBrowserAutomationElementReference(
+                tabID: "tab-1",
+                navigationEpoch: 1,
+                elementID: "element-1"
+            ),
+            archiveRoot: directory.path,
+            expectedVolumeUUID: "test-volume",
+            destinationRelativePath: "payload.zip.partial",
+            expectedTotalBytes: 10,
             resumeOffset: 0,
             ifRange: nil,
             pauseAfterBytes: nil
         )
+        return TideyBrowserStreamingTransfer(
+            transferID: UUID().uuidString,
+            ownerSessionID: "owner-1",
+            workspaceID: "workspace-1",
+            sourceURL: try XCTUnwrap(URL(
+                string: "https://studio.blender.org/vault/browse/project/payload.zip"
+            )),
+            destinationRelativePath: request.destinationRelativePath,
+            request: request,
+            fileHandle: fileHandle,
+            fileQuiescer: fileQuiescer
+        )
+    }
+}
+
+private struct ManagerTransferFixture {
+    let destination: URL
+    let request: TideyBrowserTransferStartRequest
+}
+
+private final class StubHeaderProbe: TideyBrowserTransferHeaderProbing {
+    private var responses: [TideyBrowserTransferHeaderProbeResponse]
+    private(set) var requests: [URLRequest] = []
+    private(set) var responsesWereCancelledBeforeBody = true
+
+    init(responses: [TideyBrowserTransferHeaderProbeResponse]) {
+        self.responses = responses
+    }
+
+    func probe(_ request: URLRequest) async throws -> TideyBrowserTransferHeaderProbeResponse {
+        requests.append(request)
+        let response = responses.removeFirst()
+        responsesWereCancelledBeforeBody = responsesWereCancelledBeforeBody && response.cancelledBeforeBody
+        return response
+    }
+}
+
+private final class RecordingFileQuiescer: TideyBrowserTransferFileQuiescing {
+    enum Expected: Error {
+        case failedBeforeClose
+    }
+
+    private let failsBeforeClose: Bool
+    private let failingFileDescriptor: Int32?
+    private(set) var events: [String] = []
+    private(set) var eventsByFileDescriptor: [Int32: [String]] = [:]
+
+    init(failsBeforeClose: Bool = false, failingFileDescriptor: Int32? = nil) {
+        self.failsBeforeClose = failsBeforeClose
+        self.failingFileDescriptor = failingFileDescriptor
+    }
+
+    func synchronizeAndClose(_ fileHandle: FileHandle) throws {
+        let fileDescriptor = fileHandle.fileDescriptor
+        events.append("synchronize")
+        eventsByFileDescriptor[fileDescriptor, default: []].append("synchronize")
+        if failsBeforeClose || failingFileDescriptor == fileDescriptor {
+            throw Expected.failedBeforeClose
+        }
+        try fileHandle.synchronize()
+        events.append("close")
+        eventsByFileDescriptor[fileDescriptor, default: []].append("close")
+        try fileHandle.close()
+    }
+
+    func events(for fileDescriptor: Int32) -> [String] {
+        eventsByFileDescriptor[fileDescriptor] ?? []
     }
 }

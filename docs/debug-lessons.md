@@ -95,6 +95,12 @@
   - 用 `URLResourceKey.volumeURLKey` 先解析 containing volume，再把該 volume URL 交給 disk inspector；archive root realpath 與 root-relative destination 的驗證仍保留原路徑
   - regression 要直接斷言 disk inspector 收到 containing volume，live acceptance 另用真正的 nested external archive root 驗第一個 byte，不能只在 volume root 或 internal temp directory 測
   - 補證：`6aeb88552` `75886d266` 與 Blender Studio `wing_it-caches.zip` external first-byte probe（2026-08-21）
+- 跨 socket session 的下載交接要由 Tidey 以實體目的地做 linearization
+  - 舊 connection 的 close callback 和新 connection 的 start callback 都可能非同步排進 main queue；只在 `cleanupSession` pause 舊 transfer、或讓新 owner 查自己的 status，不能阻止新 callback 先打開同一個 partial file
+  - manager 要在目的地完成 root／volume／symlink 驗證並打開後，回到 MainActor 以 validated canonical destination 原子 recheck lease；舊 handle 還沒 synchronize＋close、或 quiescence 失敗時，新 handle 只能關閉且不得啟動 payload
+  - lease key 不能只用 `destination_relative_path`，否則不同 archive root／volume 上的同名 partial 會互相阻塞；相反地，同一 canonical file 換 owner 或 callback 反序都必須共用同一個 fence
+  - regression 要走 manager 的真 `cleanupSession`，並覆蓋 replacement-before-cleanup、close failure、不同目的地併行，以及 conflict handle 零寫入；直接對 transfer 呼叫第二次 `pause()` 不能證明 socket handoff
+  - 補證：`1c76dbe0e`
 - `WKWebView` 不是普通 sibling view
   - 它有自己的 compositing layer，`NSView` sibling 的 z-order 和 `layer.zPosition` 不足以保證蓋在它上面
   - 需要真正的 panel-level overlay，或更高層的 overlay 容器

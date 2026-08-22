@@ -335,6 +335,16 @@ final class TideyBrowserAutomationController: NSObject, TideyBrowserEngineHost {
                 "mime_type": "image/png",
                 "data_base64": data.base64EncodedString(),
             ], createdBy: tabID)
+        case .transferPreflight(let preflightRequest):
+            let engine = try ownedEngine(
+                tabID: preflightRequest.target.tabID,
+                workspaceID: workspaceID,
+                ownerSessionID: ownerSessionID
+            )
+            return response(try await transferManager.preflight(
+                engine: engine,
+                request: preflightRequest
+            ))
         case .transferStart(let transferRequest):
             let engine = try ownedEngine(
                 tabID: transferRequest.target.tabID,

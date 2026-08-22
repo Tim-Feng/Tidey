@@ -140,6 +140,99 @@ final class TideyBrowserAutomationProtocolTests: XCTestCase {
         )
     }
 
+    func testDecodesPreflightAndRepresentationBinding() throws {
+        let parameters: [String: Any] = [
+            "tab_id": "tab-1",
+            "navigation_epoch": 7,
+            "element_id": "element-3",
+            "archive_root": "/Volumes/External/Archive",
+            "expected_volume_uuid": "volume-uuid",
+            "destination_relative_path": "_incoming/item/attempt/file.zip.partial",
+            "resume_offset": 33_554_432,
+        ]
+        XCTAssertEqual(
+            try TideyBrowserAutomationProtocol.decodeRequest(
+                workspaceID: "workspace-1",
+                operation: "transfer_preflight",
+                parameters: parameters
+            ).command,
+            .transferPreflight(TideyBrowserTransferPreflightRequest(
+                target: TideyBrowserAutomationElementReference(
+                    tabID: "tab-1",
+                    navigationEpoch: 7,
+                    elementID: "element-3"
+                ),
+                destination: TideyBrowserTransferDestinationRequest(
+                    archiveRoot: "/Volumes/External/Archive",
+                    expectedVolumeUUID: "volume-uuid",
+                    destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+                    resumeOffset: 33_554_432
+                )
+            ))
+        )
+
+        var start = parameters
+        start["expected_total_bytes"] = 120_817_568
+        start["representation_validator_kind"] = "strong_etag"
+        start["representation_validator"] = "\"representation-1\""
+        XCTAssertEqual(
+            try TideyBrowserAutomationProtocol.decodeRequest(
+                workspaceID: "workspace-1",
+                operation: "transfer_start",
+                parameters: start
+            ).command,
+            .transferStart(TideyBrowserTransferStartRequest(
+                target: TideyBrowserAutomationElementReference(
+                    tabID: "tab-1",
+                    navigationEpoch: 7,
+                    elementID: "element-3"
+                ),
+                archiveRoot: "/Volumes/External/Archive",
+                expectedVolumeUUID: "volume-uuid",
+                destinationRelativePath: "_incoming/item/attempt/file.zip.partial",
+                expectedTotalBytes: 120_817_568,
+                resumeOffset: 33_554_432,
+                ifRange: nil,
+                pauseAfterBytes: nil,
+                representationBinding: TideyBrowserTransferRepresentationBinding(
+                    exactTotalBytes: 120_817_568,
+                    validatorKind: .strongETag,
+                    validatorValue: "\"representation-1\""
+                )
+            ))
+        )
+
+        var weak = start
+        weak["representation_validator_kind"] = "weak_etag"
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: weak
+        )
+        var missingValue = start
+        missingValue.removeValue(forKey: "representation_validator")
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: missingValue
+        )
+        var malformedStrong = start
+        malformedStrong["representation_validator"] = "not-a-strong-etag"
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: malformedStrong
+        )
+        var malformedDate = start
+        malformedDate["representation_validator_kind"] = "last_modified"
+        malformedDate["representation_validator"] = "not-an-http-date"
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: malformedDate
+        )
+    }
+
     func testRejectsMalformedUnsupportedAndUnsafeRequests() {
         assertProtocolError(
             code: .unsupportedOperation,
