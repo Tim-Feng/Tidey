@@ -43,4 +43,34 @@
         preferred);
 }
 
+- (void)testTrailingOcclusionUsesOnlyStripTrailingIntersection {
+    NSRect strip = NSMakeRect(0, 40, 300, 34);
+
+    XCTAssertEqualWithAccuracy(
+        [iTermRootTerminalView tideyRightPanelTrailingOcclusionForStripFrame:strip
+                                                                overlayFrame:NSMakeRect(200, 40, 100, 34)],
+        100,
+        0.001);
+    XCTAssertEqualWithAccuracy(
+        [iTermRootTerminalView tideyRightPanelTrailingOcclusionForStripFrame:strip
+                                                                overlayFrame:NSMakeRect(260, 40, 100, 34)],
+        40,
+        0.001);
+    XCTAssertEqualWithAccuracy(
+        [iTermRootTerminalView tideyRightPanelTrailingOcclusionForStripFrame:strip
+                                                                overlayFrame:NSMakeRect(320, 40, 100, 34)],
+        0,
+        0.001);
+    XCTAssertEqualWithAccuracy(
+        [iTermRootTerminalView tideyRightPanelTrailingOcclusionForStripFrame:strip
+                                                                overlayFrame:NSMakeRect(200, 0, 100, 20)],
+        0,
+        0.001);
+    XCTAssertEqualWithAccuracy(
+        [iTermRootTerminalView tideyRightPanelTrailingOcclusionForStripFrame:strip
+                                                                overlayFrame:NSMakeRect(50, 40, 50, 34)],
+        0,
+        0.001);
+}
+
 @end

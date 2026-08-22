@@ -1558,7 +1558,17 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 + (CGFloat)tideyRightPanelTrailingOcclusionForStripFrame:(NSRect)stripFrame
                                              overlayFrame:(NSRect)overlayFrame {
-    return 0;
+    if (NSWidth(stripFrame) <= 0 || NSHeight(stripFrame) <= 0 ||
+        NSWidth(overlayFrame) <= 0 || NSHeight(overlayFrame) <= 0) {
+        return 0;
+    }
+    CGFloat verticalOverlap = MIN(NSMaxY(stripFrame), NSMaxY(overlayFrame)) -
+        MAX(NSMinY(stripFrame), NSMinY(overlayFrame));
+    if (verticalOverlap <= 0 || NSMaxX(overlayFrame) < NSMaxX(stripFrame)) {
+        return 0;
+    }
+    CGFloat overlap = NSMaxX(stripFrame) - MAX(NSMinX(stripFrame), NSMinX(overlayFrame));
+    return MIN(NSWidth(stripFrame), MAX(0, overlap));
 }
 
 + (NSArray<NSNumber *> *)tideyRightPanelEffectiveTabWidthsForPreferredWidths:(NSArray<NSNumber *> *)preferredWidths
