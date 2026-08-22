@@ -2,6 +2,41 @@ import Darwin
 import Foundation
 import WebKit
 
+enum TideyBrowserTransferFailureCategory: String, Equatable {
+    case authentication = "auth_or_entitlement"
+    case rateLimited = "rate_limited"
+    case retryable = "retryable"
+    case invalidRange = "invalid_range"
+    case representationMismatch = "representation_mismatch"
+    case destination = "destination_failure"
+    case validation = "validation_failure"
+}
+
+enum TideyBrowserTransferValidatorKind: String, Equatable {
+    case strongETag = "strong_etag"
+    case weakETag = "weak_etag"
+    case lastModified = "last_modified"
+    case unavailable
+}
+
+struct TideyBrowserTransferRepresentationBinding: Equatable {
+    let exactTotalBytes: Int
+    let validatorKind: TideyBrowserTransferValidatorKind
+    let validatorValue: String
+}
+
+struct TideyBrowserTransferDestinationRequest: Equatable {
+    let archiveRoot: String
+    let expectedVolumeUUID: String
+    let destinationRelativePath: String
+    let resumeOffset: Int
+}
+
+struct TideyBrowserTransferPreflightRequest: Equatable {
+    let target: TideyBrowserAutomationElementReference
+    let destination: TideyBrowserTransferDestinationRequest
+}
+
 struct TideyBrowserTransferStartRequest: Equatable {
     let target: TideyBrowserAutomationElementReference
     let archiveRoot: String
@@ -11,6 +46,36 @@ struct TideyBrowserTransferStartRequest: Equatable {
     let resumeOffset: Int
     let ifRange: String?
     let pauseAfterBytes: Int?
+    let representationBinding: TideyBrowserTransferRepresentationBinding?
+
+    init(target: TideyBrowserAutomationElementReference,
+         archiveRoot: String,
+         expectedVolumeUUID: String,
+         destinationRelativePath: String,
+         expectedTotalBytes: Int,
+         resumeOffset: Int,
+         ifRange: String?,
+         pauseAfterBytes: Int?,
+         representationBinding: TideyBrowserTransferRepresentationBinding? = nil) {
+        self.target = target
+        self.archiveRoot = archiveRoot
+        self.expectedVolumeUUID = expectedVolumeUUID
+        self.destinationRelativePath = destinationRelativePath
+        self.expectedTotalBytes = expectedTotalBytes
+        self.resumeOffset = resumeOffset
+        self.ifRange = ifRange
+        self.pauseAfterBytes = pauseAfterBytes
+        self.representationBinding = representationBinding
+    }
+
+    var destination: TideyBrowserTransferDestinationRequest {
+        TideyBrowserTransferDestinationRequest(
+            archiveRoot: archiveRoot,
+            expectedVolumeUUID: expectedVolumeUUID,
+            destinationRelativePath: destinationRelativePath,
+            resumeOffset: resumeOffset
+        )
+    }
 }
 
 enum TideyBrowserTransferResponseDecision: Equatable {
@@ -301,7 +366,7 @@ enum TideyBrowserTransferDiskInspector {
 }
 
 private enum TideyBrowserTransferDestination {
-    static func open(_ request: TideyBrowserTransferStartRequest) throws -> (URL, FileHandle) {
+    static func validate(_ request: TideyBrowserTransferDestinationRequest) throws -> URL {
         let components = try TideyBrowserTransferRouteValidator.destinationComponents(
             request.destinationRelativePath
         )
@@ -338,22 +403,30 @@ private enum TideyBrowserTransferDestination {
 
         var status = stat()
         let exists = lstat(destination.path, &status) == 0
-        let descriptor: Int32
         if request.resumeOffset == 0 {
             guard !exists, errno == ENOENT else {
                 throw TideyBrowserTransferValidationError.invalidDestination
             }
-            descriptor = Darwin.open(
-                destination.path,
-                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
-                S_IRUSR | S_IWUSR
-            )
         } else {
             guard exists,
                   (status.st_mode & S_IFMT) == S_IFREG,
                   Int(status.st_size) == request.resumeOffset else {
                 throw TideyBrowserTransferValidationError.invalidDestination
             }
+        }
+        return destination
+    }
+
+    static func open(_ request: TideyBrowserTransferStartRequest) throws -> (URL, FileHandle) {
+        let destination = try validate(request.destination)
+        let descriptor: Int32
+        if request.resumeOffset == 0 {
+            descriptor = Darwin.open(
+                destination.path,
+                O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC | O_NOFOLLOW,
+                S_IRUSR | S_IWUSR
+            )
+        } else {
             descriptor = Darwin.open(
                 destination.path,
                 O_WRONLY | O_APPEND | O_CLOEXEC | O_NOFOLLOW
@@ -390,6 +463,28 @@ struct TideyBrowserTransferOpenedDestination: @unchecked Sendable {
     let fileHandle: FileHandle
 }
 
+protocol TideyBrowserTransferDestinationValidating {
+    func validate(_ request: TideyBrowserTransferDestinationRequest) async throws -> URL
+}
+
+struct TideyBrowserTransferDestinationValidationExecutor: TideyBrowserTransferDestinationValidating {
+    typealias Operation = @Sendable (TideyBrowserTransferDestinationRequest) throws -> URL
+
+    private let operation: Operation
+
+    init(operation: @escaping Operation = { request in
+        try TideyBrowserTransferDestination.validate(request)
+    }) {
+        self.operation = operation
+    }
+
+    func validate(_ request: TideyBrowserTransferDestinationRequest) async throws -> URL {
+        try await Task.detached(priority: .utility) {
+            try operation(request)
+        }.value
+    }
+}
+
 protocol TideyBrowserTransferDestinationOpening {
     func open(_ request: TideyBrowserTransferStartRequest) async throws
         -> TideyBrowserTransferOpenedDestination
@@ -413,6 +508,17 @@ struct TideyBrowserTransferDestinationOpeningExecutor: TideyBrowserTransferDesti
         try await Task.detached(priority: .utility) {
             try operation(request)
         }.value
+    }
+}
+
+protocol TideyBrowserTransferFileQuiescing {
+    func synchronizeAndClose(_ fileHandle: FileHandle) throws
+}
+
+struct TideyBrowserTransferFileQuiescer: TideyBrowserTransferFileQuiescing {
+    func synchronizeAndClose(_ fileHandle: FileHandle) throws {
+        try fileHandle.synchronize()
+        try fileHandle.close()
     }
 }
 
@@ -471,6 +577,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
     private let expectedTotalBytes: Int
     private let ifRange: String?
     private let pauseAfterBytes: Int?
+    private let fileQuiescer: any TideyBrowserTransferFileQuiescing
     private var fileHandle: FileHandle?
     private var session: URLSession?
     private var task: URLSessionDataTask?
@@ -488,7 +595,8 @@ private final class TideyBrowserStreamingTransfer: NSObject,
          sourceURL: URL,
          destinationRelativePath: String,
          request: TideyBrowserTransferStartRequest,
-         fileHandle: FileHandle) {
+         fileHandle: FileHandle,
+         fileQuiescer: any TideyBrowserTransferFileQuiescing = TideyBrowserTransferFileQuiescer()) {
         self.transferID = transferID
         self.ownerSessionID = ownerSessionID
         self.workspaceID = workspaceID
@@ -498,6 +606,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         self.expectedTotalBytes = request.expectedTotalBytes
         self.ifRange = request.ifRange
         self.pauseAfterBytes = request.pauseAfterBytes
+        self.fileQuiescer = fileQuiescer
         self.byteBudget = TideyBrowserTransferByteBudget(
             expectedTotalBytes: request.expectedTotalBytes,
             resumeOffset: request.resumeOffset
@@ -688,8 +797,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
 
     private func closeFileLocked() {
         guard let fileHandle else { return }
-        try? fileHandle.synchronize()
-        try? fileHandle.close()
+        try? fileQuiescer.synchronizeAndClose(fileHandle)
         self.fileHandle = nil
     }
 
