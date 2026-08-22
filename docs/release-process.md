@@ -144,7 +144,7 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
 
 固定流程：
 
-1. 確認 `SavedState/restorable-state.sqlite` 已更新，並確認 agent 本身在獨立 tmux session；不要終止 `iTermServer` 或 tmux server。
+1. 確認 `SavedState/restorable-state.sqlite` 已更新，並確認 agent 本身在獨立 tmux session。不得終止 default／external tmux；archive、install 與候選版首次啟動期間也要保留 `iTermServer` 及既有 app-owned Runtime server。若 preflight 將 Runtime server 分類為 lineage-coupled，候選版啟動後必須依下方 checkpointed lineage handoff 完成切換，不能把一般替換流程中的保留規則解讀成永久保留舊 server。
 2. 驗證候選 app 的 Developer ID 簽章與執行檔雜湊；production Tidey 結束後，用 `tools/archive_production_app.sh` 將舊 `/Applications/Tidey.app` 移到可復原的備份，再安裝候選版。備份名稱必須以 `.bundle-archive` 結尾，且不得包含 `.app`，例如：
 
    ```bash
@@ -159,12 +159,20 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
    - `com.tidey.remote-bridge.cloudflared`
 5. 從 repo 執行 `tools/open-production-clean-env.sh` 啟動 `/Applications/Tidey.app`；不要直接從 tmux pane 執行 `/usr/bin/open`，否則 GUI 會把該 pane 的 `TMUX`、`TMUX_PANE` 與 `TIDEY_*` 傳給後續 native terminal。接著確認：
    - Tidey GUI 是新 PID，執行檔雜湊符合候選版。
-   - workspace／panel 數量與替換前一致；不能只確認 agent process 還活著。若多個 workspace 被集中成一個，先備份當下的 restoration database，再依每個 panel 的 tmux target identity 重建 workspace；不得終止 tmux session。
+   - workspace／panel 數量與替換前一致；不能只確認 agent process 還活著。若多個 workspace 被集中成一個，先備份當下的 restoration database，再依每個 panel 的 tmux target identity 重建 workspace；不得把終止 tmux session 當成重建捷徑。只有下方 lineage handoff 在 identity gates 全部通過後，才能精確退休已分類的舊 app-owned server。
    - Tidey 正在監聽 `~/Library/Application Support/Tidey/tidey.sock`。
    - Bridge 主服務是新 PID，正在監聽 TCP 4817。
    - Cloudflare supervisor 與 `cloudflared` 都是新 PID，`cloudflared-state.json` 顯示 `online`。
    - Bridge log 沒有新的 `socket_unavailable`，手機能實際取得 workspace list。
    - LaunchServices 不再列出剛建立的 deployment backup；production `com.tidey.app` 的可用路徑仍是 `/Applications/Tidey.app`。
+
+#### App-owned Runtime lineage handoff
+
+詳細程序以共享 `tidey-production-deploy` skill 的 deployment contract 為準。先列舉 runtime descriptor 引用的 socket 與 `~/Library/Application Support/Tidey/Runtime/` 下 literal `tmux-*.sock` 的聯集；default／external tmux 一律不動。每個 lineage-coupled server 的 pane 都必須分類為有 registry、descriptor 與 visible binding 的 durable agent、經 process 與 bounded capture 雙重證明的 disposable pane，或 non-durable blocker。存在 blocker、缺少兩個 visible durable controllers，或無法建立 rollback checkpoint 時，必須在 production mutation 前停止；不得建立 hidden／detached controller 補足條件。
+
+完整 handoff 必須由新 production Tidey 建立 `created=true` 的新 Runtime server，先只更新 controller B 的 descriptor 並 checkpoint，讓 B 正常 `/exit` 後執行第一次 checkpointed Tidey／`iTermServer` restoration restart；B 在新 server 恢復並接手後，才更新其餘 descriptors、逐一正常退出舊 runtime（controller A 最後），再執行第二次 checkpointed restoration restart。只有 workspace／panel、durable ID、registry、duplicate-writer、process-holder 與 rollback gates 全部通過，而且舊 server 只剩 canary／disposable shell 時，才能退休該 exact app-owned server。`iTermServer` 只能在這兩個 checkpointed restart 步驟停止；不得以單次 restart 或先退出兩個 controllers 的捷徑取代。
+
+部署外若要清理已放棄的 isolated app-owned server，仍必須先取得 Tim 對 exact target 的另外授權，並證明 controller 沒有 descriptor、registry、visible binding、active work 或未送出輸入，且 transcript 已持久保存。只可對 exact pane 送正常 `/exit`；確認完整 process subtree 已退出、server 只剩 canary／disposable shell 後，才可退休 exact server。若 `/exit` 未完成，立即停止，不得自行升級為 `SIGTERM`／`SIGKILL`。
 
 受控部署若用 `SIGTERM`／`SIGKILL` 終止 GUI，下一次啟動可能顯示「Tidey did not shut down cleanly」的 restoration modal。這個 modal 會占住 main thread；此時 `tidey.sock` 檔案與 listener 可能都存在，但 socket accept queue 會等待 main queue，Remote 只會收到 `socket_unavailable`。
 
