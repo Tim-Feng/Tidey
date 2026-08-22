@@ -2,6 +2,11 @@
 
 set -euo pipefail
 
+# Wrapper integration fixtures replace HOME with temporary directories. Do not
+# let an agent session's inherited CODEX_HOME redirect those fixtures back to
+# the caller's live Codex configuration.
+unset CODEX_HOME
+
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 CODEX_UNDER_TEST="$SCRIPT_DIR/../Resources/bin/codex"
 
