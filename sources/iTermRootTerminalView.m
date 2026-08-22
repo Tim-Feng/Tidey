@@ -1573,7 +1573,23 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 + (NSArray<NSNumber *> *)tideyRightPanelEffectiveTabWidthsForPreferredWidths:(NSArray<NSNumber *> *)preferredWidths
                                                                tabBodyBudget:(CGFloat)tabBodyBudget {
-    return [preferredWidths copy] ?: @[];
+    if (preferredWidths.count == 0) {
+        return @[];
+    }
+    CGFloat preferredTotal = 0;
+    for (NSNumber *width in preferredWidths) {
+        preferredTotal += MAX(0, width.doubleValue);
+    }
+    if (preferredTotal <= MAX(0, tabBodyBudget)) {
+        return [preferredWidths copy];
+    }
+    const CGFloat minimumWidth = 72;
+    CGFloat equalWidth = MAX(minimumWidth, floor(MAX(0, tabBodyBudget) / preferredWidths.count));
+    NSMutableArray<NSNumber *> *effectiveWidths = [NSMutableArray arrayWithCapacity:preferredWidths.count];
+    for (NSUInteger index = 0; index < preferredWidths.count; index++) {
+        [effectiveWidths addObject:@(equalWidth)];
+    }
+    return effectiveWidths;
 }
 
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {

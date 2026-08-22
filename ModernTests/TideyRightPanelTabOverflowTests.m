@@ -73,4 +73,17 @@
         0.001);
 }
 
+- (void)testEffectiveWidthsShrinkEquallyThenStopAtFloor {
+    NSArray<NSNumber *> *preferred = @[ @150, @180, @200 ];
+
+    XCTAssertEqualObjects(
+        [iTermRootTerminalView tideyRightPanelEffectiveTabWidthsForPreferredWidths:preferred
+                                                                     tabBodyBudget:300],
+        (@[ @100, @100, @100 ]));
+    XCTAssertEqualObjects(
+        [iTermRootTerminalView tideyRightPanelEffectiveTabWidthsForPreferredWidths:preferred
+                                                                     tabBodyBudget:150],
+        (@[ @72, @72, @72 ]));
+}
+
 @end
