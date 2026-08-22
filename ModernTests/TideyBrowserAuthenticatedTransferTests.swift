@@ -413,6 +413,32 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         }
     }
 
+    func testPauseAndDisconnectReportQuiescenceOnlyAfterClose() throws {
+        let explicitQuiescer = RecordingFileQuiescer()
+        let explicit = try makeStreamingTransfer(fileQuiescer: explicitQuiescer)
+        let paused = explicit.pause()
+
+        XCTAssertEqual(explicitQuiescer.events, ["synchronize", "close"])
+        XCTAssertEqual(paused.state, .paused)
+        XCTAssertTrue(paused.quiescent)
+        XCTAssertEqual(paused.dictionary["quiescent"] as? Bool, true)
+
+        // Session disconnect cleanup invokes the same synchronous pause handoff.
+        let disconnectQuiescer = RecordingFileQuiescer()
+        let disconnect = try makeStreamingTransfer(fileQuiescer: disconnectQuiescer)
+        let disconnected = disconnect.pause()
+        XCTAssertEqual(disconnectQuiescer.events, ["synchronize", "close"])
+        XCTAssertTrue(disconnected.quiescent)
+
+        let failingQuiescer = RecordingFileQuiescer(failsBeforeClose: true)
+        let unsafe = try makeStreamingTransfer(fileQuiescer: failingQuiescer).pause()
+        XCTAssertEqual(failingQuiescer.events, ["synchronize"])
+        XCTAssertEqual(unsafe.state, .failed)
+        XCTAssertFalse(unsafe.quiescent)
+        XCTAssertEqual(unsafe.failureCategory, .destination)
+        XCTAssertEqual(unsafe.errorCode, "quiescence_failed")
+    }
+
     func testByteBudgetStopsHeaderlessOverflowBeforeAcceptingBytes() throws {
         XCTAssertEqual(
             try TideyBrowserTransferResponsePolicy.evaluate(
@@ -484,6 +510,42 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         }
         return metadata
     }
+
+    private func makeStreamingTransfer(fileQuiescer: any TideyBrowserTransferFileQuiescing) throws
+        -> TideyBrowserStreamingTransfer {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent(UUID().uuidString, isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: false)
+        let destination = directory.appendingPathComponent("payload.zip.partial")
+        XCTAssertTrue(FileManager.default.createFile(atPath: destination.path, contents: Data()))
+        let fileHandle = try FileHandle(forWritingTo: destination)
+        let request = TideyBrowserTransferStartRequest(
+            target: TideyBrowserAutomationElementReference(
+                tabID: "tab-1",
+                navigationEpoch: 1,
+                elementID: "element-1"
+            ),
+            archiveRoot: directory.path,
+            expectedVolumeUUID: "test-volume",
+            destinationRelativePath: "payload.zip.partial",
+            expectedTotalBytes: 10,
+            resumeOffset: 0,
+            ifRange: nil,
+            pauseAfterBytes: nil
+        )
+        return TideyBrowserStreamingTransfer(
+            transferID: UUID().uuidString,
+            ownerSessionID: "owner-1",
+            workspaceID: "workspace-1",
+            sourceURL: try XCTUnwrap(URL(
+                string: "https://studio.blender.org/vault/browse/project/payload.zip"
+            )),
+            destinationRelativePath: request.destinationRelativePath,
+            request: request,
+            fileHandle: fileHandle,
+            fileQuiescer: fileQuiescer
+        )
+    }
 }
 
 private final class StubHeaderProbe: TideyBrowserTransferHeaderProbing {
@@ -500,5 +562,28 @@ private final class StubHeaderProbe: TideyBrowserTransferHeaderProbing {
         let response = responses.removeFirst()
         responsesWereCancelledBeforeBody = responsesWereCancelledBeforeBody && response.cancelledBeforeBody
         return response
+    }
+}
+
+private final class RecordingFileQuiescer: TideyBrowserTransferFileQuiescing {
+    enum Expected: Error {
+        case failedBeforeClose
+    }
+
+    private let failsBeforeClose: Bool
+    private(set) var events: [String] = []
+
+    init(failsBeforeClose: Bool = false) {
+        self.failsBeforeClose = failsBeforeClose
+    }
+
+    func synchronizeAndClose(_ fileHandle: FileHandle) throws {
+        events.append("synchronize")
+        if failsBeforeClose {
+            throw Expected.failedBeforeClose
+        }
+        try fileHandle.synchronize()
+        events.append("close")
+        try fileHandle.close()
     }
 }

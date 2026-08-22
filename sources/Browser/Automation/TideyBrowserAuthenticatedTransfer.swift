@@ -987,6 +987,8 @@ struct TideyBrowserTransferSnapshot {
     let etag: String?
     let lastModified: String?
     let errorCode: String?
+    let failureCategory: TideyBrowserTransferFailureCategory?
+    let quiescent: Bool
     let sourceURL: String
     let destinationRelativePath: String
 
@@ -997,6 +999,7 @@ struct TideyBrowserTransferSnapshot {
             "resume_offset": resumeOffset,
             "bytes_written": bytesWritten,
             "partial_size": resumeOffset + bytesWritten,
+            "quiescent": quiescent,
             "source_url": sourceURL,
             "destination_relative_path": destinationRelativePath,
         ]
@@ -1005,6 +1008,7 @@ struct TideyBrowserTransferSnapshot {
         if let etag { result["etag"] = etag }
         if let lastModified { result["last_modified"] = lastModified }
         if let errorCode { result["error_code"] = errorCode }
+        if let failureCategory { result["failure_category"] = failureCategory.rawValue }
         return result
     }
 }
@@ -1036,6 +1040,8 @@ final class TideyBrowserStreamingTransfer: NSObject,
     private var etag: String?
     private var lastModified: String?
     private var errorCode: String?
+    private var failureCategory: TideyBrowserTransferFailureCategory?
+    private var fileIsQuiescent = false
 
     init(transferID: String,
          ownerSessionID: String,
@@ -1142,7 +1148,7 @@ final class TideyBrowserStreamingTransfer: NSObject,
                     didReceive response: URLResponse,
                     completionHandler: @escaping (URLSession.ResponseDisposition) -> Void) {
         guard let response = response as? HTTPURLResponse else {
-            fail(code: "invalid_response")
+            fail(TideyBrowserTransferFailure(category: .validation, code: "invalid_response"))
             completionHandler(.cancel)
             return
         }
@@ -1175,12 +1181,11 @@ final class TideyBrowserStreamingTransfer: NSObject,
             } else {
                 completionHandler(.allow)
             }
-        } catch TideyBrowserTransferValidationError.declaredTotalMismatch {
-            fail(code: "declared_total_mismatch")
+        } catch let failure as TideyBrowserTransferFailure {
+            fail(failure)
             completionHandler(.cancel)
         } catch {
-            fail(code: resumeOffset > 0 && response.statusCode == 200
-                 ? "range_not_honored" : "invalid_response")
+            fail(TideyBrowserTransferFailurePolicy.classify(error))
             completionHandler(.cancel)
         }
     }
@@ -1203,11 +1208,13 @@ final class TideyBrowserStreamingTransfer: NSObject,
             } catch TideyBrowserTransferValidationError.declaredTotalExceeded {
                 state = .failed
                 errorCode = "declared_total_exceeded"
+                failureCategory = .validation
                 task?.cancel()
                 closeFileLocked()
             } catch {
                 state = .failed
                 errorCode = "write_failed"
+                failureCategory = .destination
                 task?.cancel()
                 closeFileLocked()
             }
@@ -1226,10 +1233,12 @@ final class TideyBrowserStreamingTransfer: NSObject,
                     } catch {
                         state = .failed
                         errorCode = "incomplete_transfer"
+                        failureCategory = .validation
                     }
                 } else {
                     state = .failed
                     errorCode = "network_failed"
+                    failureCategory = .retryable
                 }
                 closeFileLocked()
             }
@@ -1239,20 +1248,32 @@ final class TideyBrowserStreamingTransfer: NSObject,
         session.invalidateAndCancel()
     }
 
-    private func fail(code: String) {
+    private func fail(_ failure: TideyBrowserTransferFailure) {
         lock.withLock {
             guard state == .running else { return }
             state = .failed
-            errorCode = code
+            errorCode = failure.code
+            failureCategory = failure.category
             task?.cancel()
             closeFileLocked()
         }
     }
 
     private func closeFileLocked() {
-        guard let fileHandle else { return }
-        try? fileQuiescer.synchronizeAndClose(fileHandle)
-        self.fileHandle = nil
+        guard let fileHandle else {
+            fileIsQuiescent = true
+            return
+        }
+        do {
+            try fileQuiescer.synchronizeAndClose(fileHandle)
+            self.fileHandle = nil
+            fileIsQuiescent = true
+        } catch {
+            state = .failed
+            errorCode = "quiescence_failed"
+            failureCategory = .destination
+            fileIsQuiescent = false
+        }
     }
 
     private func snapshotLocked() -> TideyBrowserTransferSnapshot {
@@ -1266,6 +1287,8 @@ final class TideyBrowserStreamingTransfer: NSObject,
             etag: etag,
             lastModified: lastModified,
             errorCode: errorCode,
+            failureCategory: failureCategory,
+            quiescent: fileIsQuiescent,
             sourceURL: TideyBrowserTransferRedaction.url(sourceURL),
             destinationRelativePath: destinationRelativePath
         )
