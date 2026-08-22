@@ -546,6 +546,65 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         XCTAssertNotNil(gate.descriptor(forPanelID: "panel-1"))
     }
 
+    func testTmuxDescriptorInventoryRoundTripsThroughUpdateGate() throws {
+        let payload = socketUpdatePayload(
+            durableResumeID: "thread-inventory-round-trip",
+            workingDirectory: "/tmp/project"
+        )
+        let published = TideyRuntimeResumeDescriptorUpdateGate()
+            .acceptUpdatePayload(
+                payload,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        gate.restoreDescriptorsByPanelIDAwaitingRuntimeEvidence([
+            "panel-1": try XCTUnwrap(published.descriptor)
+        ])
+        let refreshed = gate.acceptUpdatePayload(
+            payload,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(refreshed.accepted)
+        XCTAssertFalse(refreshed.changed)
+
+        let snapshot = try XCTUnwrap(
+            gate.runtimeAgentDescriptorSnapshots(
+                currentWorkspaceIDByPanelID: [
+                    "panel-1": "workspace-1"
+                ]
+            ).first
+        )
+        var descriptor = try XCTUnwrap(
+            snapshot["descriptor"] as? [String: Any]
+        )
+        var target = try XCTUnwrap(
+            descriptor["target"] as? [String: Any]
+        )
+        target["socket_name"] = "tidey-next"
+        descriptor["target"] = target
+
+        let updated = gate.acceptUpdatePayload(
+            [
+                "binding": try XCTUnwrap(
+                    snapshot["binding"] as? [String: Any]
+                ),
+                "descriptor": descriptor,
+            ],
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+
+        XCTAssertTrue(updated.accepted)
+        XCTAssertTrue(updated.changed)
+        XCTAssertEqual(updated.descriptor?.revision, 2)
+        XCTAssertEqual(
+            updated.descriptor?.target?.socketName,
+            "tidey-next"
+        )
+    }
+
     func testRestoredDescriptorRemovalReadinessSeamCompiles() throws {
         let descriptor = try XCTUnwrap(
             TideyRuntimeResumeDescriptorUpdateGate()

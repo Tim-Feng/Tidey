@@ -1115,6 +1115,7 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
     private struct Entry {
         let descriptor: TideyRuntimeResumeDescriptor
         let canonicalContent: Data
+        let tmuxPaneID: String?
     }
 
     private let lock = NSLock()
@@ -1181,6 +1182,13 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
 
         let existing = entriesByPanelID[currentPanelID]
         if existing?.canonicalContent == canonicalContent {
+            if let existing {
+                entriesByPanelID[currentPanelID] = Entry(
+                    descriptor: existing.descriptor,
+                    canonicalContent: existing.canonicalContent,
+                    tmuxPaneID: update.binding.tmuxPaneID
+                )
+            }
             awaitingRuntimeEvidenceByPanelID[currentPanelID] = nil
             return TideyRuntimeResumeDescriptorUpdateResult(
                 accepted: true,
@@ -1202,7 +1210,8 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
             )
             entriesByPanelID[currentPanelID] = Entry(
                 descriptor: descriptor,
-                canonicalContent: canonicalContent
+                canonicalContent: canonicalContent,
+                tmuxPaneID: update.binding.tmuxPaneID
             )
             awaitingRuntimeEvidenceByPanelID[currentPanelID] = nil
             revisionHighWaterByPanelID[currentPanelID] =
@@ -1251,11 +1260,15 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
                         ) else {
                 return nil
             }
+            var binding = [
+                "workspace_id": workspaceID,
+                "panel_id": panelID,
+            ]
+            if let tmuxPaneID = entry.tmuxPaneID {
+                binding["tmux_pane_id"] = tmuxPaneID
+            }
             return [
-                "binding": [
-                    "workspace_id": workspaceID,
-                    "panel_id": panelID,
-                ],
+                "binding": binding,
                 "revision": entry.descriptor.revision,
                 "descriptor": descriptor,
             ]
@@ -1396,7 +1409,8 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
             }
             replacements[panelID] = Entry(
                 descriptor: descriptor,
-                canonicalContent: data
+                canonicalContent: data,
+                tmuxPaneID: nil
             )
         }
         return replacements
