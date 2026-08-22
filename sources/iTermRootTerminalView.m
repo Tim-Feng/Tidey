@@ -519,6 +519,15 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
                   lastActiveBrowserTabIdentifier:(NSString *)lastActiveBrowserTabIdentifier;
 + (NSArray<TideyEditorTab *> *)tideyVisibleRightPanelTabsForTabs:(NSArray<TideyEditorTab *> *)tabs
                                                      expandedKind:(TideyRightPanelTabKind)expandedKind;
++ (CGFloat)tideyRightPanelTrailingOcclusionForStripFrame:(NSRect)stripFrame
+                                             overlayFrame:(NSRect)overlayFrame;
++ (NSArray<NSNumber *> *)tideyRightPanelEffectiveTabWidthsForPreferredWidths:(NSArray<NSNumber *> *)preferredWidths
+                                                               tabBodyBudget:(CGFloat)tabBodyBudget;
++ (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected;
++ (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                                     clickedIdentifier:(NSString *)clickedIdentifier
+                                                      closeTabsToRight:(BOOL)closeTabsToRight;
++ (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets;
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
@@ -1545,6 +1554,30 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                                      expandedKind:(TideyRightPanelTabKind)expandedKind {
     TideyRightPanelTabKind resolvedExpandedKind = [self tideyResolvedExpandedKindForTabs:tabs expandedKind:expandedKind];
     return [self tideyRightPanelTabsOfKind:resolvedExpandedKind inTabs:tabs];
+}
+
++ (CGFloat)tideyRightPanelTrailingOcclusionForStripFrame:(NSRect)stripFrame
+                                             overlayFrame:(NSRect)overlayFrame {
+    return 0;
+}
+
++ (NSArray<NSNumber *> *)tideyRightPanelEffectiveTabWidthsForPreferredWidths:(NSArray<NSNumber *> *)preferredWidths
+                                                               tabBodyBudget:(CGFloat)tabBodyBudget {
+    return [preferredWidths copy] ?: @[];
+}
+
++ (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {
+    return YES;
+}
+
++ (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
+                                                     clickedIdentifier:(NSString *)clickedIdentifier
+                                                      closeTabsToRight:(BOOL)closeTabsToRight {
+    return @[];
+}
+
++ (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets {
+    return YES;
 }
 
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
