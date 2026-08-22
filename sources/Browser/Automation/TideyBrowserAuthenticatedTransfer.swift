@@ -185,7 +185,7 @@ enum TideyBrowserTransferPreflightPolicy {
                              redirectProvenance: [String]) throws
         -> TideyBrowserTransferHeadPreflightDecision {
         guard statusCode == 200 else {
-            if statusCode == 405 || statusCode == 501 {
+            if statusCode == 403 || statusCode == 405 || statusCode == 501 {
                 return .fallbackToRange
             }
             throw TideyBrowserTransferFailurePolicy.httpStatus(statusCode)

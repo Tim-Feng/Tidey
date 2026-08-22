@@ -2,6 +2,142 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    func testHeadPreflightPolicyFallsBackForForbiddenMethod() throws {
+        let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 403,
+            headers: [:],
+            redirectProvenance: []
+        )
+
+        XCTAssertEqual(decision, .fallbackToRange)
+    }
+
+    func testHeadPreflightPolicyKeepsUnauthorizedAsAuthenticationFailure() throws {
+        XCTAssertThrowsError(try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 401,
+            headers: [:],
+            redirectProvenance: []
+        )) { error in
+            XCTAssertEqual(error as? TideyBrowserTransferFailure, TideyBrowserTransferFailure(
+                category: .authentication,
+                code: "http_401"
+            ))
+        }
+    }
+
+    func testForbiddenHeadFallsBackOnceToOneByteRange() async throws {
+        let sourceURL = try XCTUnwrap(URL(
+            string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ))
+        let probe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 403,
+                headers: [:],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Length": "1",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-403-fallback\"",
+                ],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+        ])
+
+        let metadata = try await TideyBrowserTransferPreflightExecutor(headerProbe: probe)
+            .execute(sourceURL: sourceURL, cookies: [])
+
+        XCTAssertEqual(metadata.exactTotalBytes, 120_817_568)
+        XCTAssertEqual(metadata.method, .range)
+        XCTAssertEqual(metadata.statusCode, 206)
+        XCTAssertEqual(probe.requests.count, 2)
+        XCTAssertEqual(probe.requests[0].httpMethod, "HEAD")
+        XCTAssertNil(probe.requests[0].value(forHTTPHeaderField: "Range"))
+        XCTAssertEqual(probe.requests[1].httpMethod, "GET")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Range"), "bytes=0-0")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Accept-Encoding"), "identity")
+        XCTAssertTrue(probe.responsesWereCancelledBeforeBody)
+    }
+
+    func testForbiddenHeadThenForbiddenRangeMapsToAuthenticationProtocolFailure() async throws {
+        let sourceURL = try XCTUnwrap(URL(
+            string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ))
+        let probe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 403,
+                headers: [:],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 403,
+                headers: [:],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+        ])
+
+        do {
+            _ = try await TideyBrowserTransferPreflightExecutor(headerProbe: probe)
+                .execute(sourceURL: sourceURL, cookies: [])
+            XCTFail("Expected the Range 403 to remain an authentication failure")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure, TideyBrowserTransferFailure(
+                category: .authentication,
+                code: "http_403"
+            ))
+            let protocolFailure = TideyBrowserAutomationProtocolError(transferFailure: failure)
+            XCTAssertEqual(protocolFailure.code, .transferAuthentication)
+            XCTAssertEqual(protocolFailure.message, "http_403")
+        }
+        XCTAssertEqual(probe.requests.count, 2)
+        XCTAssertEqual(probe.requests.last?.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+    }
+
+    func testForbiddenHeadFallbackRequiresRangeCancellationBeforeBody() async throws {
+        let sourceURL = try XCTUnwrap(URL(
+            string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ))
+        let probe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 403,
+                headers: [:],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Length": "1",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-403-fallback\"",
+                ],
+                redirectProvenance: [],
+                cancelledBeforeBody: false
+            ),
+        ])
+
+        do {
+            _ = try await TideyBrowserTransferPreflightExecutor(headerProbe: probe)
+                .execute(sourceURL: sourceURL, cookies: [])
+            XCTFail("Expected a fallback response that delivered body bytes to be rejected")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure, TideyBrowserTransferFailure(
+                category: .validation,
+                code: "probe_body_not_cancelled"
+            ))
+        }
+        XCTAssertEqual(probe.requests.count, 2)
+        XCTAssertEqual(probe.requests.last?.value(forHTTPHeaderField: "Range"), "bytes=0-0")
+    }
+
     func testPreflightFallsBackAndCancelsRangeProbeBeforeBody() async throws {
         let sourceURL = try XCTUnwrap(URL(
             string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
