@@ -467,6 +467,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)closeTideyRightPanelTabAtIndex:(NSInteger)index;
 - (void)tideyRightPanelSelectTab:(id)sender;
 - (void)tideyRightPanelCloseTab:(id)sender;
+- (void)tideyRightPanelCloseTabsFromMenu:(id)sender;
 - (void)tideyRightPanelSelectGroup:(id)sender;
 - (void)tideyRightPanelCreateEditorTab:(id)sender;
 - (void)tideyRightPanelCreateBrowserTab:(id)sender;
@@ -908,6 +909,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     [super mouseExited:event];
     self.tideyHovered = NO;
     [self tideyUpdateAppearance];
+}
+
+- (NSMenu *)menuForEvent:(NSEvent *)event {
+    return [self.tideyOwner tideyMenuForRightPanelTabView:self] ?: [super menuForEvent:event];
 }
 
 - (void)mouseDown:(NSEvent *)event {
@@ -4853,6 +4858,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                    labelHeight);
     }
     [self reloadTideyEditorTabs];
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        [self tideyScrollSelectedRightPanelTabIntoViewForPane:pane];
+    }
     [self tideyLayoutBrowserContainer];
     [self tideyUpdateBrowserContentVisibility];
     [self updateTideyChromeToggleButtons];
@@ -5091,9 +5099,30 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self tideyScrollRightPanelTabStripByDelta:delta inPane:pane];
 }
 
-- (void)tideyScrollRightPanelTabStripByDelta:(CGFloat)delta inPane:(TideyRightPanelPane *)pane {
+- (CGFloat)tideyRightPanelTrailingOcclusionForPane:(TideyRightPanelPane *)pane {
     NSView *tabStripView = pane.tabStripView ?: _tideyEditorTabStripView;
-    CGFloat maxOffset = MAX(0, pane.tabStripContentWidth - NSWidth(tabStripView.bounds));
+    NSView *overlayView = self.tideyEditorChromeGradientMaskView;
+    if (!tabStripView || !overlayView || overlayView.hidden || !overlayView.superview) {
+        return 0;
+    }
+    NSRect stripFrame = [tabStripView convertRect:tabStripView.bounds toView:_tideyEditorPanelView];
+    NSRect overlayFrame = [overlayView convertRect:overlayView.bounds toView:_tideyEditorPanelView];
+    return [[self class] tideyRightPanelTrailingOcclusionForStripFrame:stripFrame
+                                                          overlayFrame:overlayFrame];
+}
+
+- (CGFloat)tideyRightPanelVisibleTabStripWidthForPane:(TideyRightPanelPane *)pane {
+    NSView *tabStripView = pane.tabStripView ?: _tideyEditorTabStripView;
+    return MAX(0, NSWidth(tabStripView.bounds) - [self tideyRightPanelTrailingOcclusionForPane:pane]);
+}
+
+- (CGFloat)tideyRightPanelMaximumTabStripOffsetForPane:(TideyRightPanelPane *)pane {
+    return MAX(0,
+               pane.tabStripContentWidth - [self tideyRightPanelVisibleTabStripWidthForPane:pane]);
+}
+
+- (void)tideyScrollRightPanelTabStripByDelta:(CGFloat)delta inPane:(TideyRightPanelPane *)pane {
+    CGFloat maxOffset = [self tideyRightPanelMaximumTabStripOffsetForPane:pane];
     if (maxOffset <= 0) {
         return;
     }
@@ -5116,21 +5145,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     NSView *tabStripView = pane.tabStripView ?: _tideyEditorTabStripView;
     TideyEditorTabItemView *selectedTabView = nil;
     for (NSView *subview in tabStripView.subviews) {
-        if (![subview isKindOfClass:[TideyEditorTabItemView class]]) {
-            continue;
-        }
-        for (NSView *child in subview.subviews) {
-            if (![child isKindOfClass:[NSButton class]]) {
-                continue;
-            }
-            NSButton *button = (NSButton *)child;
-            if (button.action == @selector(tideyRightPanelSelectTab:) &&
-                button.tag == pane.selectedTabIndex) {
-                selectedTabView = (TideyEditorTabItemView *)subview;
-                break;
-            }
-        }
-        if (selectedTabView) {
+        if ([subview isKindOfClass:[TideyEditorTabItemView class]] &&
+            ((TideyEditorTabItemView *)subview).tideyTabIndex == pane.selectedTabIndex) {
+            selectedTabView = (TideyEditorTabItemView *)subview;
             break;
         }
     }
@@ -5138,17 +5155,17 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         return;
     }
 
-    CGFloat maxOffset = MAX(0, pane.tabStripContentWidth - NSWidth(tabStripView.bounds));
+    CGFloat visibleWidth = [self tideyRightPanelVisibleTabStripWidthForPane:pane];
+    CGFloat maxOffset = [self tideyRightPanelMaximumTabStripOffsetForPane:pane];
     CGFloat newOffset = pane.tabStripScrollOffset;
     NSRect frame = selectedTabView.frame;
     const CGFloat padding = 8;
-    const CGFloat trailingReserve = 22 + 4 + kTideyRightPanelAddButtonTrailingPadding;
     if (NSMinX(frame) < padding) {
         newOffset = MAX(0, pane.tabStripScrollOffset + NSMinX(frame) - padding);
-    } else if (NSMaxX(frame) > NSWidth(tabStripView.bounds) - trailingReserve) {
+    } else if (NSMaxX(frame) > visibleWidth - padding) {
         newOffset = MIN(maxOffset,
                         pane.tabStripScrollOffset +
-                        (NSMaxX(frame) - (NSWidth(tabStripView.bounds) - trailingReserve)));
+                        (NSMaxX(frame) - (visibleWidth - padding)));
     }
     if (fabs(newOffset - pane.tabStripScrollOffset) < 0.5) {
         return;
@@ -5197,6 +5214,37 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:pane.tabs
                                                                                         editorExpanded:pane.editorGroupExpanded
                                                                                        browserExpanded:pane.browserGroupExpanded];
+    CGFloat fixedChromeWidth = 0;
+    NSMutableArray<NSNumber *> *preferredTabWidths = [NSMutableArray array];
+    BOOL isFirstMeasuredGroup = YES;
+    for (TideyRightPanelTabGroupState *group in groups) {
+        if (!isFirstMeasuredGroup) {
+            fixedChromeWidth += kTideyRightPanelGroupLabelGap;
+        }
+        isFirstMeasuredGroup = NO;
+        NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
+        CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
+        fixedChromeWidth += labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
+        if (!group.expanded || group.visibleTabs.count == 0) {
+            continue;
+        }
+        fixedChromeWidth += kTideyRightPanelGroupTabsGap;
+        fixedChromeWidth += addButtonSize + 4 + kTideyRightPanelAddButtonTrailingPadding;
+        for (TideyEditorTab *tab in group.visibleTabs) {
+            NSString *title = tab.dirty
+                ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"]
+                : (tab.displayName ?: @"Untitled");
+            CGFloat textWidth = ceil([title sizeWithAttributes:tabAttributes].width);
+            CGFloat preferredWidth = MIN(MAX(kTideyRightPanelTabCloseThresholdWidth, textWidth + 38),
+                                         kTideyRightPanelTabMaxWidth);
+            [preferredTabWidths addObject:@(preferredWidth)];
+        }
+    }
+    CGFloat visibleStripWidth = [self tideyRightPanelVisibleTabStripWidthForPane:pane];
+    NSArray<NSNumber *> *effectiveTabWidths =
+        [[self class] tideyRightPanelEffectiveTabWidthsForPreferredWidths:preferredTabWidths
+                                                           tabBodyBudget:MAX(0, visibleStripWidth - fixedChromeWidth)];
+    NSUInteger effectiveWidthIndex = 0;
     BOOL isFirstGroup = YES;
     for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
@@ -5256,8 +5304,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         for (NSInteger groupIndex = 0; groupIndex < (NSInteger)group.visibleTabs.count; groupIndex++) {
             TideyEditorTab *tab = group.visibleTabs[groupIndex];
             NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
-            CGFloat textWidth = ceil([title sizeWithAttributes:tabAttributes].width);
-            CGFloat tabWidth = MIN(MAX(112, textWidth + 38), 240);
+            CGFloat tabWidth = effectiveWidthIndex < effectiveTabWidths.count
+                ? effectiveTabWidths[effectiveWidthIndex].doubleValue
+                : kTideyRightPanelTabFloorWidth;
+            effectiveWidthIndex++;
             NSInteger originalIndex = [pane.tabs indexOfObjectIdenticalTo:tab];
 
             TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
@@ -5267,6 +5317,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             tabView.tideyOwner = (id<TideyEditorTabItemViewOwner>)self;
             tabView.tideyPane = pane;
             tabView.tideyTabIndex = originalIndex;
+            tabView.tideyTabIdentifier = tab.identifier;
+            tabView.tideyTabKind = tab.kind;
             tabView.tideyDragTitle = title;
             BOOL selected = (originalIndex == pane.selectedTabIndex);
             tabView.tideySelected = selected;
@@ -5274,29 +5326,43 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             [tabView tideyUpdateAppearance];
 
             NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
-            TideyPassthroughLabel *titleLabel = [TideyPassthroughLabel labelWithString:title];
+            TideyFadingPassthroughLabel *titleLabel = [TideyFadingPassthroughLabel labelWithString:title];
             titleLabel.usesSingleLineMode = YES;
             titleLabel.maximumNumberOfLines = 1;
             titleLabel.alignment = NSTextAlignmentLeft;
-            titleLabel.lineBreakMode = NSLineBreakByTruncatingTail;
+            titleLabel.lineBreakMode = NSLineBreakByClipping;
             titleLabel.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
             titleLabel.textColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
             NSSize titleLabelSize = titleLabel.fittingSize;
             CGFloat titleLabelHeight = MIN(MAX(14.0, ceil(titleLabelSize.height)), MAX(14.0, tabHeight - 4));
             CGFloat titleLabelY = floor((tabHeight - titleLabelHeight) / 2.0);
-            titleLabel.frame = NSMakeRect(10, titleLabelY, tabWidth - 34, titleLabelHeight);
+            BOOL showCloseButton = [[self class] tideyRightPanelShouldShowCloseButtonForWidth:tabWidth
+                                                                                     selected:selected];
+            CGFloat titleTrailingInset = showCloseButton ? 34 : 18;
+            titleLabel.frame = NSMakeRect(10,
+                                          titleLabelY,
+                                          MAX(0, tabWidth - titleTrailingInset),
+                                          titleLabelHeight);
+            titleLabel.tideyFullTextWidth = titleLabelSize.width;
+            titleLabel.accessibilityValue = title;
             [tabView addSubview:titleLabel];
 
-            NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2)];
-            closeButton.bordered = NO;
-            closeButton.buttonType = NSButtonTypeMomentaryChange;
-            closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
-            closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
-            closeButton.title = @"✕";
-            closeButton.tag = originalIndex;
-            closeButton.target = self;
-            closeButton.action = @selector(tideyRightPanelCloseTab:);
-            [tabView addSubview:closeButton];
+            if (showCloseButton) {
+                NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22,
+                                                                                   2,
+                                                                                   20,
+                                                                                   tabHeight - 2)];
+                closeButton.bordered = NO;
+                closeButton.buttonType = NSButtonTypeMomentaryChange;
+                closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
+                closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+                closeButton.title = @"✕";
+                closeButton.tag = originalIndex;
+                closeButton.target = self;
+                closeButton.action = @selector(tideyRightPanelCloseTab:);
+                closeButton.accessibilityLabel = [NSString stringWithFormat:@"Close %@", title];
+                [tabView addSubview:closeButton];
+            }
 
             BOOL isLastInGroup = (groupIndex == (NSInteger)group.visibleTabs.count - 1);
             tabView.tideySeparatorView.hidden = isLastInGroup;
@@ -5325,7 +5391,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         }
     }
     pane.tabStripContentWidth = x;
-    CGFloat maxOffset = MAX(0, pane.tabStripContentWidth - NSWidth(tabStripView.bounds));
+    CGFloat maxOffset = [self tideyRightPanelMaximumTabStripOffsetForPane:pane];
     CGFloat clampedOffset = MIN(pane.tabStripScrollOffset, maxOffset);
     if (fabs(clampedOffset - pane.tabStripScrollOffset) >= 0.5) {
         pane.tabStripScrollOffset = clampedOffset;
@@ -5485,6 +5551,98 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 - (void)tideyRightPanelCloseTab:(id)sender {
     TideyRightPanelPane *pane = [self tideyCurrentPaneForSender:sender];
     [self closeTideyRightPanelTabAtIndex:[sender tag] inPane:pane];
+}
+
+- (NSMenu *)tideyMenuForRightPanelTabView:(TideyEditorTabItemView *)tabView {
+    TideyRightPanelPane *pane = tabView.tideyPane;
+    NSString *clickedIdentifier = tabView.tideyTabIdentifier;
+    NSInteger clickedIndex = [self tideyIndexOfRightPanelTabWithIdentifier:clickedIdentifier inPane:pane];
+    if (!pane || clickedIndex == NSNotFound) {
+        return nil;
+    }
+
+    TideyEditorTab *clickedTab = pane.tabs[clickedIndex];
+    NSArray<TideyEditorTab *> *otherTargets =
+        [[self class] tideyRightPanelBulkCloseTargetsForTabs:pane.tabs
+                                          clickedIdentifier:clickedIdentifier
+                                           closeTabsToRight:NO];
+    NSArray<TideyEditorTab *> *rightTargets =
+        [[self class] tideyRightPanelBulkCloseTargetsForTabs:pane.tabs
+                                          clickedIdentifier:clickedIdentifier
+                                           closeTabsToRight:YES];
+    NSArray<NSString *> *(^identifiersForTargets)(NSArray<TideyEditorTab *> *) =
+        ^NSArray<NSString *> *(NSArray<TideyEditorTab *> *targets) {
+            NSMutableArray<NSString *> *identifiers = [NSMutableArray arrayWithCapacity:targets.count];
+            for (TideyEditorTab *target in targets) {
+                if (target.identifier.length > 0) {
+                    [identifiers addObject:target.identifier];
+                }
+            }
+            return [identifiers copy];
+        };
+
+    NSMenu *menu = [[NSMenu alloc] initWithTitle:@""];
+    menu.autoenablesItems = NO;
+    NSMenuItem *(^addCloseItem)(NSString *, NSArray<NSString *> *, BOOL, BOOL) =
+        ^NSMenuItem *(NSString *title, NSArray<NSString *> *identifiers, BOOL bulk, BOOL enabled) {
+            NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:title
+                                                         action:@selector(tideyRightPanelCloseTabsFromMenu:)
+                                                  keyEquivalent:@""];
+            item.target = self;
+            item.enabled = enabled;
+            item.representedObject = @{
+                @"pane": pane,
+                @"identifiers": identifiers,
+                @"bulk": @(bulk),
+            };
+            [menu addItem:item];
+            return item;
+        };
+
+    addCloseItem(@"Close Tab", @[ clickedIdentifier ], NO, YES);
+    [menu addItem:[NSMenuItem separatorItem]];
+    NSString *groupName = clickedTab.kind == TideyRightPanelTabKindBrowser ? @"Web" : @"Code";
+    addCloseItem([NSString stringWithFormat:@"Close Other %@ Tabs", groupName],
+                 identifiersForTargets(otherTargets),
+                 YES,
+                 [[self class] tideyRightPanelBulkCloseTargetsAreEligible:otherTargets]);
+    addCloseItem([NSString stringWithFormat:@"Close %@ Tabs to the Right", groupName],
+                 identifiersForTargets(rightTargets),
+                 YES,
+                 [[self class] tideyRightPanelBulkCloseTargetsAreEligible:rightTargets]);
+    return menu;
+}
+
+- (void)tideyRightPanelCloseTabsFromMenu:(NSMenuItem *)sender {
+    NSDictionary *context = [sender.representedObject isKindOfClass:[NSDictionary class]]
+        ? sender.representedObject
+        : nil;
+    TideyRightPanelPane *pane = context[@"pane"];
+    NSArray<NSString *> *identifiers = context[@"identifiers"];
+    BOOL bulk = [context[@"bulk"] boolValue];
+    if (!pane || ![identifiers isKindOfClass:[NSArray class]] || identifiers.count == 0) {
+        return;
+    }
+
+    if (bulk) {
+        NSMutableArray<TideyEditorTab *> *currentTargets = [NSMutableArray array];
+        for (NSString *identifier in identifiers) {
+            NSInteger index = [self tideyIndexOfRightPanelTabWithIdentifier:identifier inPane:pane];
+            if (index != NSNotFound) {
+                [currentTargets addObject:pane.tabs[index]];
+            }
+        }
+        if (![[self class] tideyRightPanelBulkCloseTargetsAreEligible:currentTargets]) {
+            return;
+        }
+    }
+
+    for (NSString *identifier in [identifiers copy]) {
+        NSInteger index = [self tideyIndexOfRightPanelTabWithIdentifier:identifier inPane:pane];
+        if (index != NSNotFound) {
+            [self closeTideyRightPanelTabAtIndex:index inPane:pane];
+        }
+    }
 }
 
 - (void)tideyRightPanelSelectGroup:(id)sender {
