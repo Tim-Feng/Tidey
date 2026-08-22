@@ -30,6 +30,52 @@ struct TideyBrowserTransferFailure: Error, Equatable {
     let code: String
 }
 
+enum TideyBrowserTransferFailurePolicy {
+    static func httpStatus(_ statusCode: Int) -> TideyBrowserTransferFailure {
+        switch statusCode {
+        case 401, 403:
+            return TideyBrowserTransferFailure(
+                category: .authentication,
+                code: "http_\(statusCode)"
+            )
+        case 429:
+            return TideyBrowserTransferFailure(category: .rateLimited, code: "http_429")
+        case 500...599:
+            return TideyBrowserTransferFailure(
+                category: .retryable,
+                code: "http_\(statusCode)"
+            )
+        default:
+            return TideyBrowserTransferFailure(
+                category: .validation,
+                code: "http_\(statusCode)"
+            )
+        }
+    }
+
+    static func network(_ error: Error) -> TideyBrowserTransferFailure {
+        _ = error
+        return TideyBrowserTransferFailure(category: .retryable, code: "network_failure")
+    }
+
+    static func classify(_ error: Error) -> TideyBrowserTransferFailure {
+        if let failure = error as? TideyBrowserTransferFailure {
+            return failure
+        }
+        if let validation = error as? TideyBrowserTransferValidationError,
+           validation == .invalidDestination {
+            return TideyBrowserTransferFailure(
+                category: .destination,
+                code: "destination_validation_failed"
+            )
+        }
+        return TideyBrowserTransferFailure(
+            category: .validation,
+            code: "transfer_validation_failed"
+        )
+    }
+}
+
 enum TideyBrowserTransferPreflightMethod: String, Equatable {
     case head = "HEAD"
     case range = "GET_RANGE"
@@ -65,7 +111,7 @@ enum TideyBrowserTransferPreflightPolicy {
             if statusCode == 405 || statusCode == 501 {
                 return .fallbackToRange
             }
-            throw TideyBrowserTransferFailure(category: .validation, code: "preflight_http_status")
+            throw TideyBrowserTransferFailurePolicy.httpStatus(statusCode)
         }
         guard identityContentEncoding(in: headers) != nil,
               let exactTotalBytes = exactPositiveLength(in: headers) else {
@@ -88,7 +134,7 @@ enum TideyBrowserTransferPreflightPolicy {
             if statusCode == 200 {
                 throw TideyBrowserTransferFailure(category: .invalidRange, code: "range_not_honored")
             }
-            throw TideyBrowserTransferFailure(category: .validation, code: "preflight_http_status")
+            throw TideyBrowserTransferFailurePolicy.httpStatus(statusCode)
         }
         guard identityContentEncoding(in: headers) != nil else {
             throw TideyBrowserTransferFailure(category: .validation, code: "identity_encoding_required")
@@ -454,7 +500,10 @@ enum TideyBrowserTransferResponsePolicy {
         guard expectedTotalBytes > 0,
               resumeOffset >= 0,
               resumeOffset <= expectedTotalBytes else {
-            throw TideyBrowserTransferValidationError.invalidResponse
+            throw TideyBrowserTransferFailure(
+                category: .validation,
+                code: "invalid_transfer_bounds"
+            )
         }
         if let representationBinding {
             guard representationBinding.exactTotalBytes == expectedTotalBytes,
@@ -472,7 +521,10 @@ enum TideyBrowserTransferResponsePolicy {
         switch statusCode {
         case 200:
             guard resumeOffset == 0 else {
-                throw TideyBrowserTransferValidationError.invalidResponse
+                throw TideyBrowserTransferFailure(
+                    category: .invalidRange,
+                    code: "range_not_honored"
+                )
             }
             let total = try optionalPositiveIntegerHeader("Content-Length", in: headers)
             try validateServerTotal(
@@ -486,7 +538,10 @@ enum TideyBrowserTransferResponsePolicy {
                   let range = parseSatisfiedContentRange(rawRange),
                   range.start == resumeOffset,
                   range.end < expectedTotalBytes else {
-                throw TideyBrowserTransferValidationError.invalidResponse
+                throw TideyBrowserTransferFailure(
+                    category: .invalidRange,
+                    code: "invalid_content_range"
+                )
             }
             try validateServerTotal(
                 range.total,
@@ -495,9 +550,17 @@ enum TideyBrowserTransferResponsePolicy {
             )
             decision = .resumed(expectedTotal: range.total)
         case 416:
-            let total = try parseOptionalUnsatisfiedContentRange(
-                header("Content-Range", in: headers)
-            )
+            let total: Int?
+            do {
+                total = try parseOptionalUnsatisfiedContentRange(
+                    header("Content-Range", in: headers)
+                )
+            } catch {
+                throw TideyBrowserTransferFailure(
+                    category: .invalidRange,
+                    code: "invalid_unsatisfied_content_range"
+                )
+            }
             try validateServerTotal(
                 total,
                 expectedTotalBytes: expectedTotalBytes,
@@ -505,7 +568,7 @@ enum TideyBrowserTransferResponsePolicy {
             )
             decision = .rangeNotSatisfiable(remoteTotal: total)
         default:
-            throw TideyBrowserTransferValidationError.invalidResponse
+            throw TideyBrowserTransferFailurePolicy.httpStatus(statusCode)
         }
         if let representationBinding {
             try validateRepresentation(
@@ -547,7 +610,10 @@ enum TideyBrowserTransferResponsePolicy {
                     code: "representation_total_mismatch"
                 )
             }
-            throw TideyBrowserTransferValidationError.declaredTotalMismatch
+            throw TideyBrowserTransferFailure(
+                category: .validation,
+                code: "declared_total_mismatch"
+            )
         }
     }
 

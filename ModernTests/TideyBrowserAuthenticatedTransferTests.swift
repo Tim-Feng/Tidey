@@ -368,6 +368,51 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         ))
     }
 
+    func testResponsePolicyClassifiesTransferFailures() throws {
+        for status in [401, 403] {
+            XCTAssertEqual(
+                TideyBrowserTransferFailurePolicy.httpStatus(status).category,
+                .authentication
+            )
+        }
+        XCTAssertEqual(TideyBrowserTransferFailurePolicy.httpStatus(429).category, .rateLimited)
+        XCTAssertEqual(TideyBrowserTransferFailurePolicy.httpStatus(503).category, .retryable)
+        XCTAssertEqual(
+            TideyBrowserTransferFailurePolicy.network(URLError(.networkConnectionLost)).category,
+            .retryable
+        )
+        XCTAssertEqual(
+            TideyBrowserTransferFailurePolicy.classify(
+                TideyBrowserTransferValidationError.invalidDestination
+            ).category,
+            .destination
+        )
+
+        do {
+            _ = try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 206,
+                resumeOffset: 4,
+                expectedTotalBytes: 10,
+                headers: ["Content-Range": "bytes malformed"]
+            )
+            XCTFail("Expected malformed Content-Range rejection")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .invalidRange)
+        }
+
+        do {
+            _ = try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 503,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: [:]
+            )
+            XCTFail("Expected retryable HTTP failure")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .retryable)
+        }
+    }
+
     func testByteBudgetStopsHeaderlessOverflowBeforeAcceptingBytes() throws {
         XCTAssertEqual(
             try TideyBrowserTransferResponsePolicy.evaluate(
