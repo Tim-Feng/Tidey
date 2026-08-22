@@ -289,6 +289,10 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // workspace/panel binding still names this window's current native graph.
 - (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload;
 
+// Stages a future runtime descriptor while the current runtime may still
+// publish differing evidence during a controlled lineage handoff.
+- (NSDictionary *)tideyStageRuntimeResumeDescriptorPayload:(NSDictionary *)payload;
+
 // Returns agent-only runtime descriptors with their stable binding and
 // native revision for Bridge reconciliation.
 - (NSArray<NSDictionary *> *)tideyRuntimeAgentDescriptorSnapshots;

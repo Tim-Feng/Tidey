@@ -1118,11 +1118,21 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         let tmuxPaneID: String?
     }
 
+    private enum PendingRuntimeEvidenceFlavor {
+        case restored
+        case staged
+    }
+
+    private struct PendingRuntimeEvidence {
+        let entry: Entry
+        let flavor: PendingRuntimeEvidenceFlavor
+    }
+
     private let lock = NSLock()
     private var entriesByPanelID: [String: Entry] = [:]
     private var revisionHighWaterByPanelID: [String: Int64] = [:]
     private var awaitingRuntimeEvidenceByPanelID:
-        [String: Entry] = [:]
+        [String: PendingRuntimeEvidence] = [:]
 
     @objc(initWithInitialDescriptorsByPanelID:)
     init(
@@ -1144,6 +1154,36 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         _ payload: [String: Any],
         currentWorkspaceID: String,
         currentPanelID: String
+    ) -> TideyRuntimeResumeDescriptorUpdateResult {
+        acceptUpdatePayload(
+            payload,
+            currentWorkspaceID: currentWorkspaceID,
+            currentPanelID: currentPanelID,
+            staged: false
+        )
+    }
+
+    @objc(
+        acceptStagedUpdatePayload:currentWorkspaceID:currentPanelID:
+    )
+    func acceptStagedUpdatePayload(
+        _ payload: [String: Any],
+        currentWorkspaceID: String,
+        currentPanelID: String
+    ) -> TideyRuntimeResumeDescriptorUpdateResult {
+        acceptUpdatePayload(
+            payload,
+            currentWorkspaceID: currentWorkspaceID,
+            currentPanelID: currentPanelID,
+            staged: true
+        )
+    }
+
+    private func acceptUpdatePayload(
+        _ payload: [String: Any],
+        currentWorkspaceID: String,
+        currentPanelID: String,
+        staged: Bool
     ) -> TideyRuntimeResumeDescriptorUpdateResult {
         lock.lock()
         defer { lock.unlock() }
@@ -1183,17 +1223,40 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         let existing = entriesByPanelID[currentPanelID]
         if existing?.canonicalContent == canonicalContent {
             if let existing {
-                entriesByPanelID[currentPanelID] = Entry(
+                let refreshed = Entry(
                     descriptor: existing.descriptor,
                     canonicalContent: existing.canonicalContent,
                     tmuxPaneID: update.binding.tmuxPaneID
                 )
+                entriesByPanelID[currentPanelID] = refreshed
+                awaitingRuntimeEvidenceByPanelID[currentPanelID] =
+                    staged
+                        ? PendingRuntimeEvidence(
+                            entry: refreshed,
+                            flavor: .staged
+                        )
+                        : nil
             }
-            awaitingRuntimeEvidenceByPanelID[currentPanelID] = nil
             return TideyRuntimeResumeDescriptorUpdateResult(
                 accepted: true,
                 changed: false,
                 descriptor: existing?.descriptor,
+                errorCode: nil
+            )
+        }
+        if !staged,
+           let existing,
+           let pending =
+                awaitingRuntimeEvidenceByPanelID[currentPanelID],
+           pending.flavor == .staged,
+           pending.entry.descriptor.revision ==
+                existing.descriptor.revision,
+           pending.entry.canonicalContent ==
+                existing.canonicalContent {
+            return TideyRuntimeResumeDescriptorUpdateResult(
+                accepted: true,
+                changed: false,
+                descriptor: existing.descriptor,
                 errorCode: nil
             )
         }
@@ -1208,12 +1271,19 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
             let descriptor = try update.descriptor.validatedModel(
                 revision: currentRevision + 1
             )
-            entriesByPanelID[currentPanelID] = Entry(
+            let entry = Entry(
                 descriptor: descriptor,
                 canonicalContent: canonicalContent,
                 tmuxPaneID: update.binding.tmuxPaneID
             )
-            awaitingRuntimeEvidenceByPanelID[currentPanelID] = nil
+            entriesByPanelID[currentPanelID] = entry
+            awaitingRuntimeEvidenceByPanelID[currentPanelID] =
+                staged
+                    ? PendingRuntimeEvidence(
+                        entry: entry,
+                        flavor: .staged
+                    )
+                    : nil
             revisionHighWaterByPanelID[currentPanelID] =
                 descriptor.revision
             return TideyRuntimeResumeDescriptorUpdateResult(
@@ -1267,11 +1337,22 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
             if let tmuxPaneID = entry.tmuxPaneID {
                 binding["tmux_pane_id"] = tmuxPaneID
             }
-            return [
+            var snapshot: [String: Any] = [
                 "binding": binding,
                 "revision": entry.descriptor.revision,
                 "descriptor": descriptor,
             ]
+            if let pending =
+                    awaitingRuntimeEvidenceByPanelID[panelID],
+               pending.entry.descriptor.revision ==
+                    entry.descriptor.revision,
+               pending.entry.canonicalContent ==
+                    entry.canonicalContent {
+                snapshot["awaiting_runtime_evidence"] = true
+                snapshot["staged"] =
+                    pending.flavor == .staged
+            }
+            return snapshot
         }
     }
 
@@ -1342,9 +1423,10 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         }
         if let pending =
                 awaitingRuntimeEvidenceByPanelID[currentPanelID],
-           pending.descriptor.revision ==
+           pending.entry.descriptor.revision ==
                 existing.descriptor.revision,
-           pending.canonicalContent == existing.canonicalContent {
+           pending.entry.canonicalContent ==
+                existing.canonicalContent {
             return rejected(
                 errorCode: "runtime_rehydration_pending"
             )
@@ -1382,9 +1464,16 @@ final class TideyRuntimeResumeDescriptorUpdateGate: NSObject {
         )
         lock.lock()
         installEntriesLocked(replacements)
-        awaitingRuntimeEvidenceByPanelID = replacements.filter {
-            $0.value.descriptor.kind == .agent
-        }
+        awaitingRuntimeEvidenceByPanelID =
+            replacements.reduce(into: [:]) { result, element in
+                guard element.value.descriptor.kind == .agent else {
+                    return
+                }
+                result[element.key] = PendingRuntimeEvidence(
+                    entry: element.value,
+                    flavor: .restored
+                )
+            }
         lock.unlock()
     }
 

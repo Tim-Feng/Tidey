@@ -605,6 +605,446 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
         )
     }
 
+    func testStagedDescriptorSwallowsDifferingLiveEvidenceAcrossCadence()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let live = socketUpdatePayload(
+            durableResumeID: "thread-staged",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let candidate = socketUpdatePayload(
+            durableResumeID: "thread-staged",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        XCTAssertEqual(
+            gate.acceptUpdatePayload(
+                live,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).descriptor?.revision,
+            1
+        )
+        let staged = gate.acceptStagedUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(staged.accepted)
+        XCTAssertTrue(staged.changed)
+        XCTAssertEqual(staged.descriptor?.revision, 2)
+
+        for _ in 0 ..< 2 {
+            let republished = gate.acceptUpdatePayload(
+                live,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            )
+            XCTAssertTrue(republished.accepted)
+            XCTAssertFalse(republished.changed)
+            XCTAssertEqual(republished.descriptor?.revision, 2)
+            XCTAssertEqual(
+                gate.descriptor(forPanelID: "panel-1")?
+                    .target?.socketName,
+                "candidate"
+            )
+        }
+    }
+
+    func testMatchingLiveEvidenceFulfillsStagedDescriptorLease()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let live = socketUpdatePayload(
+            durableResumeID: "thread-match",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let candidate = socketUpdatePayload(
+            durableResumeID: "thread-match",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        _ = gate.acceptUpdatePayload(
+            live,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        _ = gate.acceptStagedUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+
+        let matched = gate.acceptUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(matched.accepted)
+        XCTAssertFalse(matched.changed)
+        XCTAssertEqual(matched.descriptor?.revision, 2)
+        let matchedSnapshot = try runtimeDescriptorSnapshot(gate: gate)
+        XCTAssertNil(matchedSnapshot["awaiting_runtime_evidence"])
+        XCTAssertNil(matchedSnapshot["staged"])
+
+        let later = gate.acceptUpdatePayload(
+            live,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(later.changed)
+        XCTAssertEqual(later.descriptor?.revision, 3)
+        XCTAssertEqual(later.descriptor?.target?.socketName, "old")
+    }
+
+    func testSecondStagedDescriptorSupersedesFirst() throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let live = socketUpdatePayload(
+            durableResumeID: "thread-supersede",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let candidateA = socketUpdatePayload(
+            durableResumeID: "thread-supersede",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate-a"
+        )
+        let candidateB = socketUpdatePayload(
+            durableResumeID: "thread-supersede",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate-b"
+        )
+        _ = gate.acceptUpdatePayload(
+            live,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertEqual(
+            gate.acceptStagedUpdatePayload(
+                candidateA,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).descriptor?.revision,
+            2
+        )
+        XCTAssertEqual(
+            gate.acceptStagedUpdatePayload(
+                candidateB,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).descriptor?.revision,
+            3
+        )
+        XCTAssertFalse(
+            gate.acceptUpdatePayload(
+                candidateA,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).changed
+        )
+        let matched = gate.acceptUpdatePayload(
+            candidateB,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(matched.changed)
+        XCTAssertEqual(matched.descriptor?.revision, 3)
+        XCTAssertNil(
+            try runtimeDescriptorSnapshot(gate: gate)["staged"]
+        )
+    }
+
+    func testStagedDescriptorRejectsRemovalUntilMatchingEvidence()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let live = socketUpdatePayload(
+            durableResumeID: "thread-removal",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let candidate = socketUpdatePayload(
+            durableResumeID: "thread-removal",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        _ = gate.acceptUpdatePayload(
+            live,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        _ = gate.acceptStagedUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        let removal = try removalPayload(
+            from: runtimeDescriptorSnapshot(gate: gate)
+        )
+
+        let rejected = gate.removeRuntimeAgentDescriptorPayload(
+            removal,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(rejected.accepted)
+        XCTAssertEqual(
+            rejected.errorCode,
+            "runtime_rehydration_pending"
+        )
+
+        _ = gate.acceptUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        let removed = gate.removeRuntimeAgentDescriptorPayload(
+            removal,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(removed.accepted)
+        XCTAssertTrue(removed.changed)
+    }
+
+    func testRestoredDescriptorStillAcceptsDifferingRuntimeEvidence()
+        throws {
+        let originalGate = TideyRuntimeResumeDescriptorUpdateGate()
+        let old = socketUpdatePayload(
+            durableResumeID: "thread-restored-drift",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let newer = socketUpdatePayload(
+            durableResumeID: "thread-restored-drift",
+            workingDirectory: "/tmp/project",
+            socketName: "new"
+        )
+        let descriptor = try XCTUnwrap(
+            originalGate.acceptUpdatePayload(
+                old,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).descriptor
+        )
+        let restoredGate = TideyRuntimeResumeDescriptorUpdateGate()
+        restoredGate.restoreDescriptorsByPanelIDAwaitingRuntimeEvidence([
+            "panel-1": descriptor
+        ])
+        let pendingSnapshot = try runtimeDescriptorSnapshot(
+            gate: restoredGate
+        )
+        XCTAssertEqual(
+            pendingSnapshot["awaiting_runtime_evidence"] as? Bool,
+            true
+        )
+        XCTAssertEqual(pendingSnapshot["staged"] as? Bool, false)
+
+        let changed = restoredGate.acceptUpdatePayload(
+            newer,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(changed.accepted)
+        XCTAssertTrue(changed.changed)
+        XCTAssertEqual(changed.descriptor?.revision, 2)
+        XCTAssertEqual(changed.descriptor?.target?.socketName, "new")
+        let current = try runtimeDescriptorSnapshot(gate: restoredGate)
+        XCTAssertNil(current["awaiting_runtime_evidence"])
+        XCTAssertNil(current["staged"])
+    }
+
+    func testAppRestartDowngradesStagedDescriptorToRestoredPending()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let live = socketUpdatePayload(
+            durableResumeID: "thread-restart",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let candidate = socketUpdatePayload(
+            durableResumeID: "thread-restart",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        _ = gate.acceptUpdatePayload(
+            live,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        let staged = try XCTUnwrap(
+            gate.acceptStagedUpdatePayload(
+                candidate,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).descriptor
+        )
+
+        let relaunchedGate = TideyRuntimeResumeDescriptorUpdateGate()
+        relaunchedGate
+            .restoreDescriptorsByPanelIDAwaitingRuntimeEvidence([
+                "panel-1": staged
+            ])
+        let restoredSnapshot = try runtimeDescriptorSnapshot(
+            gate: relaunchedGate
+        )
+        XCTAssertEqual(
+            restoredSnapshot["awaiting_runtime_evidence"] as? Bool,
+            true
+        )
+        XCTAssertEqual(restoredSnapshot["staged"] as? Bool, false)
+
+        let reconciled = relaunchedGate.acceptUpdatePayload(
+            live,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(reconciled.changed)
+        XCTAssertEqual(reconciled.descriptor?.revision, 3)
+        XCTAssertEqual(reconciled.descriptor?.target?.socketName, "old")
+    }
+
+    func testStagedDescriptorRetainsOrdinaryBindingValidation()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let payload = socketUpdatePayload(
+            durableResumeID: "thread-validation",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        let stale = gate.acceptStagedUpdatePayload(
+            payload,
+            currentWorkspaceID: "workspace-other",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(stale.accepted)
+        XCTAssertEqual(stale.errorCode, "stale_binding")
+        XCTAssertNil(gate.descriptor(forPanelID: "panel-1"))
+
+        var malformed = payload
+        var descriptor = try XCTUnwrap(
+            malformed["descriptor"] as? [String: Any]
+        )
+        descriptor["topology"] = ["windows": "invalid"]
+        malformed["descriptor"] = descriptor
+        let rejected = gate.acceptStagedUpdatePayload(
+            malformed,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(rejected.accepted)
+        XCTAssertEqual(rejected.errorCode, "invalid_descriptor")
+        XCTAssertNil(gate.descriptor(forPanelID: "panel-1"))
+    }
+
+    func testStagedInventoryReportsPendingFlavorAndClears() throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let candidate = socketUpdatePayload(
+            durableResumeID: "thread-inventory-staged",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        _ = gate.acceptStagedUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        let staged = try runtimeDescriptorSnapshot(gate: gate)
+        XCTAssertEqual(
+            staged["awaiting_runtime_evidence"] as? Bool,
+            true
+        )
+        XCTAssertEqual(staged["staged"] as? Bool, true)
+        XCTAssertEqual(staged["revision"] as? Int64, 1)
+
+        let roundTrip = gate.acceptUpdatePayload(
+            [
+                "binding": try XCTUnwrap(
+                    staged["binding"] as? [String: Any]
+                ),
+                "descriptor": try XCTUnwrap(
+                    staged["descriptor"] as? [String: Any]
+                ),
+            ],
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertTrue(roundTrip.accepted)
+        XCTAssertFalse(roundTrip.changed)
+        let cleared = try runtimeDescriptorSnapshot(gate: gate)
+        XCTAssertNil(cleared["awaiting_runtime_evidence"])
+        XCTAssertNil(cleared["staged"])
+    }
+
+    func testStagedHandoffSequenceRehydratesCandidateWithoutRevisionDrift()
+        throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let old = socketUpdatePayload(
+            durableResumeID: "thread-sequence",
+            workingDirectory: "/tmp/project",
+            socketName: "old"
+        )
+        let candidate = socketUpdatePayload(
+            durableResumeID: "thread-sequence",
+            workingDirectory: "/tmp/project",
+            socketName: "candidate"
+        )
+        _ = gate.acceptUpdatePayload(
+            old,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        let staged = gate.acceptStagedUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertEqual(staged.descriptor?.revision, 2)
+        for _ in 0 ..< 3 {
+            XCTAssertFalse(
+                gate.acceptUpdatePayload(
+                    old,
+                    currentWorkspaceID: "workspace-1",
+                    currentPanelID: "panel-1"
+                ).changed
+            )
+        }
+        let removal = try removalPayload(
+            from: runtimeDescriptorSnapshot(gate: gate)
+        )
+        XCTAssertEqual(
+            gate.removeRuntimeAgentDescriptorPayload(
+                removal,
+                currentWorkspaceID: "workspace-1",
+                currentPanelID: "panel-1"
+            ).errorCode,
+            "runtime_rehydration_pending"
+        )
+
+        let persisted = try XCTUnwrap(
+            gate.descriptor(forPanelID: "panel-1")
+        )
+        let relaunchedGate = TideyRuntimeResumeDescriptorUpdateGate()
+        relaunchedGate
+            .restoreDescriptorsByPanelIDAwaitingRuntimeEvidence([
+                "panel-1": persisted
+            ])
+        let hydrated = relaunchedGate.acceptUpdatePayload(
+            candidate,
+            currentWorkspaceID: "workspace-1",
+            currentPanelID: "panel-1"
+        )
+        XCTAssertFalse(hydrated.changed)
+        XCTAssertEqual(hydrated.descriptor?.revision, 2)
+        XCTAssertEqual(
+            hydrated.descriptor?.target?.socketName,
+            "candidate"
+        )
+        let final = try runtimeDescriptorSnapshot(gate: relaunchedGate)
+        XCTAssertNil(final["awaiting_runtime_evidence"])
+        XCTAssertNil(final["staged"])
+    }
+
     func testRestoredDescriptorRemovalReadinessSeamCompiles() throws {
         let descriptor = try XCTUnwrap(
             TideyRuntimeResumeDescriptorUpdateGate()
@@ -1633,7 +2073,8 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
 
     private func socketUpdatePayload(
         durableResumeID: String,
-        workingDirectory: String
+        workingDirectory: String,
+        socketName: String = "tidey"
     ) -> [String: Any] {
         [
             "binding": [
@@ -1647,7 +2088,7 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                 "restore_policy": "create",
                 "target": [
                     "socket_endpoint_kind": "name",
-                    "socket_name": "tidey",
+                    "socket_name": socketName,
                     "tmux_session": "tidey-codex"
                 ],
                 "topology": [
@@ -1685,6 +2126,18 @@ final class TideyRuntimeResumeDescriptorTests: XCTestCase {
                 ]
             ]
         ]
+    }
+
+    private func runtimeDescriptorSnapshot(
+        gate: TideyRuntimeResumeDescriptorUpdateGate
+    ) throws -> [String: Any] {
+        try XCTUnwrap(
+            gate.runtimeAgentDescriptorSnapshots(
+                currentWorkspaceIDByPanelID: [
+                    "panel-1": "workspace-1"
+                ]
+            ).first
+        )
     }
 
     private func directSocketUpdatePayload(

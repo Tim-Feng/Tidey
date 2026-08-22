@@ -538,6 +538,10 @@
   - `restore_policy=create` 的更新 gate 要求 live `tmux_pane_id`；inventory 若只回 workspace／panel binding，controller 即使只改 socket 也必然得到 `stale_binding`
   - restored descriptor 本身不保存 live pane identity；Bridge 以相同 descriptor 內容重新發布 runtime evidence 時，gate 仍要更新 binding metadata，不能因 canonical content 未變就直接略過
   - regression 要覆蓋 restore→同內容 live republish→list→只改 target→update 的完整流程；分別用手工完整 update payload 測 gate、用 inventory 測 removal，抓不到兩個 wire contract 之間的欄位 drift
+- controlled runtime handoff 的未來 target 不能和 ordinary live evidence 共用同一種 update ownership
+  - 2026-08-23 實機中，controller 把 candidate socket 寫成 revision 36 後，仍存活的 Bridge publisher 在下一個 5 秒 cadence 用舊 server 證據覆寫成 revision 37；單次 accepted response 不是穩定 handoff gate
+  - 明確的 staged update 要建立 in-memory pending lease：內容不同的 ordinary evidence 只能 accepted/no-change，內容相同才完成 hydration 並清除 lease；App restart 則把 staged 降為 restored pending，保留正常 drift reconciliation
+  - inventory 必須暴露 `awaiting_runtime_evidence` 與 `staged`；controller 要跨過至少一個 publisher cadence 再確認 revision 與 target 都不漂移，之後才可 checkpoint、結束舊 runtime 並重啟 App
 - tmux restore target 必須保存 server 回報的完整 canonical session name
   - 使用者啟動時可用 `tmux attach -t s` 這類 prefix，但 prefix 不是 durable identity；冷重開後 exact attach 到 `=s` 不會等同 `storage`
   - topology capture 要以穩定的 session ID 查詢 `list-panes -s`，再保存輸出中的 `session_name`、真實 `window_index` 與 `pane_index`

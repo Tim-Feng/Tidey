@@ -660,7 +660,8 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
         return;
     }
 
-    if ([action isEqualToString:@"update_runtime_resume_descriptor"]) {
+    if ([action isEqualToString:@"update_runtime_resume_descriptor"] ||
+        [action isEqualToString:@"stage_runtime_resume_descriptor"]) {
         if (![NSThread isMainThread]) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self handleRequestMessage:message onConnection:connection];
@@ -685,7 +686,9 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
             return;
         }
         NSDictionary *result =
-            [term tideyAcceptRuntimeResumeDescriptorUpdatePayload:source];
+            [action isEqualToString:@"stage_runtime_resume_descriptor"]
+                ? [term tideyStageRuntimeResumeDescriptorPayload:source]
+                : [term tideyAcceptRuntimeResumeDescriptorUpdatePayload:source];
         if (![result[@"accepted"] boolValue]) {
             NSString *code =
                 [result[@"error_code"] isKindOfClass:[NSString class]]

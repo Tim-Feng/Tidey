@@ -1628,6 +1628,9 @@ static const NSTimeInterval kTideyNativeTerminalSizeLeaseTimeout = 5.0;
     NSMenuItemValidation,
     PSMMinimalTabStyleDelegate>
 
+- (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload
+                                                            staged:(BOOL)staged;
+
 @property(nonatomic, assign) BOOL windowInitialized;
 
 // Session ID of session that currently has an auto-command history window open
@@ -4103,6 +4106,15 @@ ITERM_WEAKLY_REFERENCEABLE
 }
 
 - (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload {
+    return [self tideyAcceptRuntimeResumeDescriptorUpdatePayload:payload staged:NO];
+}
+
+- (NSDictionary *)tideyStageRuntimeResumeDescriptorPayload:(NSDictionary *)payload {
+    return [self tideyAcceptRuntimeResumeDescriptorUpdatePayload:payload staged:YES];
+}
+
+- (NSDictionary *)tideyAcceptRuntimeResumeDescriptorUpdatePayload:(NSDictionary *)payload
+                                                            staged:(BOOL)staged {
     NSAssert([NSThread isMainThread], @"Runtime descriptor updates mutate native window state.");
     if (![payload isKindOfClass:[NSDictionary class]]) {
         return @{
@@ -4132,11 +4144,20 @@ ITERM_WEAKLY_REFERENCEABLE
             @"error_code": @"stale_binding",
         };
     }
+    TideyRuntimeResumeDescriptorUpdateGate *gate =
+        [self tideyRuntimeResumeDescriptorUpdateGate];
+    NSString *workspaceID =
+        [self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @"";
+    NSString *currentPanelID =
+        [self tideyPanelIdentifierForPanel:panel] ?: @"";
     TideyRuntimeResumeDescriptorUpdateResult *result =
-        [[self tideyRuntimeResumeDescriptorUpdateGate]
-            acceptUpdatePayload:payload
-            currentWorkspaceID:[self tideyWorkspaceIdentifierForWorkspace:workspace] ?: @""
-            currentPanelID:[self tideyPanelIdentifierForPanel:panel] ?: @""];
+        staged
+            ? [gate acceptStagedUpdatePayload:payload
+                          currentWorkspaceID:workspaceID
+                              currentPanelID:currentPanelID]
+            : [gate acceptUpdatePayload:payload
+                     currentWorkspaceID:workspaceID
+                         currentPanelID:currentPanelID];
     if (result.changed) {
         [TideyRestorableStateDirtyTracker.shared markDirty];
         [[iTermRestorableStateController sharedInstance] tideyRequestSaveSoon];
