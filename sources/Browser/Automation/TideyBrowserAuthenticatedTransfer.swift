@@ -1520,20 +1520,34 @@ final class TideyBrowserStreamingTransfer: NSObject,
 
 @MainActor
 final class TideyBrowserAuthenticatedTransferManager {
+    typealias TransferStarter = (
+        TideyBrowserStreamingTransfer,
+        [HTTPCookie],
+        String?
+    ) -> Void
+
     private var transfers: [String: TideyBrowserStreamingTransfer] = [:]
     private let destinationOpener: any TideyBrowserTransferDestinationOpening
     private let destinationValidator: any TideyBrowserTransferDestinationValidating
     private let preflightExecutor: any TideyBrowserTransferPreflightExecuting
+    private let fileQuiescer: any TideyBrowserTransferFileQuiescing
+    private let transferStarter: TransferStarter
 
     init(destinationOpener: any TideyBrowserTransferDestinationOpening =
          TideyBrowserTransferDestinationOpeningExecutor(),
          destinationValidator: any TideyBrowserTransferDestinationValidating =
          TideyBrowserTransferDestinationValidationExecutor(),
          preflightExecutor: any TideyBrowserTransferPreflightExecuting =
-         TideyBrowserTransferPreflightExecutor(headerProbe: TideyBrowserTransferHeaderProbe())) {
+         TideyBrowserTransferPreflightExecutor(headerProbe: TideyBrowserTransferHeaderProbe()),
+         fileQuiescer: any TideyBrowserTransferFileQuiescing = TideyBrowserTransferFileQuiescer(),
+         transferStarter: @escaping TransferStarter = { transfer, cookies, ifRange in
+             transfer.start(cookies: cookies, ifRange: ifRange)
+         }) {
         self.destinationOpener = destinationOpener
         self.destinationValidator = destinationValidator
         self.preflightExecutor = preflightExecutor
+        self.fileQuiescer = fileQuiescer
+        self.transferStarter = transferStarter
     }
 
     func openDestination(_ request: TideyBrowserTransferStartRequest) async throws
@@ -1579,6 +1593,22 @@ final class TideyBrowserAuthenticatedTransferManager {
             )
         }
         let cookies = await matchingCookies(for: sourceURL, engine: engine)
+        return try admitOpenedDestination(
+            opened,
+            sourceURL: sourceURL,
+            request: request,
+            workspaceID: workspaceID,
+            ownerSessionID: ownerSessionID,
+            cookies: cookies
+        )
+    }
+
+    func admitOpenedDestination(_ opened: TideyBrowserTransferOpenedDestination,
+                                sourceURL: URL,
+                                request: TideyBrowserTransferStartRequest,
+                                workspaceID: String,
+                                ownerSessionID: String,
+                                cookies: [HTTPCookie]) throws -> [String: Any] {
         let transferID = UUID().uuidString
         let transfer = TideyBrowserStreamingTransfer(
             transferID: transferID,
@@ -1587,10 +1617,11 @@ final class TideyBrowserAuthenticatedTransferManager {
             sourceURL: sourceURL,
             destinationRelativePath: request.destinationRelativePath,
             request: request,
-            fileHandle: opened.fileHandle
+            fileHandle: opened.fileHandle,
+            fileQuiescer: fileQuiescer
         )
         transfers[transferID] = transfer
-        transfer.start(cookies: cookies, ifRange: request.ifRange)
+        transferStarter(transfer, cookies, request.ifRange)
         return transfer.snapshot().dictionary
     }
 
