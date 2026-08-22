@@ -18,7 +18,8 @@ SERVER_INSTRUCTIONS = (
     "Tidey browser tabs are workspace-scoped. Opened tabs stay private and hidden until "
     "present is called. Use snapshot to obtain navigation_epoch and element_id values; "
     "those element references expire after navigation. Only HTTP(S) navigation is allowed. "
-    "Authenticated Vault transfers are scoped to an owned official link and validated external archive path."
+    "Authenticated Vault preflight and transfers are scoped to an owned official link and validated "
+    "external archive path. Re-preflight and bind exact size plus a strong ETag or Last-Modified before resume."
 )
 
 
@@ -98,6 +99,20 @@ TOOLS = [
          }, ["tab_id", "condition"])),
     tool("screenshot", "Capture an owned tab as PNG.", object_schema({"tab_id": TAB_ID}, ["tab_id"])),
     tool(
+        "transfer_preflight",
+        "Read bounded authenticated metadata without writing payload bytes or exposing signed URLs.",
+        object_schema({
+            "tab_id": TAB_ID,
+            "navigation_epoch": EPOCH,
+            "element_id": ELEMENT_ID,
+            "archive_root": {"type": "string", "minLength": 1},
+            "expected_volume_uuid": {"type": "string", "minLength": 1},
+            "destination_relative_path": {"type": "string", "minLength": 1},
+            "resume_offset": {"type": "integer", "minimum": 0, "default": 0},
+        }, ["tab_id", "navigation_epoch", "element_id", "archive_root",
+            "expected_volume_uuid", "destination_relative_path"]),
+    ),
+    tool(
         "transfer_start",
         "Stream one owned official Vault link directly to a validated external .partial path.",
         object_schema({
@@ -110,6 +125,10 @@ TOOLS = [
             "expected_total_bytes": {"type": "integer", "minimum": 1},
             "resume_offset": {"type": "integer", "minimum": 0, "default": 0},
             "if_range": {"type": "string", "minLength": 1, "maxLength": 1024},
+            "representation_validator_kind": {
+                "type": "string", "enum": ["strong_etag", "last_modified"]
+            },
+            "representation_validator": {"type": "string", "minLength": 1, "maxLength": 1024},
             "pause_after_bytes": {"type": "integer", "minimum": 1},
         }, ["tab_id", "navigation_epoch", "element_id", "archive_root",
             "expected_volume_uuid", "destination_relative_path", "expected_total_bytes"]),

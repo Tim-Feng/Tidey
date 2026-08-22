@@ -80,7 +80,8 @@ with tempfile.TemporaryDirectory(prefix="tidey-browser-mcp-tests.") as temp_dir:
         names = {item["name"] for item in tools["result"]["tools"]}
         expected = {"tabs", "open", "claim", "release", "reclaim", "mark", "close", "present",
                     "navigate", "back", "forward", "reload", "current_url", "snapshot", "click",
-                    "fill", "type", "key", "scroll", "wait", "screenshot", "transfer_start",
+                    "fill", "type", "key", "scroll", "wait", "screenshot", "transfer_preflight",
+                    "transfer_start",
                     "transfer_status", "transfer_pause"}
         assert names == expected
         tabs = next(item for item in tools["result"]["tools"] if item["name"] == "tabs")
@@ -90,8 +91,18 @@ with tempfile.TemporaryDirectory(prefix="tidey-browser-mcp-tests.") as temp_dir:
                    for item in tools["result"]["tools"])
         transfer_start = next(item for item in tools["result"]["tools"]
                               if item["name"] == "transfer_start")
+        transfer_preflight = next(item for item in tools["result"]["tools"]
+                                  if item["name"] == "transfer_preflight")
+        assert set(transfer_preflight["inputSchema"]["required"]) == {
+            "tab_id", "navigation_epoch", "element_id", "archive_root",
+            "expected_volume_uuid", "destination_relative_path",
+        }
         assert "expected_total_bytes" in transfer_start["inputSchema"]["required"]
         assert transfer_start["inputSchema"]["properties"]["expected_total_bytes"]["minimum"] == 1
+        assert transfer_start["inputSchema"]["properties"]["representation_validator_kind"]["enum"] == [
+            "strong_etag", "last_modified"
+        ]
+        assert transfer_start["inputSchema"]["properties"]["representation_validator"]["maxLength"] == 1024
 
         opened = send(process, {
             "jsonrpc": "2.0", "id": "call-1", "method": "tools/call",
