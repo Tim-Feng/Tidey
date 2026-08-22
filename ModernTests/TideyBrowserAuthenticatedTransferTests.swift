@@ -2,6 +2,43 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    func testPreflightAcceptsExactHeadMetadata() throws {
+        let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 200,
+            headers: [
+                "Content-Length": "120817568",
+                "Content-Encoding": "identity",
+                "Content-Type": "application/zip",
+                "Content-Disposition": "attachment; filename=\"wing_it-caches.zip\"",
+                "Accept-Ranges": "bytes",
+                "ETag": "\"representation-1\"",
+                "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+            ],
+            redirectProvenance: [
+                "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+            ]
+        )
+
+        guard case .accept(let metadata) = decision else {
+            return XCTFail("Expected exact HEAD metadata")
+        }
+        XCTAssertEqual(metadata.exactTotalBytes, 120_817_568)
+        XCTAssertEqual(metadata.method, .head)
+        XCTAssertEqual(metadata.statusCode, 200)
+        XCTAssertEqual(metadata.contentEncoding, "identity")
+        XCTAssertEqual(metadata.contentType, "application/zip")
+        XCTAssertEqual(metadata.filename, "wing_it-caches.zip")
+        XCTAssertEqual(metadata.acceptRanges, "bytes")
+        XCTAssertEqual(metadata.etag, "\"representation-1\"")
+        XCTAssertEqual(metadata.etagClassification, .strongETag)
+        XCTAssertEqual(metadata.lastModified, "Fri, 21 Aug 2026 08:00:00 GMT")
+        XCTAssertEqual(metadata.resumeValidatorKind, .strongETag)
+        XCTAssertEqual(metadata.resumeValidatorValue, "\"representation-1\"")
+        XCTAssertEqual(metadata.redirectProvenance, [
+            "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ])
+    }
+
     func testDiskInspectionTargetsContainingVolume() {
         XCTAssertEqual(
             TideyBrowserTransferDiskInspector.inspectionTarget(

@@ -61,7 +61,23 @@ enum TideyBrowserTransferPreflightPolicy {
                              headers: [String: String],
                              redirectProvenance: [String]) throws
         -> TideyBrowserTransferHeadPreflightDecision {
-        throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+        guard statusCode == 200 else {
+            if statusCode == 405 || statusCode == 501 {
+                return .fallbackToRange
+            }
+            throw TideyBrowserTransferFailure(category: .validation, code: "preflight_http_status")
+        }
+        guard identityContentEncoding(in: headers) != nil,
+              let exactTotalBytes = exactPositiveLength(in: headers) else {
+            return .fallbackToRange
+        }
+        return .accept(metadata(
+            exactTotalBytes: exactTotalBytes,
+            method: .head,
+            statusCode: statusCode,
+            headers: headers,
+            redirectProvenance: redirectProvenance
+        ))
     }
 
     static func evaluateRange(statusCode: Int,
@@ -69,6 +85,126 @@ enum TideyBrowserTransferPreflightPolicy {
                               redirectProvenance: [String]) throws
         -> TideyBrowserTransferPreflightMetadata {
         throw TideyBrowserTransferFailure(category: .validation, code: "preflight_unimplemented")
+    }
+
+    private static func metadata(exactTotalBytes: Int,
+                                 method: TideyBrowserTransferPreflightMethod,
+                                 statusCode: Int,
+                                 headers: [String: String],
+                                 redirectProvenance: [String]) -> TideyBrowserTransferPreflightMetadata {
+        let etag = boundedHeader("ETag", in: headers, maximumLength: 1_024)
+        let etagClassification = classifyETag(etag)
+        let lastModified = boundedHeader("Last-Modified", in: headers, maximumLength: 128)
+        let usableLastModified = isUsableLastModified(lastModified) ? lastModified : nil
+        let resumeValidatorKind: TideyBrowserTransferValidatorKind
+        let resumeValidatorValue: String?
+        if etagClassification == .strongETag {
+            resumeValidatorKind = .strongETag
+            resumeValidatorValue = etag
+        } else if let usableLastModified {
+            resumeValidatorKind = .lastModified
+            resumeValidatorValue = usableLastModified
+        } else {
+            resumeValidatorKind = .unavailable
+            resumeValidatorValue = nil
+        }
+        return TideyBrowserTransferPreflightMetadata(
+            exactTotalBytes: exactTotalBytes,
+            method: method,
+            statusCode: statusCode,
+            contentEncoding: "identity",
+            contentType: boundedHeader("Content-Type", in: headers, maximumLength: 255),
+            filename: safeFilename(in: headers),
+            acceptRanges: boundedHeader("Accept-Ranges", in: headers, maximumLength: 64),
+            etag: etagClassification == .unavailable ? nil : etag,
+            etagClassification: etagClassification,
+            lastModified: usableLastModified,
+            resumeValidatorKind: resumeValidatorKind,
+            resumeValidatorValue: resumeValidatorValue,
+            redirectProvenance: safeProvenance(redirectProvenance)
+        )
+    }
+
+    private static func exactPositiveLength(in headers: [String: String]) -> Int? {
+        guard let raw = header("Content-Length", in: headers)?.trimmingCharacters(in: .whitespaces),
+              let value = Int(raw),
+              value > 0 else {
+            return nil
+        }
+        return value
+    }
+
+    private static func identityContentEncoding(in headers: [String: String]) -> String? {
+        guard let raw = header("Content-Encoding", in: headers) else { return "identity" }
+        return raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("identity") == .orderedSame ? "identity" : nil
+    }
+
+    private static func classifyETag(_ etag: String?) -> TideyBrowserTransferValidatorKind {
+        guard let etag else { return .unavailable }
+        if etag.hasPrefix("W/\"") && etag.hasSuffix("\"") && etag.count > 4 {
+            return .weakETag
+        }
+        if etag.hasPrefix("\"") && etag.hasSuffix("\"") && etag.count > 2 {
+            return .strongETag
+        }
+        return .unavailable
+    }
+
+    private static func isUsableLastModified(_ value: String?) -> Bool {
+        guard let value else { return false }
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(secondsFromGMT: 0)
+        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
+        return formatter.date(from: value) != nil
+    }
+
+    private static func safeFilename(in headers: [String: String]) -> String? {
+        guard let disposition = boundedHeader("Content-Disposition", in: headers, maximumLength: 1_024),
+              let range = disposition.range(of: "filename=", options: .caseInsensitive) else {
+            return nil
+        }
+        var value = String(disposition[range.upperBound...])
+            .split(separator: ";", maxSplits: 1)
+            .first.map(String.init)?
+            .trimmingCharacters(in: .whitespacesAndNewlines) ?? ""
+        if value.hasPrefix("\"") && value.hasSuffix("\"") && value.count >= 2 {
+            value.removeFirst()
+            value.removeLast()
+        }
+        guard !value.isEmpty,
+              value.count <= 255,
+              value == URL(fileURLWithPath: value).lastPathComponent,
+              !value.contains("/"),
+              !value.contains("\\"),
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func boundedHeader(_ name: String,
+                                      in headers: [String: String],
+                                      maximumLength: Int) -> String? {
+        guard let value = header(name, in: headers)?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !value.isEmpty,
+              value.count <= maximumLength,
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            return nil
+        }
+        return value
+    }
+
+    private static func header(_ name: String, in headers: [String: String]) -> String? {
+        headers.first { $0.key.caseInsensitiveCompare(name) == .orderedSame }?.value
+    }
+
+    private static func safeProvenance(_ provenance: [String]) -> [String] {
+        Array(provenance.prefix(8)).compactMap { raw in
+            guard let url = URL(string: raw) else { return nil }
+            return String(TideyBrowserTransferRedaction.url(url).prefix(2_048))
+        }
     }
 }
 
