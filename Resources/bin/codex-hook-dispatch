@@ -6,9 +6,33 @@ EVENT="${1:-}"
 PAYLOAD_JSON="${2:-}"
 LOG_PATH="${TMPDIR:-/tmp}/codex-hook-events.log"
 HOOK_DIR="$(cd "$(dirname "$0")" && pwd)"
+RESOURCE_DIR="$(cd "$HOOK_DIR/.." && pwd)"
 TIDEY_BIN="$HOOK_DIR/tidey"
 # shellcheck source=/dev/null
 source "$HOOK_DIR/tidey-tmux-pane-identity"
+
+tidey_completion_sound_file() {
+    local user_job_done_sound="$HOME/.claude/sounds/jobs-done.mp3"
+    local bundled_success_sound="$RESOURCE_DIR/success-sound.mp3"
+
+    if [[ -f "$user_job_done_sound" && -r "$user_job_done_sound" ]]; then
+        printf '%s' "$user_job_done_sound"
+    elif [[ -f "$bundled_success_sound" && -r "$bundled_success_sound" ]]; then
+        printf '%s' "$bundled_success_sound"
+    fi
+}
+
+tidey_play_completion_sound_if_needed() {
+    local sound_file=""
+    local player="${TIDEY_COMPLETION_SOUND_PLAYER:-/usr/bin/afplay}"
+
+    [[ "$EVENT" == "stop" ]] || return 0
+    [[ -x "$player" ]] || return 0
+    sound_file="$(tidey_completion_sound_file)"
+    [[ -n "$sound_file" ]] || return 0
+
+    "$player" "$sound_file" </dev/null >/dev/null 2>&1 &
+}
 
 if [[ -z "$EVENT" ]]; then
     exit 0
@@ -38,6 +62,8 @@ fi
         "${TIDEY_PANEL_ID:-}" \
         "${PAYLOAD_JSON:-}"
 } >> "$LOG_PATH" 2>/dev/null || true
+
+tidey_play_completion_sound_if_needed
 
 if [[ -n "$PAYLOAD_JSON" ]]; then
     {
