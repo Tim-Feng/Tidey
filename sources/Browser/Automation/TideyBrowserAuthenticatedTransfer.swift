@@ -448,20 +448,39 @@ enum TideyBrowserTransferResponsePolicy {
     static func evaluate(statusCode: Int,
                          resumeOffset: Int,
                          expectedTotalBytes: Int,
-                         headers: [String: String]) throws -> TideyBrowserTransferResponseDecision {
+                         headers: [String: String],
+                         representationBinding: TideyBrowserTransferRepresentationBinding? = nil) throws
+        -> TideyBrowserTransferResponseDecision {
         guard expectedTotalBytes > 0,
               resumeOffset >= 0,
               resumeOffset <= expectedTotalBytes else {
             throw TideyBrowserTransferValidationError.invalidResponse
         }
+        if let representationBinding {
+            guard representationBinding.exactTotalBytes == expectedTotalBytes,
+                  !representationBinding.validatorValue.isEmpty,
+                  representationBinding.validatorKind == .strongETag ||
+                    representationBinding.validatorKind == .lastModified else {
+                throw TideyBrowserTransferFailure(
+                    category: .representationMismatch,
+                    code: "invalid_representation_binding"
+                )
+            }
+            try validateIdentityEncoding(headers)
+        }
+        let decision: TideyBrowserTransferResponseDecision
         switch statusCode {
         case 200:
             guard resumeOffset == 0 else {
                 throw TideyBrowserTransferValidationError.invalidResponse
             }
             let total = try optionalPositiveIntegerHeader("Content-Length", in: headers)
-            try validateServerTotal(total, expectedTotalBytes: expectedTotalBytes)
-            return .fresh(expectedTotal: total)
+            try validateServerTotal(
+                total,
+                expectedTotalBytes: expectedTotalBytes,
+                representationBound: representationBinding != nil
+            )
+            decision = .fresh(expectedTotal: total)
         case 206:
             guard let rawRange = header("Content-Range", in: headers),
                   let range = parseSatisfiedContentRange(rawRange),
@@ -469,17 +488,33 @@ enum TideyBrowserTransferResponsePolicy {
                   range.end < expectedTotalBytes else {
                 throw TideyBrowserTransferValidationError.invalidResponse
             }
-            try validateServerTotal(range.total, expectedTotalBytes: expectedTotalBytes)
-            return .resumed(expectedTotal: range.total)
+            try validateServerTotal(
+                range.total,
+                expectedTotalBytes: expectedTotalBytes,
+                representationBound: representationBinding != nil
+            )
+            decision = .resumed(expectedTotal: range.total)
         case 416:
             let total = try parseOptionalUnsatisfiedContentRange(
                 header("Content-Range", in: headers)
             )
-            try validateServerTotal(total, expectedTotalBytes: expectedTotalBytes)
-            return .rangeNotSatisfiable(remoteTotal: total)
+            try validateServerTotal(
+                total,
+                expectedTotalBytes: expectedTotalBytes,
+                representationBound: representationBinding != nil
+            )
+            decision = .rangeNotSatisfiable(remoteTotal: total)
         default:
             throw TideyBrowserTransferValidationError.invalidResponse
         }
+        if let representationBinding {
+            try validateRepresentation(
+                decision: decision,
+                headers: headers,
+                binding: representationBinding
+            )
+        }
+        return decision
     }
 
     private static func header(_ name: String, in headers: [String: String]) -> String? {
@@ -503,9 +538,60 @@ enum TideyBrowserTransferResponsePolicy {
     }
 
     private static func validateServerTotal(_ total: Int?,
-                                            expectedTotalBytes: Int) throws {
+                                            expectedTotalBytes: Int,
+                                            representationBound: Bool) throws {
         guard total == nil || total == expectedTotalBytes else {
+            if representationBound {
+                throw TideyBrowserTransferFailure(
+                    category: .representationMismatch,
+                    code: "representation_total_mismatch"
+                )
+            }
             throw TideyBrowserTransferValidationError.declaredTotalMismatch
+        }
+    }
+
+    private static func validateIdentityEncoding(_ headers: [String: String]) throws {
+        guard let raw = header("Content-Encoding", in: headers) else { return }
+        guard raw.trimmingCharacters(in: .whitespacesAndNewlines)
+            .caseInsensitiveCompare("identity") == .orderedSame else {
+            throw TideyBrowserTransferFailure(
+                category: .representationMismatch,
+                code: "representation_encoding_mismatch"
+            )
+        }
+    }
+
+    private static func validateRepresentation(
+        decision: TideyBrowserTransferResponseDecision,
+        headers: [String: String],
+        binding: TideyBrowserTransferRepresentationBinding
+    ) throws {
+        let total: Int?
+        switch decision {
+        case .fresh(let value), .resumed(let value), .rangeNotSatisfiable(let value):
+            total = value
+        }
+        guard total == binding.exactTotalBytes else {
+            throw TideyBrowserTransferFailure(
+                category: .representationMismatch,
+                code: "representation_total_unproven"
+            )
+        }
+        let actual: String?
+        switch binding.validatorKind {
+        case .strongETag:
+            actual = header("ETag", in: headers)
+        case .lastModified:
+            actual = header("Last-Modified", in: headers)
+        case .weakETag, .unavailable:
+            actual = nil
+        }
+        guard actual == binding.validatorValue else {
+            throw TideyBrowserTransferFailure(
+                category: .representationMismatch,
+                code: "representation_validator_mismatch"
+            )
         }
     }
 
@@ -872,6 +958,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
     private let expectedTotalBytes: Int
     private let ifRange: String?
     private let pauseAfterBytes: Int?
+    private let representationBinding: TideyBrowserTransferRepresentationBinding?
     private let fileQuiescer: any TideyBrowserTransferFileQuiescing
     private var fileHandle: FileHandle?
     private var session: URLSession?
@@ -901,6 +988,7 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         self.expectedTotalBytes = request.expectedTotalBytes
         self.ifRange = request.ifRange
         self.pauseAfterBytes = request.pauseAfterBytes
+        self.representationBinding = request.representationBinding
         self.fileQuiescer = fileQuiescer
         self.byteBudget = TideyBrowserTransferByteBudget(
             expectedTotalBytes: request.expectedTotalBytes,
@@ -913,9 +1001,12 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         var request = URLRequest(url: sourceURL)
         request.httpMethod = "GET"
         request.cachePolicy = .reloadIgnoringLocalAndRemoteCacheData
+        request.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         if resumeOffset > 0 {
             request.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")
-            if let ifRange { request.setValue(ifRange, forHTTPHeaderField: "If-Range") }
+            if let validator = representationBinding?.validatorValue ?? ifRange {
+                request.setValue(validator, forHTTPHeaderField: "If-Range")
+            }
         }
         if let cookie = HTTPCookie.requestHeaderFields(with: cookies)["Cookie"] {
             request.setValue(cookie, forHTTPHeaderField: "Cookie")
@@ -972,10 +1063,11 @@ private final class TideyBrowserStreamingTransfer: NSObject,
         }
         if resumeOffset > 0 {
             redirected.setValue("bytes=\(resumeOffset)-", forHTTPHeaderField: "Range")
-            if let ifRange {
-                redirected.setValue(ifRange, forHTTPHeaderField: "If-Range")
+            if let validator = representationBinding?.validatorValue ?? ifRange {
+                redirected.setValue(validator, forHTTPHeaderField: "If-Range")
             }
         }
+        redirected.setValue("identity", forHTTPHeaderField: "Accept-Encoding")
         completionHandler(redirected)
     }
 
@@ -996,7 +1088,8 @@ private final class TideyBrowserStreamingTransfer: NSObject,
                 statusCode: response.statusCode,
                 resumeOffset: resumeOffset,
                 expectedTotalBytes: expectedTotalBytes,
-                headers: headers
+                headers: headers,
+                representationBinding: representationBinding
             )
             lock.withLock {
                 statusCode = response.statusCode

@@ -283,6 +283,91 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         )
     }
 
+    func testResponsePolicyBindsTotalEncodingAndValidator() throws {
+        let binding = TideyBrowserTransferRepresentationBinding(
+            exactTotalBytes: 10,
+            validatorKind: .strongETag,
+            validatorValue: "\"representation-1\""
+        )
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: [
+                    "Content-Length": "10",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-1\"",
+                ],
+                representationBinding: binding
+            ),
+            .fresh(expectedTotal: 10)
+        )
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 206,
+                resumeOffset: 4,
+                expectedTotalBytes: 10,
+                headers: [
+                    "Content-Range": "bytes 4-9/10",
+                    "ETag": "\"representation-1\"",
+                ],
+                representationBinding: binding
+            ),
+            .resumed(expectedTotal: 10)
+        )
+        XCTAssertEqual(
+            try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 416,
+                resumeOffset: 10,
+                expectedTotalBytes: 10,
+                headers: [
+                    "Content-Range": "bytes */10",
+                    "ETag": "\"representation-1\"",
+                ],
+                representationBinding: binding
+            ),
+            .rangeNotSatisfiable(remoteTotal: 10)
+        )
+
+        for headers in [
+            ["Content-Length": "11", "ETag": "\"representation-1\""],
+            ["Content-Length": "10", "ETag": "\"representation-2\""],
+            ["Content-Length": "10", "Content-Encoding": "gzip", "ETag": "\"representation-1\""],
+        ] {
+            XCTAssertThrowsError(
+                try TideyBrowserTransferResponsePolicy.evaluate(
+                    statusCode: 200,
+                    resumeOffset: 0,
+                    expectedTotalBytes: 10,
+                    headers: headers,
+                    representationBinding: binding
+                )
+            ) { error in
+                XCTAssertEqual(
+                    (error as? TideyBrowserTransferFailure)?.category,
+                    .representationMismatch
+                )
+            }
+        }
+
+        let lastModifiedBinding = TideyBrowserTransferRepresentationBinding(
+            exactTotalBytes: 10,
+            validatorKind: .lastModified,
+            validatorValue: "Fri, 21 Aug 2026 08:00:00 GMT"
+        )
+        XCTAssertNoThrow(try TideyBrowserTransferResponsePolicy.evaluate(
+            statusCode: 206,
+            resumeOffset: 4,
+            expectedTotalBytes: 10,
+            headers: [
+                "Content-Range": "bytes 4-9/10",
+                "Last-Modified": "Fri, 21 Aug 2026 08:00:00 GMT",
+            ],
+            representationBinding: lastModifiedBinding
+        ))
+    }
+
     func testByteBudgetStopsHeaderlessOverflowBeforeAcceptingBytes() throws {
         XCTAssertEqual(
             try TideyBrowserTransferResponsePolicy.evaluate(
