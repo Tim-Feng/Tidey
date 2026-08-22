@@ -479,7 +479,7 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
         return RuntimeResumeTmuxCarrierPublicationPlan(
             binding: RuntimeResumeDescriptorBinding(
                 workspaceID: anchor.route.workspaceID,
-                panelID: anchor.route.carrierPanelID,
+                panelID: anchor.route.nativeCarrierPanelID,
                 tmuxPaneID: activePaneID
             ),
             target: target,
@@ -497,6 +497,7 @@ final class OrdinaryTmuxRuntimeResumeCarrierPlanner:
         [
             route.workspaceID,
             route.carrierPanelID,
+            route.nativeCarrierPanelID,
             route.socket.cacheKey,
             route.restorationSocket.cacheKey,
             route.sessionID,
@@ -886,6 +887,10 @@ final class TideyRuntimeResumeDescriptorSocketSender:
         )
         let response = try requestSender.send(request)
         guard response.ok else {
+            let responseCode = response.error?.code ?? "missing"
+            BridgeLogger.server.error(
+                "runtime resume descriptor update rejected workspace_id=\(update.binding.workspaceID, privacy: .public) panel_id=\(update.binding.panelID, privacy: .public) code=\(responseCode, privacy: .public)"
+            )
             throw BridgeInternalError.invalidResponse
         }
     }
@@ -1037,7 +1042,7 @@ final class RuntimeResumeDescriptorPublisher:
                 do {
                     try publishCurrentDescriptorsOnQueue()
                 } catch {
-                    BridgeLogger.server.debug(
+                    BridgeLogger.server.error(
                         "runtime resume descriptor publish deferred error=\(String(describing: error), privacy: .public)"
                     )
                 }

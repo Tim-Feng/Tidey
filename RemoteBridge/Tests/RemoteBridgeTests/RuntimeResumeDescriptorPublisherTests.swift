@@ -513,6 +513,78 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         )
     }
 
+    func testCarrierDescriptorBindsTheNativeCarrierPanel()
+        throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.replaceRoutes(
+            workspaceID: "workspace-1",
+            routes: [
+                Self.route(
+                    panelID: "ordinary-panel",
+                    windowID: "@1",
+                    windowIndex: 0,
+                    paneID: "%7",
+                    cwd: "/tmp/storage",
+                    carrierPanelID:
+                        "native-session:carrier-storage:leaf-1",
+                    nativeCarrierPanelID: "carrier-storage",
+                    sessionID: "$1",
+                    sessionName: "storage"
+                ),
+            ]
+        )
+        let planner = OrdinaryTmuxRuntimeResumeCarrierPlanner(
+            registry: registry,
+            sessionReader: StubRuntimeResumeTmuxSessionReader(
+                statesBySessionID: [
+                    "$1": RuntimeResumeTmuxSessionState(
+                        sessionID: "$1",
+                        sessionName: "storage",
+                        windows: [
+                            RuntimeResumeTmuxWindowState(
+                                windowID: "@1",
+                                index: 0,
+                                name: "storage",
+                                isActive: true,
+                                panes: [
+                                    RuntimeResumeTmuxPaneState(
+                                        paneID: "%7",
+                                        index: 0,
+                                        workingDirectory:
+                                            "/tmp/storage",
+                                        isActive: true
+                                    ),
+                                ]
+                            ),
+                        ]
+                    ),
+                ]
+            )
+        )
+        let record = RuntimeResumeAgentRegistryRecord(
+            binding: RuntimeResumeDescriptorBinding(
+                workspaceID: "workspace-1",
+                panelID: "ordinary-panel",
+                tmuxPaneID: "%7"
+            ),
+            vendor: .codex,
+            durableResumeID: "storage-thread",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "codex",
+                arguments: ["resume", "storage-thread"],
+                workingDirectory: "/tmp/storage"
+            )
+        )
+
+        let plan = try XCTUnwrap(
+            planner.publicationPlans(for: [record]).first
+        )
+
+        XCTAssertEqual(plan.binding.workspaceID, "workspace-1")
+        XCTAssertEqual(plan.binding.panelID, "carrier-storage")
+        XCTAssertEqual(plan.binding.tmuxPaneID, "%7")
+    }
+
     func testCarrierDescriptorPreservesCanonicalTmuxSessionNameVerbatim()
         throws {
         let registry = OrdinaryTmuxPanelRegistry()
@@ -2528,6 +2600,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
         paneID: String,
         cwd: String?,
         carrierPanelID: String = "carrier-1",
+        nativeCarrierPanelID: String? = nil,
         sessionID: String = "$1",
         sessionName: String = "work",
         socket: OrdinaryTmuxSocketSelector =
@@ -2538,6 +2611,7 @@ final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
             workspaceID: "workspace-1",
             panelID: panelID,
             carrierPanelID: carrierPanelID,
+            nativeCarrierPanelID: nativeCarrierPanelID,
             socket: socket,
             restorationSocket: restorationSocket,
             sessionID: sessionID,

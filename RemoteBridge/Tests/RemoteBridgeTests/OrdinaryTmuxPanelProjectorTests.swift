@@ -453,6 +453,10 @@ final class OrdinaryTmuxPanelProjectorTests: XCTestCase {
             registry.route(forPanelID: "ordinary-tmux:/tmp/tmux-501/default:$7:@15")?.carrierPanelID,
             "native-session:carrier-1:leaf-1"
         )
+        XCTAssertEqual(
+            registry.route(forPanelID: "ordinary-tmux:/tmp/tmux-501/default:$7:@15")?.nativeCarrierPanelID,
+            "carrier-1"
+        )
     }
 
     func testProjectedLogicalPanelUsesItsOwnLifecycleAggregate() throws {

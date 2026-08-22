@@ -208,6 +208,10 @@ final class OrdinaryTmuxPanelProjector {
                 nextPanels.append(panelValue)
                 continue
             }
+            let nativeCarrierPanelID =
+                carrierPanel["carrier_panel_id"]?.stringValue
+                    .flatMap { $0.isEmpty ? nil : $0 } ??
+                carrierPanelID
             guard let metadata = OrdinaryTmuxAttachMetadata(json: ordinaryTmuxMetadata) else {
                 everyCarrierProjectionIsAuthoritative = false
                 reconciliationBatch?.recordFailure()
@@ -269,6 +273,7 @@ final class OrdinaryTmuxPanelProjector {
                     let route = Self.route(for: projectedPanel,
                                            workspaceID: workspaceID,
                                            carrierPanelID: carrierPanelID,
+                                           nativeCarrierPanelID: nativeCarrierPanelID,
                                            metadata: metadata,
                                            panelID: carrierPanelID)
                     if projectedLoad.canSetPaneIdentity {
@@ -313,6 +318,7 @@ final class OrdinaryTmuxPanelProjector {
                 Self.route(for: $0,
                            workspaceID: workspaceID,
                            carrierPanelID: carrierPanelID,
+                           nativeCarrierPanelID: nativeCarrierPanelID,
                            metadata: metadata)
             }
             if projectedLoad.canSetPaneIdentity {
@@ -737,12 +743,14 @@ final class OrdinaryTmuxPanelProjector {
     private static func route(for projectedPanel: OrdinaryTmuxProjectedPanel,
                               workspaceID: String,
                               carrierPanelID: String,
+                              nativeCarrierPanelID: String,
                               metadata: OrdinaryTmuxAttachMetadata,
                               panelID: String? = nil) -> OrdinaryTmuxPanelRoute {
         OrdinaryTmuxPanelRoute(
             workspaceID: workspaceID,
             panelID: panelID ?? projectedPanel.panelID,
             carrierPanelID: carrierPanelID,
+            nativeCarrierPanelID: nativeCarrierPanelID,
             socket: projectedPanel.socketPath.map(OrdinaryTmuxSocketSelector.path) ?? metadata.preferredSocketSelector,
             restorationSocket: metadata.preferredSocketSelector,
             sessionID: projectedPanel.sessionID,

@@ -4,6 +4,7 @@ struct OrdinaryTmuxPanelRoute: Equatable, Sendable {
     let workspaceID: String
     let panelID: String
     let carrierPanelID: String
+    let nativeCarrierPanelID: String
     let socket: OrdinaryTmuxSocketSelector
     let restorationSocket: OrdinaryTmuxSocketSelector
     let sessionID: String
@@ -17,6 +18,7 @@ struct OrdinaryTmuxPanelRoute: Equatable, Sendable {
     init(workspaceID: String,
          panelID: String,
          carrierPanelID: String,
+         nativeCarrierPanelID: String? = nil,
          socket: OrdinaryTmuxSocketSelector,
          restorationSocket: OrdinaryTmuxSocketSelector? = nil,
          sessionID: String,
@@ -29,6 +31,8 @@ struct OrdinaryTmuxPanelRoute: Equatable, Sendable {
         self.workspaceID = workspaceID
         self.panelID = panelID
         self.carrierPanelID = carrierPanelID
+        self.nativeCarrierPanelID =
+            nativeCarrierPanelID ?? carrierPanelID
         self.socket = socket
         self.restorationSocket = restorationSocket ?? socket
         self.sessionID = sessionID
