@@ -1626,6 +1626,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 }
 
 + (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets {
+    if (targets.count == 0) {
+        return NO;
+    }
+    for (TideyEditorTab *tab in targets) {
+        if (tab.kind == TideyRightPanelTabKindEditor && tab.dirty) {
+            return NO;
+        }
+    }
     return YES;
 }
 

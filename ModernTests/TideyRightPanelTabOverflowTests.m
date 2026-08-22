@@ -145,4 +145,17 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
         (@[]));
 }
 
+- (void)testBulkEligibilityRejectsDirtyEditorTargets {
+    TideyEditorTab *cleanCode = [self tabWithIdentifier:@"clean-code" kind:TideyRightPanelTabKindEditor];
+    TideyEditorTab *dirtyCode = [self tabWithIdentifier:@"dirty-code" kind:TideyRightPanelTabKindEditor];
+    dirtyCode.dirty = YES;
+    TideyEditorTab *web = [self tabWithIdentifier:@"web" kind:TideyRightPanelTabKindBrowser];
+    web.dirty = YES;
+
+    XCTAssertFalse([iTermRootTerminalView tideyRightPanelBulkCloseTargetsAreEligible:@[]]);
+    XCTAssertTrue(([iTermRootTerminalView tideyRightPanelBulkCloseTargetsAreEligible:@[ cleanCode, web ]]));
+    XCTAssertFalse(([iTermRootTerminalView tideyRightPanelBulkCloseTargetsAreEligible:@[ cleanCode, dirtyCode ]]));
+    XCTAssertTrue([iTermRootTerminalView tideyRightPanelBulkCloseTargetsAreEligible:@[ web ]]);
+}
+
 @end
