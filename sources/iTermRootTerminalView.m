@@ -1599,7 +1599,30 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 + (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
                                                      clickedIdentifier:(NSString *)clickedIdentifier
                                                       closeTabsToRight:(BOOL)closeTabsToRight {
-    return @[];
+    TideyEditorTab *clickedTab = nil;
+    for (TideyEditorTab *tab in tabs) {
+        if ([tab.identifier isEqualToString:clickedIdentifier]) {
+            clickedTab = tab;
+            break;
+        }
+    }
+    if (!clickedTab) {
+        return @[];
+    }
+
+    NSArray<TideyEditorTab *> *groupTabs = [self tideyRightPanelTabsOfKind:clickedTab.kind inTabs:tabs];
+    NSUInteger clickedIndex = [groupTabs indexOfObjectIdenticalTo:clickedTab];
+    if (clickedIndex == NSNotFound) {
+        return @[];
+    }
+    if (closeTabsToRight) {
+        NSRange range = NSMakeRange(clickedIndex + 1, groupTabs.count - clickedIndex - 1);
+        return [groupTabs subarrayWithRange:range];
+    }
+
+    NSMutableArray<TideyEditorTab *> *targets = [groupTabs mutableCopy];
+    [targets removeObjectIdenticalTo:clickedTab];
+    return [targets copy];
 }
 
 + (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets {

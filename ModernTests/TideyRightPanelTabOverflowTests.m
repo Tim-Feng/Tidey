@@ -2,7 +2,16 @@
 
 #import "iTermRootTerminalView.h"
 
-@class TideyEditorTab;
+typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
+    TideyRightPanelTabKindEditor = 0,
+    TideyRightPanelTabKindBrowser = 1,
+};
+
+@interface TideyEditorTab : NSObject
+@property(nonatomic, copy) NSString *identifier;
+@property(nonatomic) BOOL dirty;
+@property(nonatomic) TideyRightPanelTabKind kind;
+@end
 
 @interface iTermRootTerminalView (TideyRightPanelTabOverflowTests)
 + (CGFloat)tideyRightPanelTrailingOcclusionForStripFrame:(NSRect)stripFrame
@@ -20,6 +29,17 @@
 @end
 
 @implementation TideyRightPanelTabOverflowTests
+
+- (TideyEditorTab *)tabWithIdentifier:(NSString *)identifier kind:(TideyRightPanelTabKind)kind {
+    TideyEditorTab *tab = [[TideyEditorTab alloc] init];
+    tab.identifier = identifier;
+    tab.kind = kind;
+    return tab;
+}
+
+- (NSArray<NSString *> *)identifiersForTabs:(NSArray<TideyEditorTab *> *)tabs {
+    return [tabs valueForKey:@"identifier"];
+}
 
 - (void)testPureOverflowPolicySeamsAreAvailable {
     XCTAssertTrue([iTermRootTerminalView respondsToSelector:
@@ -90,6 +110,39 @@
     XCTAssertTrue([iTermRootTerminalView tideyRightPanelShouldShowCloseButtonForWidth:112 selected:NO]);
     XCTAssertFalse([iTermRootTerminalView tideyRightPanelShouldShowCloseButtonForWidth:111 selected:NO]);
     XCTAssertTrue([iTermRootTerminalView tideyRightPanelShouldShowCloseButtonForWidth:72 selected:YES]);
+}
+
+- (void)testBulkTargetsFollowClickedTabsVisibleGroupOrder {
+    TideyEditorTab *codeA = [self tabWithIdentifier:@"code-a" kind:TideyRightPanelTabKindEditor];
+    TideyEditorTab *webA = [self tabWithIdentifier:@"web-a" kind:TideyRightPanelTabKindBrowser];
+    TideyEditorTab *codeB = [self tabWithIdentifier:@"code-b" kind:TideyRightPanelTabKindEditor];
+    TideyEditorTab *webB = [self tabWithIdentifier:@"web-b" kind:TideyRightPanelTabKindBrowser];
+    TideyEditorTab *codeC = [self tabWithIdentifier:@"code-c" kind:TideyRightPanelTabKindEditor];
+    NSArray<TideyEditorTab *> *modelOrder = @[ codeA, webA, codeB, webB, codeC ];
+
+    XCTAssertEqualObjects(
+        [self identifiersForTabs:
+            [iTermRootTerminalView tideyRightPanelBulkCloseTargetsForTabs:modelOrder
+                                                       clickedIdentifier:@"code-b"
+                                                        closeTabsToRight:NO]],
+        (@[ @"code-a", @"code-c" ]));
+    XCTAssertEqualObjects(
+        [self identifiersForTabs:
+            [iTermRootTerminalView tideyRightPanelBulkCloseTargetsForTabs:modelOrder
+                                                       clickedIdentifier:@"code-b"
+                                                        closeTabsToRight:YES]],
+        (@[ @"code-c" ]));
+    XCTAssertEqualObjects(
+        [self identifiersForTabs:
+            [iTermRootTerminalView tideyRightPanelBulkCloseTargetsForTabs:modelOrder
+                                                       clickedIdentifier:@"web-a"
+                                                        closeTabsToRight:YES]],
+        (@[ @"web-b" ]));
+    XCTAssertEqualObjects(
+        [iTermRootTerminalView tideyRightPanelBulkCloseTargetsForTabs:modelOrder
+                                                   clickedIdentifier:@"missing"
+                                                    closeTabsToRight:NO],
+        (@[]));
 }
 
 @end
