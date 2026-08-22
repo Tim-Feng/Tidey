@@ -216,6 +216,21 @@ final class TideyBrowserAutomationProtocolTests: XCTestCase {
             operation: "transfer_start",
             parameters: missingValue
         )
+        var malformedStrong = start
+        malformedStrong["representation_validator"] = "not-a-strong-etag"
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: malformedStrong
+        )
+        var malformedDate = start
+        malformedDate["representation_validator_kind"] = "last_modified"
+        malformedDate["representation_validator"] = "not-an-http-date"
+        assertProtocolError(
+            code: .invalidRequest,
+            operation: "transfer_start",
+            parameters: malformedDate
+        )
     }
 
     func testRejectsMalformedUnsupportedAndUnsafeRequests() {

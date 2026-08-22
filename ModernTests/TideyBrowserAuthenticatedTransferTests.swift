@@ -332,6 +332,18 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             ),
             .rangeNotSatisfiable(remoteTotal: 10)
         )
+        XCTAssertThrowsError(try TideyBrowserTransferResponsePolicy.evaluate(
+            statusCode: 416,
+            resumeOffset: 4,
+            expectedTotalBytes: 10,
+            headers: [
+                "Content-Range": "bytes */10",
+                "ETag": "\"representation-1\"",
+            ],
+            representationBinding: binding
+        )) { error in
+            XCTAssertEqual((error as? TideyBrowserTransferFailure)?.category, .invalidRange)
+        }
 
         for headers in [
             ["Content-Length": "11", "ETag": "\"representation-1\""],
@@ -369,6 +381,24 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             ],
             representationBinding: lastModifiedBinding
         ))
+
+        let malformedValidator = TideyBrowserTransferRepresentationBinding(
+            exactTotalBytes: 10,
+            validatorKind: .strongETag,
+            validatorValue: "not-a-strong-etag"
+        )
+        XCTAssertThrowsError(try TideyBrowserTransferResponsePolicy.evaluate(
+            statusCode: 200,
+            resumeOffset: 0,
+            expectedTotalBytes: 10,
+            headers: ["Content-Length": "10", "ETag": "not-a-strong-etag"],
+            representationBinding: malformedValidator
+        )) { error in
+            XCTAssertEqual(
+                (error as? TideyBrowserTransferFailure)?.category,
+                .representationMismatch
+            )
+        }
     }
 
     func testResponsePolicyClassifiesTransferFailures() throws {

@@ -25,6 +25,31 @@ struct TideyBrowserTransferRepresentationBinding: Equatable {
     let validatorValue: String
 }
 
+enum TideyBrowserTransferRepresentationValidator {
+    static func isValid(kind: TideyBrowserTransferValidatorKind, value: String) -> Bool {
+        guard !value.isEmpty,
+              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+            return false
+        }
+        switch kind {
+        case .strongETag:
+            return value.count <= 1_024 &&
+                value.hasPrefix("\"") &&
+                value.hasSuffix("\"") &&
+                value.count > 2
+        case .lastModified:
+            guard value.count <= 128 else { return false }
+            let formatter = DateFormatter()
+            formatter.locale = Locale(identifier: "en_US_POSIX")
+            formatter.timeZone = TimeZone(secondsFromGMT: 0)
+            formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
+            return formatter.date(from: value) != nil
+        case .weakETag, .unavailable:
+            return false
+        }
+    }
+}
+
 struct TideyBrowserTransferFailure: Error, Equatable {
     let category: TideyBrowserTransferFailureCategory
     let code: String
@@ -252,11 +277,10 @@ enum TideyBrowserTransferPreflightPolicy {
 
     private static func isUsableLastModified(_ value: String?) -> Bool {
         guard let value else { return false }
-        let formatter = DateFormatter()
-        formatter.locale = Locale(identifier: "en_US_POSIX")
-        formatter.timeZone = TimeZone(secondsFromGMT: 0)
-        formatter.dateFormat = "EEE',' dd MMM yyyy HH':'mm':'ss zzz"
-        return formatter.date(from: value) != nil
+        return TideyBrowserTransferRepresentationValidator.isValid(
+            kind: .lastModified,
+            value: value
+        )
     }
 
     private static func safeFilename(in headers: [String: String]) -> String? {
@@ -670,9 +694,10 @@ enum TideyBrowserTransferResponsePolicy {
         }
         if let representationBinding {
             guard representationBinding.exactTotalBytes == expectedTotalBytes,
-                  !representationBinding.validatorValue.isEmpty,
-                  representationBinding.validatorKind == .strongETag ||
-                    representationBinding.validatorKind == .lastModified else {
+                  TideyBrowserTransferRepresentationValidator.isValid(
+                    kind: representationBinding.validatorKind,
+                    value: representationBinding.validatorValue
+                  ) else {
                 throw TideyBrowserTransferFailure(
                     category: .representationMismatch,
                     code: "invalid_representation_binding"
@@ -713,6 +738,12 @@ enum TideyBrowserTransferResponsePolicy {
             )
             decision = .resumed(expectedTotal: range.total)
         case 416:
+            guard resumeOffset == expectedTotalBytes else {
+                throw TideyBrowserTransferFailure(
+                    category: .invalidRange,
+                    code: "unsatisfied_range_before_expected_total"
+                )
+            }
             let total: Int?
             do {
                 total = try parseOptionalUnsatisfiedContentRange(

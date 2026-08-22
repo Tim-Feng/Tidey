@@ -250,7 +250,10 @@ enum TideyBrowserAutomationProtocol {
                       let validatorKind = TideyBrowserTransferValidatorKind(
                         rawValue: validatorKindRaw
                       ),
-                      validatorKind == .strongETag || validatorKind == .lastModified,
+                      TideyBrowserTransferRepresentationValidator.isValid(
+                        kind: validatorKind,
+                        value: validatorValue
+                      ),
                       ifRange == nil || ifRange == validatorValue else {
                     throw error(.invalidRequest, "Representation binding is invalid")
                 }
