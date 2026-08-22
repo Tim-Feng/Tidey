@@ -157,6 +157,75 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
         XCTAssertNil(noValidator.resumeValidatorValue)
     }
 
+    func testEntityTagSyntaxIsSharedByPreflightAndFormalBinding() throws {
+        for value in ["\"\"", "\"opaque!#~\""] {
+            let metadata = try acceptedHeadMetadata(headers: [
+                "Content-Length": "10",
+                "ETag": value,
+            ])
+            XCTAssertEqual(metadata.etagClassification, .strongETag, value)
+            XCTAssertEqual(metadata.resumeValidatorValue, value, value)
+
+            let binding = TideyBrowserTransferRepresentationBinding(
+                exactTotalBytes: 10,
+                validatorKind: .strongETag,
+                validatorValue: value
+            )
+            XCTAssertNoThrow(try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: ["Content-Length": "10", "ETag": value],
+                representationBinding: binding
+            ), value)
+        }
+
+        let weak = try acceptedHeadMetadata(headers: [
+            "Content-Length": "10",
+            "ETag": "W/\"opaque!#~\"",
+        ])
+        XCTAssertEqual(weak.etagClassification, .weakETag)
+        XCTAssertEqual(weak.etag, "W/\"opaque!#~\"")
+
+        let malformed = [
+            "\"embedded\"quote\"",
+            "\"has space\"",
+            "\"has\ttab\"",
+            "\"control\u{7f}\"",
+            "W/ \"weak\"",
+            "W/\"weak\"trailing\"",
+            "\"strong\"trailing\"",
+            "w/\"weak\"",
+        ]
+        for value in malformed {
+            let metadata = try acceptedHeadMetadata(headers: [
+                "Content-Length": "10",
+                "ETag": value,
+            ])
+            XCTAssertEqual(metadata.etagClassification, .unavailable, value)
+            XCTAssertNil(metadata.etag, value)
+
+            let binding = TideyBrowserTransferRepresentationBinding(
+                exactTotalBytes: 10,
+                validatorKind: .strongETag,
+                validatorValue: value
+            )
+            XCTAssertThrowsError(try TideyBrowserTransferResponsePolicy.evaluate(
+                statusCode: 200,
+                resumeOffset: 0,
+                expectedTotalBytes: 10,
+                headers: ["Content-Length": "10", "ETag": value],
+                representationBinding: binding
+            ), value) { error in
+                XCTAssertEqual(
+                    (error as? TideyBrowserTransferFailure)?.category,
+                    .representationMismatch,
+                    value
+                )
+            }
+        }
+    }
+
     func testDiskInspectionTargetsContainingVolume() {
         XCTAssertEqual(
             TideyBrowserTransferDiskInspector.inspectionTarget(

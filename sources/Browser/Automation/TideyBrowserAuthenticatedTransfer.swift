@@ -25,20 +25,52 @@ struct TideyBrowserTransferRepresentationBinding: Equatable {
     let validatorValue: String
 }
 
+enum TideyBrowserTransferEntityTagSyntax {
+    static func classify(_ value: String?) -> TideyBrowserTransferValidatorKind {
+        guard let value else { return .unavailable }
+        let scalars = value.unicodeScalars.map { $0.value }
+        guard scalars.count <= 1_024 else { return .unavailable }
+
+        let validatorKind: TideyBrowserTransferValidatorKind
+        let openingQuoteIndex: Int
+        if scalars.starts(with: [0x57, 0x2f]) {
+            validatorKind = .weakETag
+            openingQuoteIndex = 2
+        } else {
+            validatorKind = .strongETag
+            openingQuoteIndex = 0
+        }
+
+        guard scalars.count >= openingQuoteIndex + 2,
+              scalars[openingQuoteIndex] == 0x22,
+              scalars.last == 0x22 else {
+            return .unavailable
+        }
+        let opaqueTag = scalars[(openingQuoteIndex + 1)..<(scalars.count - 1)]
+        guard opaqueTag.allSatisfy(isValidOpaqueTagScalar) else {
+            return .unavailable
+        }
+        return validatorKind
+    }
+
+    private static func isValidOpaqueTagScalar(_ value: UInt32) -> Bool {
+        value == 0x21 ||
+            (0x23...0x7e).contains(value) ||
+            (0x80...0xff).contains(value)
+    }
+}
+
 enum TideyBrowserTransferRepresentationValidator {
     static func isValid(kind: TideyBrowserTransferValidatorKind, value: String) -> Bool {
-        guard !value.isEmpty,
-              !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
-            return false
-        }
         switch kind {
         case .strongETag:
-            return value.count <= 1_024 &&
-                value.hasPrefix("\"") &&
-                value.hasSuffix("\"") &&
-                value.count > 2
+            return TideyBrowserTransferEntityTagSyntax.classify(value) == .strongETag
         case .lastModified:
-            guard value.count <= 128 else { return false }
+            guard !value.isEmpty,
+                  value.count <= 128,
+                  !value.unicodeScalars.contains(where: CharacterSet.controlCharacters.contains) else {
+                return false
+            }
             let formatter = DateFormatter()
             formatter.locale = Locale(identifier: "en_US_POSIX")
             formatter.timeZone = TimeZone(secondsFromGMT: 0)
@@ -265,14 +297,7 @@ enum TideyBrowserTransferPreflightPolicy {
     }
 
     private static func classifyETag(_ etag: String?) -> TideyBrowserTransferValidatorKind {
-        guard let etag else { return .unavailable }
-        if etag.hasPrefix("W/\"") && etag.hasSuffix("\"") && etag.count > 4 {
-            return .weakETag
-        }
-        if etag.hasPrefix("\"") && etag.hasSuffix("\"") && etag.count > 2 {
-            return .strongETag
-        }
-        return .unavailable
+        TideyBrowserTransferEntityTagSyntax.classify(etag)
     }
 
     private static func isUsableLastModified(_ value: String?) -> Bool {
