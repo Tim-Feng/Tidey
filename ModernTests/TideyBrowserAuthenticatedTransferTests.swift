@@ -61,6 +61,32 @@ final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
             XCTAssertEqual(failure.code, "range_not_honored")
         }
         XCTAssertTrue(fullBodyProbe.responsesWereCancelledBeforeBody)
+
+        let encodedProbe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 200,
+                headers: ["Content-Length": "120817568", "Content-Encoding": "gzip"],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Encoding": "gzip",
+                ],
+                redirectProvenance: [],
+                cancelledBeforeBody: true
+            ),
+        ])
+        do {
+            _ = try await TideyBrowserTransferPreflightExecutor(headerProbe: encodedProbe)
+                .execute(sourceURL: sourceURL, cookies: [])
+            XCTFail("Expected encoded representation refusal")
+        } catch let failure as TideyBrowserTransferFailure {
+            XCTAssertEqual(failure.category, .validation)
+            XCTAssertEqual(failure.code, "identity_encoding_required")
+        }
     }
 
     func testPreflightAcceptsExactHeadMetadata() throws {
