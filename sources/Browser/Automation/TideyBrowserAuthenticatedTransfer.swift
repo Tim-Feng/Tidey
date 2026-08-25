@@ -142,6 +142,7 @@ struct TideyBrowserTransferPreflightMetadata: Equatable {
     let exactTotalBytes: Int
     let method: TideyBrowserTransferPreflightMethod
     let statusCode: Int
+    let headStatusCode: Int?
     let contentEncoding: String
     let contentType: String?
     let filename: String?
@@ -165,6 +166,7 @@ struct TideyBrowserTransferPreflightMetadata: Equatable {
             "payload_bytes_written": 0,
         ]
         if let contentType { result["content_type"] = contentType }
+        if let headStatusCode { result["head_status"] = headStatusCode }
         if let filename { result["filename"] = filename }
         if let acceptRanges { result["accept_ranges"] = acceptRanges }
         if let etag { result["etag"] = etag }
@@ -185,7 +187,7 @@ enum TideyBrowserTransferPreflightPolicy {
                              redirectProvenance: [String]) throws
         -> TideyBrowserTransferHeadPreflightDecision {
         guard statusCode == 200 else {
-            if statusCode == 403 || statusCode == 405 || statusCode == 501 {
+            if statusCode == 403 || statusCode == 405 || (500...599).contains(statusCode) {
                 return .fallbackToRange
             }
             throw TideyBrowserTransferFailurePolicy.httpStatus(statusCode)
@@ -205,7 +207,8 @@ enum TideyBrowserTransferPreflightPolicy {
 
     static func evaluateRange(statusCode: Int,
                               headers: [String: String],
-                              redirectProvenance: [String]) throws
+                              redirectProvenance: [String],
+                              headStatusCode: Int? = nil) throws
         -> TideyBrowserTransferPreflightMetadata {
         guard statusCode == 206 else {
             if statusCode == 200 {
@@ -228,6 +231,7 @@ enum TideyBrowserTransferPreflightPolicy {
             exactTotalBytes: exactTotalBytes,
             method: .range,
             statusCode: statusCode,
+            headStatusCode: headStatusCode,
             headers: headers,
             redirectProvenance: redirectProvenance
         )
@@ -236,6 +240,7 @@ enum TideyBrowserTransferPreflightPolicy {
     private static func metadata(exactTotalBytes: Int,
                                  method: TideyBrowserTransferPreflightMethod,
                                  statusCode: Int,
+                                 headStatusCode: Int? = nil,
                                  headers: [String: String],
                                  redirectProvenance: [String]) -> TideyBrowserTransferPreflightMetadata {
         let etag = boundedHeader("ETag", in: headers, maximumLength: 1_024)
@@ -258,6 +263,7 @@ enum TideyBrowserTransferPreflightPolicy {
             exactTotalBytes: exactTotalBytes,
             method: method,
             statusCode: statusCode,
+            headStatusCode: headStatusCode,
             contentEncoding: "identity",
             contentType: boundedHeader("Content-Type", in: headers, maximumLength: 255),
             filename: safeFilename(in: headers),
@@ -406,7 +412,8 @@ struct TideyBrowserTransferPreflightExecutor: TideyBrowserTransferPreflightExecu
             return try TideyBrowserTransferPreflightPolicy.evaluateRange(
                 statusCode: rangeResponse.statusCode,
                 headers: rangeResponse.headers,
-                redirectProvenance: rangeResponse.redirectProvenance
+                redirectProvenance: rangeResponse.redirectProvenance,
+                headStatusCode: headResponse.statusCode
             )
         }
     }

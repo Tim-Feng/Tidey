@@ -2,6 +2,74 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyBrowserAuthenticatedTransferTests: XCTestCase {
+    func testHeadPreflightPolicyFallsBackForServerErrors() throws {
+        for statusCode in [500, 502, 503, 504, 599] {
+            let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+                statusCode: statusCode,
+                headers: [:],
+                redirectProvenance: []
+            )
+
+            XCTAssertEqual(decision, .fallbackToRange, "HEAD \(statusCode)")
+        }
+    }
+
+    func testHeadPreflightPolicyKeepsRateLimitWithoutFallback() throws {
+        XCTAssertThrowsError(try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
+            statusCode: 429,
+            headers: [:],
+            redirectProvenance: []
+        )) { error in
+            XCTAssertEqual(error as? TideyBrowserTransferFailure, TideyBrowserTransferFailure(
+                category: .rateLimited,
+                code: "http_429"
+            ))
+        }
+    }
+
+    func testServerErrorHeadFallsBackOnceAndPreservesHeadStatus() async throws {
+        let sourceURL = try XCTUnwrap(URL(
+            string: "https://studio.blender.org/vault/browse/wing_it/wing_it-caches.zip"
+        ))
+        let probe = StubHeaderProbe(responses: [
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 503,
+                headers: [:],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+            TideyBrowserTransferHeaderProbeResponse(
+                statusCode: 206,
+                headers: [
+                    "Content-Range": "bytes 0-0/120817568",
+                    "Content-Length": "1",
+                    "Content-Encoding": "identity",
+                    "ETag": "\"representation-503-fallback\"",
+                ],
+                redirectProvenance: [sourceURL.absoluteString],
+                cancelledBeforeBody: true
+            ),
+        ])
+
+        let metadata = try await TideyBrowserTransferPreflightExecutor(headerProbe: probe)
+            .execute(sourceURL: sourceURL, cookies: [])
+        let evidence = metadata.dictionary
+
+        XCTAssertEqual(metadata.exactTotalBytes, 120_817_568)
+        XCTAssertEqual(metadata.method, .range)
+        XCTAssertEqual(metadata.statusCode, 206)
+        XCTAssertEqual(evidence["method"] as? String, "GET_RANGE")
+        XCTAssertEqual(evidence["http_status"] as? Int, 206)
+        XCTAssertEqual(evidence["head_status"] as? Int, 503)
+        XCTAssertEqual(evidence["payload_bytes_written"] as? Int, 0)
+        XCTAssertEqual(probe.requests.count, 2)
+        XCTAssertEqual(probe.requests[0].httpMethod, "HEAD")
+        XCTAssertNil(probe.requests[0].value(forHTTPHeaderField: "Range"))
+        XCTAssertEqual(probe.requests[1].httpMethod, "GET")
+        XCTAssertEqual(probe.requests[1].value(forHTTPHeaderField: "Range"), "bytes=0-0")
+        XCTAssertTrue(probe.responsesWereCancelledBeforeBody)
+    }
+
     func testHeadPreflightPolicyFallsBackForForbiddenMethod() throws {
         let decision = try TideyBrowserTransferPreflightPolicy.evaluateHEAD(
             statusCode: 403,
