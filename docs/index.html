@@ -4,18 +4,18 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width, initial-scale=1">
   <title>Tidey — Terminal-First IDE for AI Agents</title>
-  <meta name="description" content="A terminal-first IDE for AI agents on macOS, now in your pocket with Tidey Remote.">
+  <meta name="description" content="A terminal-first IDE for AI agents on macOS, with agent-controlled browser automation and Tidey Remote for iPhone.">
 
   <!-- Open Graph -->
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://tim-feng.github.io/Tidey/">
   <meta property="og:title" content="Tidey — Terminal-First IDE for AI Agents">
-  <meta property="og:description" content="Multi-agent workspaces. Native chat. Editor + browser. iPhone companion.">
+  <meta property="og:description" content="Multi-agent workspaces. Agent-controlled browser. Editor + terminal. iPhone companion.">
   <meta property="og:image" content="https://tim-feng.github.io/Tidey/screenshots/social-card.png">
 
   <meta name="twitter:card" content="summary_large_image">
   <meta name="twitter:title" content="Tidey — Terminal-First IDE for AI Agents">
-  <meta name="twitter:description" content="Multi-agent workspaces. Native chat. Editor + browser. iPhone companion.">
+  <meta name="twitter:description" content="Multi-agent workspaces. Agent-controlled browser. Editor + terminal. iPhone companion.">
   <meta name="twitter:image" content="https://tim-feng.github.io/Tidey/screenshots/social-card.png">
 
   <link rel="preconnect" href="https://fonts.googleapis.com">
@@ -304,6 +304,13 @@
       letter-spacing: 0.03em;
       text-align: center;
     }
+    .release-notes-link {
+      font-size: 0.7rem;
+      color: var(--accent);
+      letter-spacing: 0.03em;
+      text-decoration: none;
+    }
+    .release-notes-link:hover { text-decoration: underline; }
 
     .cta-note {
       display: block;
@@ -813,8 +820,10 @@
         <a class="cta" href="https://github.com/Tim-Feng/Tidey/releases/latest/download/Tidey.dmg"
            data-en="Download Tidey for Mac" data-zh="下載 Tidey for Mac">Download Tidey for Mac</a>
         <span class="cta-col-note"
-              data-en="macOS 12+ · Free & Open Source · .dmg"
-              data-zh="macOS 12+ · 免費開源 · .dmg">macOS 12+ · Free & Open Source · .dmg</span>
+              data-en="macOS 12.4+ · Apple Silicon · Free & Open Source"
+              data-zh="macOS 12.4+ · Apple Silicon · 免費開源">macOS 12.4+ · Apple Silicon · Free & Open Source</span>
+        <a class="release-notes-link" href="https://github.com/Tim-Feng/Tidey/releases/latest" target="_blank" rel="noopener"
+           data-en="Latest release notes" data-zh="最新版本說明">Latest release notes</a>
       </div>
       <div class="cta-col">
         <span class="cta-col-label" data-en="The iPhone companion" data-zh="iPhone 配對程式">The iPhone companion</span>
@@ -828,8 +837,8 @@
           </span>
         </a>
         <span class="cta-col-note"
-              data-en="iOS 17+ · Requires Tidey on a paired Mac"
-              data-zh="iOS 17+ · 需要在 Mac 上安裝 Tidey">iOS 17+ · Requires Tidey on a paired Mac</span>
+              data-en="iOS 17+ · Paired Mac requires macOS 13+"
+              data-zh="iOS 17+ · 配對的 Mac 需使用 macOS 13+">iOS 17+ · Paired Mac requires macOS 13+</span>
       </div>
     </div>
   </section>
@@ -887,9 +896,9 @@
 
     <div class="feature-item">
       <strong data-en="In-app Browser" data-zh="內建瀏覽器">In-app Browser</strong><span class="sep">·</span>
-      <span data-en="⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE."
-            data-zh="⌘-click terminal 裡的 URL，在內建瀏覽器開啟，不離開 IDE。">
-        ⌘-click URLs in the terminal to open them in the built-in browser panel, without leaving the IDE.
+      <span data-en="Open URLs beside your terminal. Codex and Claude Code can also operate hidden pages, handle multi-page web tasks, and present results in Tidey."
+            data-zh="在 terminal 旁開啟網頁；Codex 與 Claude Code 也能操作隱藏頁面、處理多頁網頁工作，並把結果呈現在 Tidey。">
+        Open URLs beside your terminal. Codex and Claude Code can also operate hidden pages, handle multi-page web tasks, and present results in Tidey.
       </span>
     </div>
 
@@ -1068,9 +1077,9 @@
       <div class="faq-item">
         <dt data-en="Requirements?"
             data-zh="系統需求？">Requirements?</dt>
-        <dd data-en="Mac: macOS 12+. iPhone: iOS 17+, same LAN or Tailscale network as your Mac."
-            data-zh="Mac：macOS 12+。iPhone：iOS 17+、跟 Mac 同 LAN 或 Tailscale 網路。">
-          Mac: macOS 12+. iPhone: iOS 17+, same LAN or Tailscale network as your Mac.
+        <dd data-en="Mac app: Apple Silicon with macOS 12.4+. Tidey Remote: iOS 17+ and a paired Mac running macOS 13+; connect over LAN, Tailscale, or an optional Cloudflare Tunnel."
+            data-zh="Mac 主程式：Apple Silicon、macOS 12.4+。Tidey Remote：iOS 17+，並需配對 macOS 13+ 的 Mac；可使用 LAN、Tailscale 或選用 Cloudflare Tunnel。">
+          Mac app: Apple Silicon with macOS 12.4+. Tidey Remote: iOS 17+ and a paired Mac running macOS 13+; connect over LAN, Tailscale, or an optional Cloudflare Tunnel.
         </dd>
       </div>
 
@@ -1099,8 +1108,10 @@
           <span data-en="Download Tidey for Mac" data-zh="下載 Tidey for Mac">Download Tidey for Mac</span>
         </a>
         <span class="cta-col-note"
-              data-en="macOS 12+ · v0.4.2 (May 2026) · .dmg"
-              data-zh="macOS 12+ · v0.4.2 (2026 年 5 月) · .dmg">macOS 12+ · v0.4.2 (May 2026) · .dmg</span>
+              data-en="macOS 12.4+ · Apple Silicon · Free & Open Source"
+              data-zh="macOS 12.4+ · Apple Silicon · 免費開源">macOS 12.4+ · Apple Silicon · Free & Open Source</span>
+        <a class="release-notes-link" href="https://github.com/Tim-Feng/Tidey/releases/latest" target="_blank" rel="noopener"
+           data-en="Latest release notes" data-zh="最新版本說明">Latest release notes</a>
       </div>
 
       <div class="cta-col">
@@ -1115,8 +1126,8 @@
           </span>
         </a>
         <span class="cta-col-note"
-              data-en="iOS 17+ · Requires Tidey on a paired Mac"
-              data-zh="iOS 17+ · 需要在 Mac 上安裝 Tidey">iOS 17+ · Requires Tidey on a paired Mac</span>
+              data-en="iOS 17+ · Paired Mac requires macOS 13+"
+              data-zh="iOS 17+ · 配對的 Mac 需使用 macOS 13+">iOS 17+ · Paired Mac requires macOS 13+</span>
       </div>
     </div>
 
