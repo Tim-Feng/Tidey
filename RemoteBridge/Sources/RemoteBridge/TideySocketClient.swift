@@ -12,6 +12,7 @@ final class TideySocketClient {
     private let socketPathResolver: SocketPathResolver
     private let socketConnector: SocketConnector
     private let retryWait: RetryWait
+    private let retryDelays: [TimeInterval]
     private let transportLock = NSLock()
 
     convenience init(locator: TideySocketLocator) {
@@ -22,10 +23,12 @@ final class TideySocketClient {
 
     init(socketPathResolver: @escaping SocketPathResolver,
          socketConnector: @escaping SocketConnector,
-         retryWait: @escaping RetryWait) {
+         retryWait: @escaping RetryWait,
+         retryDelays: [TimeInterval] = [0.01, 0.025]) {
         self.socketPathResolver = socketPathResolver
         self.socketConnector = socketConnector
         self.retryWait = retryWait
+        self.retryDelays = retryDelays
     }
 
     func send(_ request: BridgeRequest) throws -> BridgeResponse {
@@ -34,7 +37,7 @@ final class TideySocketClient {
         guard let socketPath = socketPathResolver() else {
             throw BridgeInternalError.socketUnavailable
         }
-        let fd = try socketConnector(socketPath)
+        let fd = try connectSocket(path: socketPath)
         defer { close(fd) }
         let data = try JSONSerialization.data(withJSONObject: request.tideySocketJSONObject)
         var payload = data
@@ -50,11 +53,24 @@ final class TideySocketClient {
         guard let socketPath = socketPathResolver() else {
             throw BridgeInternalError.socketUnavailable
         }
-        let fd = try socketConnector(socketPath)
+        let fd = try connectSocket(path: socketPath)
         defer { close(fd) }
         var payload = Data(command.utf8)
         payload.append(0x0a)
         try Self.writeAll(payload, to: fd)
+    }
+
+    private func connectSocket(path: String) throws -> Int32 {
+        var retryIndex = 0
+        while true {
+            do {
+                return try socketConnector(path)
+            } catch let error as POSIXError
+                where error.code == .ECONNREFUSED && retryIndex < retryDelays.count {
+                retryWait(retryDelays[retryIndex])
+                retryIndex += 1
+            }
+        }
     }
 
     static func connectUnixSocket(path: String) throws -> Int32 {

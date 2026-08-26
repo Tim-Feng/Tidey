@@ -48,12 +48,119 @@ final class TideySocketClientTests: XCTestCase {
         XCTAssertEqual(connector.maximumConcurrentCalls, 1)
     }
 
+    func testCommandSendRetriesTransientConnectionRefusal() {
+        let connector = RefusingSocketConnector(refusalCount: 2)
+        defer { connector.closePeer() }
+        let waits = WaitRecorder()
+        let client = TideySocketClient(socketPathResolver: { "/test/tidey.sock" },
+                                       socketConnector: connector.connect,
+                                       retryWait: waits.record)
+
+        XCTAssertNoThrow(try client.send(command: "report_shell_state prompt"))
+        XCTAssertEqual(connector.attemptCount, 3)
+        XCTAssertEqual(waits.delays, [0.01, 0.025])
+    }
+
+    func testCommandSendStopsAfterBoundedConnectionRefusalRetries() {
+        let connector = RefusingSocketConnector(refusalCount: 3)
+        let waits = WaitRecorder()
+        let client = TideySocketClient(socketPathResolver: { "/test/tidey.sock" },
+                                       socketConnector: connector.connect,
+                                       retryWait: waits.record)
+
+        XCTAssertThrowsError(try client.send(command: "report_shell_state prompt")) { error in
+            XCTAssertEqual((error as? POSIXError)?.code, .ECONNREFUSED)
+        }
+        XCTAssertEqual(connector.attemptCount, 3)
+        XCTAssertEqual(waits.delays, [0.01, 0.025])
+    }
+
+    func testCommandSendDoesNotRetryOtherSocketErrors() {
+        var attemptCount = 0
+        let waits = WaitRecorder()
+        let client = TideySocketClient(socketPathResolver: { "/test/tidey.sock" },
+                                       socketConnector: { _ in
+                                           attemptCount += 1
+                                           throw POSIXError(.EACCES)
+                                       },
+                                       retryWait: waits.record)
+
+        XCTAssertThrowsError(try client.send(command: "report_shell_state prompt")) { error in
+            XCTAssertEqual((error as? POSIXError)?.code, .EACCES)
+        }
+        XCTAssertEqual(attemptCount, 1)
+        XCTAssertTrue(waits.delays.isEmpty)
+    }
+
     private static func makeSocketPair() throws -> (client: Int32, peer: Int32) {
         var descriptors = [Int32](repeating: -1, count: 2)
         guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
             throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
         }
         return (descriptors[0], descriptors[1])
+    }
+}
+
+private final class RefusingSocketConnector {
+    private let lock = NSLock()
+    private let refusalCount: Int
+    private var attempts = 0
+    private var peerDescriptor: Int32 = -1
+
+    init(refusalCount: Int) {
+        self.refusalCount = refusalCount
+    }
+
+    var attemptCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return attempts
+    }
+
+    func connect(path: String) throws -> Int32 {
+        lock.lock()
+        attempts += 1
+        let attempt = attempts
+        lock.unlock()
+        if attempt <= refusalCount {
+            throw POSIXError(.ECONNREFUSED)
+        }
+
+        var descriptors = [Int32](repeating: -1, count: 2)
+        guard socketpair(AF_UNIX, SOCK_STREAM, 0, &descriptors) == 0 else {
+            throw POSIXError(POSIXErrorCode(rawValue: errno) ?? .EIO)
+        }
+        lock.lock()
+        peerDescriptor = descriptors[1]
+        lock.unlock()
+        return descriptors[0]
+    }
+
+    func closePeer() {
+        lock.lock()
+        let descriptor = peerDescriptor
+        peerDescriptor = -1
+        lock.unlock()
+        if descriptor >= 0 {
+            close(descriptor)
+        }
+    }
+}
+
+private final class WaitRecorder {
+    private let lock = NSLock()
+    private var recordedDelays = [TimeInterval]()
+
+    var delays: [TimeInterval] {
+        lock.lock()
+        defer { lock.unlock() }
+        return recordedDelays
+    }
+
+    func record(_ delay: TimeInterval) {
+        lock.lock()
+        recordedDelays.append(delay)
+        lock.unlock()
     }
 }
 
