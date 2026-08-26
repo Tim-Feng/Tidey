@@ -30,6 +30,12 @@ typedef NSDictionary * _Nullable (^TideySocketNativeTerminalSizeHandler)(
     NSInteger rows);
 typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandler)(
     NSString *serverIdentifier);
+typedef NSDictionary * _Nullable (^TideySocketTerminalHistoryPageHandler)(
+    NSString * _Nullable panelID,
+    NSString * _Nullable workspaceID,
+    NSNumber * _Nullable beforeAbsoluteLine,
+    NSInteger pageLines,
+    NSNumber *routeGeneration);
 
 @interface TideySocketServer (Testing)
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message
@@ -43,6 +49,9 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
 + (NSDictionary *)tideyRuntimeTmuxServerPreparationResponseForRequestID:(NSString *)requestID
                                                                   source:(NSDictionary *)source
                                                                  handler:(TideySocketRuntimeTmuxServerPreparationHandler)handler;
++ (NSDictionary *)tideyTerminalHistoryPageResponseForRequestID:(NSString *)requestID
+                                                          source:(NSDictionary *)source
+                                                         handler:(TideySocketTerminalHistoryPageHandler)handler;
 + (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                  filteredToWindowForListWorkspacesSource:(NSDictionary *)source;
 - (void)acceptFileDescriptor:(int)fd;
@@ -983,6 +992,7 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
         @"ansi_active_capture_base64": ansiCapture,
         @"ansi_scrollback_capture_base64": scrollbackCapture,
         @"scrollback_rows": @2,
+        @"base_abs": @42,
         @"cols": @6,
         @"rows": @2,
     };
@@ -995,6 +1005,7 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertEqualObjects(untrimmed[@"ansi_scrollback_capture_base64"],
                           scrollbackCapture);
     XCTAssertEqualObjects(untrimmed[@"scrollback_rows"], @2);
+    XCTAssertEqualObjects(untrimmed[@"base_abs"], @42);
     XCTAssertEqualObjects(untrimmed[@"cols"], @6);
     XCTAssertEqualObjects(untrimmed[@"rows"], @2);
 
@@ -1005,8 +1016,58 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     XCTAssertNil(trimmed[@"ansi_active_capture_base64"]);
     XCTAssertNil(trimmed[@"ansi_scrollback_capture_base64"]);
     XCTAssertNil(trimmed[@"scrollback_rows"]);
+    XCTAssertNil(trimmed[@"base_abs"]);
     XCTAssertNil(trimmed[@"cols"]);
     XCTAssertNil(trimmed[@"rows"]);
+}
+
+- (void)testNativeHistoryPageRequestReturnsBoundedRowsAndStableMetadata {
+    __block NSDictionary *observed = nil;
+    NSDictionary *response = [TideySocketServer
+        tideyTerminalHistoryPageResponseForRequestID:@"history-1"
+        source:@{
+            @"source": @"native",
+            @"panel_id": @"panel-1",
+            @"workspace_id": @"workspace-1",
+            @"route_generation": @7,
+            @"page_lines": @999,
+            @"cursor": @{ @"before_abs": @740 },
+        }
+        handler:^NSDictionary *(NSString *panelID,
+                                 NSString *workspaceID,
+                                 NSNumber *beforeAbsoluteLine,
+                                 NSInteger pageLines,
+                                 NSNumber *routeGeneration) {
+            observed = @{
+                @"panel_id": panelID,
+                @"workspace_id": workspaceID,
+                @"before_abs": beforeAbsoluteLine,
+                @"page_lines": @(pageLines),
+                @"route_generation": routeGeneration,
+            };
+            return @{
+                @"rows": @[ @"T0xE", @"TkVX" ],
+                @"start_abs": @738,
+                @"end_abs": @740,
+                @"oldest_retained_abs": @100,
+                @"trimmed": @NO,
+                @"oldest_reached": @NO,
+            };
+        }];
+
+    XCTAssertEqualObjects(observed, (@{
+        @"panel_id": @"panel-1",
+        @"workspace_id": @"workspace-1",
+        @"before_abs": @740,
+        @"page_lines": @500,
+        @"route_generation": @7,
+    }));
+    XCTAssertEqualObjects(response[@"ok"], @YES);
+    XCTAssertEqualObjects(response[@"result"][@"source"], @"native");
+    XCTAssertEqualObjects(response[@"result"][@"route_generation"], @7);
+    XCTAssertEqualObjects(response[@"result"][@"rows"], (@[ @"T0xE", @"TkVX" ]));
+    XCTAssertEqualObjects(response[@"result"][@"start_abs"], @738);
+    XCTAssertEqualObjects(response[@"result"][@"end_abs"], @740);
 }
 
 - (void)testUnsupportedActionReturnsError {

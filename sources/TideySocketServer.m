@@ -160,6 +160,12 @@ typedef void (^TideySocketBrowserAutomationHandler)(
     void (^completion)(NSDictionary * _Nullable result, NSDictionary * _Nullable error));
 typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandler)(
     NSString *serverIdentifier);
+typedef NSDictionary * _Nullable (^TideySocketTerminalHistoryPageHandler)(
+    NSString * _Nullable panelID,
+    NSString * _Nullable workspaceID,
+    NSNumber * _Nullable beforeAbsoluteLine,
+    NSInteger pageLines,
+    NSNumber *routeGeneration);
 
 @interface TideySocketServer ()
 @property(nonatomic, strong) iTermSocket *socket;
@@ -185,6 +191,9 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
 + (NSDictionary *)tideyRuntimeTmuxServerPreparationResponseForRequestID:(NSString *)requestID
                                                                   source:(NSDictionary *)source
                                                                  handler:(TideySocketRuntimeTmuxServerPreparationHandler)handler;
++ (NSDictionary *)tideyTerminalHistoryPageResponseForRequestID:(NSString *)requestID
+                                                          source:(NSDictionary *)source
+                                                         handler:(TideySocketTerminalHistoryPageHandler)handler;
 @end
 
 @implementation TideySocketServer
@@ -814,6 +823,53 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
         return;
     }
 
+    if ([action isEqualToString:@"get_terminal_history_page"]) {
+        if (![NSThread isMainThread]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self handleRequestMessage:message onConnection:connection];
+            });
+            return;
+        }
+        NSDictionary *response = [[self class]
+            tideyTerminalHistoryPageResponseForRequestID:requestID
+            source:source
+            handler:^NSDictionary *(NSString *panelID,
+                                     NSString *workspaceID,
+                                     NSNumber *beforeAbsoluteLine,
+                                     NSInteger pageLines,
+                                     NSNumber *routeGeneration) {
+                PseudoTerminal *term = panelID.length > 0
+                    ? [self tideyTerminalForPanelIdentifier:panelID]
+                    : [self tideyTerminalForWorkspaceIdentifier:workspaceID];
+                if (!term) {
+                    return nil;
+                }
+                NSDictionary *page = panelID.length > 0
+                    ? [term tideyTerminalHistoryPageForPanelIdentifier:panelID
+                                                    beforeAbsoluteLine:beforeAbsoluteLine
+                                                             pageLines:pageLines]
+                    : [term tideyTerminalHistoryPageForWorkspaceIdentifier:workspaceID
+                                                        beforeAbsoluteLine:beforeAbsoluteLine
+                                                                 pageLines:pageLines];
+                if (!page) {
+                    return nil;
+                }
+                NSMutableDictionary *identified = [page mutableCopy];
+                if (panelID.length > 0) {
+                    identified[@"panel_id"] = panelID;
+                    NSDictionary *summary = [term tideySocketPanelSummaryForPanelIdentifier:panelID];
+                    if ([summary[@"workspace_id"] isKindOfClass:[NSString class]]) {
+                        identified[@"workspace_id"] = summary[@"workspace_id"];
+                    }
+                } else {
+                    identified[@"workspace_id"] = workspaceID;
+                }
+                return identified;
+            }];
+        [connection sendJSONObject:response];
+        return;
+    }
+
     if ([action isEqualToString:@"send_input"]) {
         NSString *panelID = TideySocketStringParam(source, @"panel_id");
         NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
@@ -936,7 +992,7 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
                                                @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
                                                @"panel_id": panelID,
                                                @"workspace_id": panelSummary[@"workspace_id"] ?: @"" } mutableCopy];
-            for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"ansi_scrollback_capture_base64", @"scrollback_rows", @"cols", @"rows" ]) {
+            for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"ansi_scrollback_capture_base64", @"scrollback_rows", @"base_abs", @"cols", @"rows" ]) {
                 if (trimmed[key]) {
                     result[key] = trimmed[key];
                 }
@@ -1291,7 +1347,7 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
                                            @"cursor_col": trimmed[@"cursor_col"] ?: @0,
                                            @"cursor_visible": trimmed[@"cursor_visible"] ?: @YES,
                                            @"workspace_id": workspaceID } mutableCopy];
-        for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"ansi_scrollback_capture_base64", @"scrollback_rows", @"cols", @"rows" ]) {
+        for (NSString *key in @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"ansi_scrollback_capture_base64", @"scrollback_rows", @"base_abs", @"cols", @"rows" ]) {
             if (trimmed[key]) {
                 result[key] = trimmed[key];
             }
@@ -1377,7 +1433,7 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
         @"cursor_visible": snapshot[@"cursor_visible"] ?: @YES,
     } mutableCopy];
     NSArray<NSString *> *gridKeys = @[ @"terminal_grid_version", @"ansi_active_capture_base64", @"cols", @"rows" ];
-    NSArray<NSString *> *optionalGridKeys = @[ @"ansi_scrollback_capture_base64", @"scrollback_rows" ];
+    NSArray<NSString *> *optionalGridKeys = @[ @"ansi_scrollback_capture_base64", @"scrollback_rows", @"base_abs" ];
     BOOL hasCompleteGrid = !didTrim;
     for (NSString *key in gridKeys) {
         hasCompleteGrid = hasCompleteGrid && snapshot[key] != nil;
@@ -1562,6 +1618,59 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
     }
     return [self tideySuccessResponseForRequestID:requestID
                                            result:outcome];
+}
+
++ (NSDictionary *)tideyTerminalHistoryPageResponseForRequestID:(NSString *)requestID
+                                                          source:(NSDictionary *)source
+                                                         handler:(TideySocketTerminalHistoryPageHandler)handler {
+    if (requestID.length == 0) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"invalid_request"
+                                            message:@"Missing request id."];
+    }
+    NSString *historySource = TideySocketStringParam(source, @"source");
+    NSString *panelID = TideySocketStringParam(source, @"panel_id");
+    NSString *workspaceID = TideySocketStringParam(source, @"workspace_id");
+    NSNumber *routeGeneration = [source[@"route_generation"] isKindOfClass:[NSNumber class]]
+        ? source[@"route_generation"]
+        : nil;
+    NSDictionary *cursor = [source[@"cursor"] isKindOfClass:[NSDictionary class]]
+        ? source[@"cursor"]
+        : nil;
+    NSNumber *beforeAbsoluteLine = [cursor[@"before_abs"] isKindOfClass:[NSNumber class]]
+        ? cursor[@"before_abs"]
+        : nil;
+    const NSInteger requestedPageLines = TideySocketIntegerParam(source, @"page_lines", 200);
+    if (![historySource isEqualToString:@"native"] ||
+        (panelID.length == 0 && workspaceID.length == 0) ||
+        routeGeneration == nil ||
+        requestedPageLines <= 0 ||
+        [routeGeneration longLongValue] < 0 ||
+        (beforeAbsoluteLine && [beforeAbsoluteLine longLongValue] < 0)) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"invalid_params"
+                                            message:@"Native terminal history paging requires valid identity, generation, cursor, and page size."];
+    }
+    if (!handler) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"internal_error"
+                                            message:@"Native terminal history paging is unavailable."];
+    }
+    const NSInteger pageLines = MIN(requestedPageLines, 500);
+    NSDictionary *page = handler(panelID,
+                                 workspaceID,
+                                 beforeAbsoluteLine,
+                                 pageLines,
+                                 routeGeneration);
+    if (!page) {
+        return [self tideyErrorResponseForRequestID:requestID
+                                               code:@"stale_binding"
+                                            message:@"Native terminal history binding is no longer current."];
+    }
+    NSMutableDictionary *result = [page mutableCopy];
+    result[@"source"] = @"native";
+    result[@"route_generation"] = routeGeneration;
+    return [self tideySuccessResponseForRequestID:requestID result:result];
 }
 
 + (NSDictionary *)tideyResponseForRequestMessage:(NSDictionary *)message

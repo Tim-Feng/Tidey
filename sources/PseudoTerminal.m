@@ -4610,10 +4610,13 @@ ITERM_WEAKLY_REFERENCEABLE
             [NSData dataWithBytes:screenCharArray.line
                            length:sizeof(screen_char_t) * width]];
     }
-    return [PseudoTerminal
+    NSDictionary *result = [PseudoTerminal
         tideySnapshot:snapshot
         byAddingScrollbackScreenCharacterRows:screenCharacterRows
         width:width];
+    NSMutableDictionary *withBoundary = [result mutableCopy];
+    withBoundary[@"base_abs"] = @(session.screen.totalScrollbackOverflow + firstRow);
+    return [withBoundary autorelease];
 }
 
 - (NSString *)tideyRecentOutputForSession:(PTYSession *)session {
@@ -4634,6 +4637,86 @@ ITERM_WEAKLY_REFERENCEABLE
 
 - (NSDictionary *)tideyRecentOutputSnapshotForWorkspaceIdentifier:(NSString *)workspaceIdentifier {
     return [self tideyRecentOutputSnapshotForSession:[self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier]];
+}
+
+- (NSDictionary *)tideyTerminalHistoryPageForSession:(PTYSession *)session
+                                   beforeAbsoluteLine:(NSNumber *)beforeAbsoluteLine
+                                            pageLines:(NSInteger)pageLines {
+    if (!session || session.isBrowserSession) {
+        return nil;
+    }
+    id<VT100GridReading> grid = [session.screen currentGrid];
+    if (!grid) {
+        return nil;
+    }
+    const NSInteger width = [grid size].width;
+    const long long oldestRetainedAbsoluteLine = session.screen.totalScrollbackOverflow;
+    const long long newestExclusiveAbsoluteLine =
+        oldestRetainedAbsoluteLine + session.screen.numberOfScrollbackLines;
+    NSDictionary *range = [PseudoTerminal
+        tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:oldestRetainedAbsoluteLine
+                                             newestExclusiveAbsoluteLine:newestExclusiveAbsoluteLine
+                                              requestedBeforeAbsoluteLine:beforeAbsoluteLine
+                                                               pageLines:pageLines];
+    if (width <= 0) {
+        return nil;
+    }
+
+    const long long startAbsoluteLine = [range[@"start_abs"] longLongValue];
+    const long long endAbsoluteLine = [range[@"end_abs"] longLongValue];
+    NSMutableArray<NSString *> *encodedRows = [NSMutableArray arrayWithCapacity:
+        (NSUInteger)MAX(0, endAbsoluteLine - startAbsoluteLine)];
+    for (long long absoluteLine = startAbsoluteLine;
+         absoluteLine < endAbsoluteLine;
+         absoluteLine++) {
+        const long long retainedIndex = absoluteLine - oldestRetainedAbsoluteLine;
+        if (retainedIndex < 0 || retainedIndex >= session.screen.numberOfScrollbackLines) {
+            return nil;
+        }
+        ScreenCharArray *screenCharArray =
+            [[session.screen screenCharArrayForLine:(int)retainedIndex]
+                paddedOrTruncatedToLength:width];
+        if (!screenCharArray || screenCharArray.length < width) {
+            return nil;
+        }
+        NSData *row = [NSData dataWithBytes:screenCharArray.line
+                                     length:sizeof(screen_char_t) * width];
+        NSDictionary *rowSnapshot = [PseudoTerminal
+            tideySnapshotForScreenCharacterRows:@[ row ]
+            width:width
+            height:1
+            cursorX:0
+            cursorY:0
+            cursorVisible:NO];
+        NSString *encoded = rowSnapshot[@"ansi_active_capture_base64"];
+        if (encoded.length == 0) {
+            return nil;
+        }
+        [encodedRows addObject:encoded];
+    }
+
+    NSMutableDictionary *result = [range mutableCopy];
+    result[@"rows"] = encodedRows;
+    result[@"cols"] = @(width);
+    return [result autorelease];
+}
+
+- (NSDictionary *)tideyTerminalHistoryPageForPanelIdentifier:(NSString *)panelIdentifier
+                                            beforeAbsoluteLine:(NSNumber *)beforeAbsoluteLine
+                                                     pageLines:(NSInteger)pageLines {
+    return [self tideyTerminalHistoryPageForSession:
+        [self tideySelectedSessionForPanelIdentifier:panelIdentifier]
+                                  beforeAbsoluteLine:beforeAbsoluteLine
+                                           pageLines:pageLines];
+}
+
+- (NSDictionary *)tideyTerminalHistoryPageForWorkspaceIdentifier:(NSString *)workspaceIdentifier
+                                                beforeAbsoluteLine:(NSNumber *)beforeAbsoluteLine
+                                                         pageLines:(NSInteger)pageLines {
+    return [self tideyTerminalHistoryPageForSession:
+        [self tideySelectedSessionForWorkspaceIdentifier:workspaceIdentifier]
+                                  beforeAbsoluteLine:beforeAbsoluteLine
+                                           pageLines:pageLines];
 }
 
 - (PTYSession *)tideyCreateDefaultSessionWithTargetWorkspaceIndex:(NSInteger)targetWorkspaceIndex
