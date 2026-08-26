@@ -35,6 +35,10 @@ struct TmuxInteractivePTYRuntime: Sendable {
         let migrator = TmuxInteractiveWindowSizeMigrator(
             tmuxExecutablePath: tmuxExecutablePath
         )
+        let historyAdapter = OrdinaryTmuxCLIAdapter(
+            windowSizePolicyReconciliationMode:
+                .preserveForInteractiveSizing
+        )
         return enabled(
             tmuxExecutablePath: tmuxExecutablePath,
             controller: TmuxInteractivePTYController(),
@@ -44,6 +48,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
             clientRefreshRequester: TmuxInteractiveClientRefreshRequester(
                 tmuxExecutablePath: tmuxExecutablePath
             ),
+            captureHistoryAnchor: { route in
+                try historyAdapter.captureInteractiveHistoryAnchor(route: route)
+            },
             migrateWindow: { socket, windowID in
                 try migrator.migrateIfEligible(
                     socket: socket,
@@ -60,6 +67,9 @@ struct TmuxInteractivePTYRuntime: Sendable {
         attachProver: TmuxInteractiveAttachProving,
         clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
             DisabledTmuxInteractiveClientRefreshRequester(),
+        captureHistoryAnchor: @escaping @Sendable (
+            OrdinaryTmuxPanelRoute
+        ) throws -> TerminalHistoryAnchorV1? = { _ in nil },
         uptimeNanoseconds: @escaping @Sendable () -> UInt64 = {
             DispatchTime.now().uptimeNanoseconds
         },
@@ -81,6 +91,7 @@ struct TmuxInteractivePTYRuntime: Sendable {
                     controller: controller,
                     attachProver: attachProver,
                     clientRefreshRequester: clientRefreshRequester,
+                    captureHistoryAnchor: captureHistoryAnchor,
                     authoritativeStartQuiescenceNanoseconds:
                         TmuxInteractivePTYSessionOwner
                             .productionAuthoritativeStartQuiescenceNanoseconds,

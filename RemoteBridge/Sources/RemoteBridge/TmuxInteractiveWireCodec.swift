@@ -21,6 +21,9 @@ struct TmuxInteractiveAuthoritativeStartEnvelope: Codable, Equatable, Sendable {
     let sessionID: String
     let windowID: String
     let paneID: String
+    let historyAnchorOffset: Int?
+    let historyAnchorSHA16: String?
+    let historyAttachSize: Int?
     let bootstrapColumns: Int?
     let bootstrapRows: Int?
     let bootstrapDataBase64: String?
@@ -37,6 +40,9 @@ struct TmuxInteractiveAuthoritativeStartEnvelope: Codable, Equatable, Sendable {
         case sessionID = "session_id"
         case windowID = "window_id"
         case paneID = "pane_id"
+        case historyAnchorOffset = "history_anchor_offset"
+        case historyAnchorSHA16 = "history_anchor_sha16"
+        case historyAttachSize = "history_attach_size"
         case bootstrapColumns = "bootstrap_cols"
         case bootstrapRows = "bootstrap_rows"
         case bootstrapDataBase64 = "bootstrap_data_base64"
@@ -71,6 +77,9 @@ struct TmuxInteractiveAttachedEnvelope: Codable, Equatable, Sendable {
     let sessionID: String
     let windowID: String
     let paneID: String
+    let historyAnchorOffset: Int?
+    let historyAnchorSHA16: String?
+    let historyAttachSize: Int?
     let columns: Int
     let rows: Int
     let dataBase64: String
@@ -85,6 +94,9 @@ struct TmuxInteractiveAttachedEnvelope: Codable, Equatable, Sendable {
         case sessionID = "session_id"
         case windowID = "window_id"
         case paneID = "pane_id"
+        case historyAnchorOffset = "history_anchor_offset"
+        case historyAnchorSHA16 = "history_anchor_sha16"
+        case historyAttachSize = "history_attach_size"
         case columns = "cols"
         case rows
         case dataBase64 = "data_base64"
@@ -198,6 +210,9 @@ enum TmuxInteractiveWireCodec {
             sessionID: proof.sessionID,
             windowID: proof.windowID,
             paneID: proof.paneID,
+            historyAnchorOffset: start.historyAnchor?.offset,
+            historyAnchorSHA16: start.historyAnchor?.sha16,
+            historyAttachSize: start.historyAnchor?.attachHistorySize,
             bootstrapColumns: start.bootstrapPhase?.viewport.columns,
             bootstrapRows: start.bootstrapPhase?.viewport.rows,
             bootstrapDataBase64: start.bootstrapPhase?.bytes.base64EncodedString(),
@@ -232,6 +247,9 @@ enum TmuxInteractiveWireCodec {
             sessionID: proof.sessionID,
             windowID: proof.windowID,
             paneID: proof.paneID,
+            historyAnchorOffset: attached.historyAnchor?.offset,
+            historyAnchorSHA16: attached.historyAnchor?.sha16,
+            historyAttachSize: attached.historyAnchor?.attachHistorySize,
             columns: attached.viewport.columns,
             rows: attached.viewport.rows,
             dataBase64: attached.initialBytes.base64EncodedString(),

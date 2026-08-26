@@ -1236,6 +1236,51 @@ final class OrdinaryTmuxCLIAdapterTests: XCTestCase {
                        ["capture-pane", "-e", "-p", "-t", "%21"])
     }
 
+    func testInteractiveHistoryAnchorCapturesVisibleTopAndHistorySize() throws {
+        let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
+        let route = makeRoute(socket: socket)
+        let state = RunnerState(responses: [
+            RunnerState.key(socket: socket, arguments: windowExistsArguments): "@15\n",
+            RunnerState.key(socket: socket, arguments: listPanesArguments(windowID: "@15")):
+                "%21\t1\t1021\t/Users/timfeng/GitHub/work\tcodex\n",
+        ])
+        let rawState = RawRunnerState { arguments in
+            switch arguments {
+            case ["display-message", "-p", "-t", "%21", "#{history_size}"]:
+                return Data("10\n".utf8)
+            case ["capture-pane", "-e", "-p", "-S", "0", "-E", "0", "-t", "%21"]:
+                return Data("ATTACH-TOP\n".utf8)
+            default:
+                XCTFail("unexpected raw tmux arguments: \(arguments)")
+                return Data()
+            }
+        }
+        let adapter = OrdinaryTmuxCLIAdapter(
+            commandRunner: { socket, arguments, stdin in
+                try state.run(socket: socket, arguments: arguments, stdin: stdin)
+            },
+            rawCommandRunner: { socket, arguments, stdin in
+                try rawState.run(socket: socket, arguments: arguments, stdin: stdin)
+            }
+        )
+
+        let anchor = try adapter.captureInteractiveHistoryAnchor(route: route)
+
+        XCTAssertEqual(anchor.offset, 0)
+        XCTAssertEqual(anchor.attachHistorySize, 10)
+        XCTAssertEqual(
+            anchor.sha16,
+            OrdinaryTmuxHistoryPagePolicy.sha16(Data("ATTACH-TOP".utf8))
+        )
+        XCTAssertEqual(
+            rawState.recordedCalls.map(\.arguments),
+            [
+                ["display-message", "-p", "-t", "%21", "#{history_size}"],
+                ["capture-pane", "-e", "-p", "-S", "0", "-E", "0", "-t", "%21"],
+            ]
+        )
+    }
+
     func testCaptureOutputKeepsBodyWhenCursorMetadataIsMalformed() throws {
         let socket = OrdinaryTmuxSocketSelector.path("/tmp/tmux-501/default")
         let route = makeRoute(socket: socket)

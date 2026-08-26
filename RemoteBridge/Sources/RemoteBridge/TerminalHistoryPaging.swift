@@ -4,6 +4,17 @@ import Foundation
 struct TerminalHistoryAnchorV1: Equatable, Sendable {
     let offset: Int
     let sha16: String
+    let attachHistorySize: Int?
+
+    init(
+        offset: Int,
+        sha16: String,
+        attachHistorySize: Int? = nil
+    ) {
+        self.offset = offset
+        self.sha16 = sha16
+        self.attachHistorySize = attachHistorySize
+    }
 }
 
 struct OrdinaryTmuxHistoryCapturePlan: Equatable, Sendable {
@@ -42,18 +53,31 @@ enum OrdinaryTmuxHistoryPagePolicy {
         offset: Int,
         pageLines: Int,
         anchor: TerminalHistoryAnchorV1?,
+        currentHistorySize: Int? = nil,
         paneID: String
     ) throws -> OrdinaryTmuxHistoryCapturePlan {
         guard offset >= 0,
               (1...maximumPageLines).contains(pageLines),
               paneID.hasPrefix("%"),
               paneID.count > 1,
-              (anchor == nil ? offset == 0 : anchor?.offset == offset) else {
+              (anchor == nil ? offset == 0 : anchor?.offset == offset),
+              anchor?.attachHistorySize.map({ $0 >= 0 }) ?? true else {
             throw BridgeInternalError.invalidResponse
         }
 
-        let start = -(offset + pageLines)
-        let end = anchor == nil ? -1 : -offset
+        let attachDisplacement: Int
+        if let attachHistorySize = anchor?.attachHistorySize {
+            guard let currentHistorySize,
+                  currentHistorySize >= attachHistorySize else {
+                throw BridgeInternalError.invalidResponse
+            }
+            attachDisplacement = currentHistorySize - attachHistorySize
+        } else {
+            attachDisplacement = 0
+        }
+        let captureOffset = offset + attachDisplacement
+        let start = -(captureOffset + pageLines)
+        let end = anchor == nil ? -1 : -captureOffset
         return OrdinaryTmuxHistoryCapturePlan(
             offset: offset,
             pageLines: pageLines,
@@ -90,7 +114,8 @@ enum OrdinaryTmuxHistoryPagePolicy {
         if let first = pageRows.first {
             nextAnchor = TerminalHistoryAnchorV1(
                 offset: nextOffset,
-                sha16: sha16(first)
+                sha16: sha16(first),
+                attachHistorySize: plan.anchor?.attachHistorySize
             )
         } else {
             nextAnchor = plan.anchor
@@ -111,12 +136,22 @@ enum OrdinaryTmuxHistoryPagePolicy {
             .joined()
     }
 
-    private static func invalidated(
+    static func invalidated(
         _ plan: OrdinaryTmuxHistoryCapturePlan
     ) -> OrdinaryTmuxHistoryPageEvaluation {
         OrdinaryTmuxHistoryPageEvaluation(
             rows: [],
             nextOffset: plan.offset,
+            anchor: nil,
+            invalidated: true,
+            oldestReached: false
+        )
+    }
+
+    static func invalidated(offset: Int) -> OrdinaryTmuxHistoryPageEvaluation {
+        OrdinaryTmuxHistoryPageEvaluation(
+            rows: [],
+            nextOffset: offset,
             anchor: nil,
             invalidated: true,
             oldestReached: false
@@ -175,10 +210,14 @@ struct TerminalHistoryPageActionHandler {
         )
         let evaluation = page.evaluation
         let nextAnchor: JSONValue = evaluation.anchor.map {
-            .object([
+            var fields: [String: JSONValue] = [
                 "offset": .number(Double($0.offset)),
                 "sha16": .string($0.sha16),
-            ])
+            ]
+            if let attachHistorySize = $0.attachHistorySize {
+                fields["attach_history_size"] = .number(Double(attachHistorySize))
+            }
+            return .object(fields)
         } ?? .null
         return BridgeResponse(
             id: request.id,
@@ -226,6 +265,22 @@ struct TerminalHistoryPageActionHandler {
                 "tmux terminal history cursor anchor is invalid"
             )
         }
-        return TerminalHistoryAnchorV1(offset: offset, sha16: sha16)
+        let attachHistorySize: Int?
+        if let value = object["attach_history_size"] {
+            guard let decoded = value.intValue,
+                  decoded >= 0 else {
+                throw BridgeInternalError.invalidRequest(
+                    "tmux terminal history cursor attach boundary is invalid"
+                )
+            }
+            attachHistorySize = decoded
+        } else {
+            attachHistorySize = nil
+        }
+        return TerminalHistoryAnchorV1(
+            offset: offset,
+            sha16: sha16,
+            attachHistorySize: attachHistorySize
+        )
     }
 }

@@ -1642,10 +1642,29 @@ final class OrdinaryTmuxCLIAdapter {
         anchor: TerminalHistoryAnchorV1?
     ) throws -> OrdinaryTmuxHistoryPage {
         let refreshed = try refreshedRoute(route)
+        let currentHistorySize: Int?
+        if let attachHistorySize = anchor?.attachHistorySize {
+            let observedHistorySize = try historySize(
+                socket: refreshed.socket,
+                paneID: refreshed.activePaneID
+            )
+            guard observedHistorySize >= attachHistorySize else {
+                return OrdinaryTmuxHistoryPage(
+                    route: refreshed,
+                    evaluation: OrdinaryTmuxHistoryPagePolicy.invalidated(
+                        offset: offset
+                    )
+                )
+            }
+            currentHistorySize = observedHistorySize
+        } else {
+            currentHistorySize = nil
+        }
         let plan = try OrdinaryTmuxHistoryPagePolicy.capturePlan(
             offset: offset,
             pageLines: pageLines,
             anchor: anchor,
+            currentHistorySize: currentHistorySize,
             paneID: refreshed.activePaneID
         )
         let output = try rawCommandRunner(refreshed.socket, plan.arguments, nil)
@@ -1657,6 +1676,52 @@ final class OrdinaryTmuxCLIAdapter {
             route: refreshed,
             evaluation: evaluation
         )
+    }
+
+    func captureInteractiveHistoryAnchor(
+        route: OrdinaryTmuxPanelRoute
+    ) throws -> TerminalHistoryAnchorV1 {
+        let refreshed = try refreshedRoute(route)
+        let attachHistorySize = try historySize(
+            socket: refreshed.socket,
+            paneID: refreshed.activePaneID
+        )
+        let output = try rawCommandRunner(
+            refreshed.socket,
+            [
+                "capture-pane", "-e", "-p",
+                "-S", "0", "-E", "0",
+                "-t", refreshed.activePaneID,
+            ],
+            nil
+        )
+        let rows = Self.terminalHistoryRows(from: output)
+        guard rows.count == 1 else {
+            throw BridgeInternalError.invalidResponse
+        }
+        return TerminalHistoryAnchorV1(
+            offset: 0,
+            sha16: OrdinaryTmuxHistoryPagePolicy.sha16(rows[0]),
+            attachHistorySize: attachHistorySize
+        )
+    }
+
+    private func historySize(
+        socket: OrdinaryTmuxSocketSelector,
+        paneID: String
+    ) throws -> Int {
+        let output = try rawCommandRunner(
+            socket,
+            ["display-message", "-p", "-t", paneID, "#{history_size}"],
+            nil
+        )
+        guard let text = String(data: output, encoding: .utf8)?
+                .trimmingCharacters(in: .whitespacesAndNewlines),
+              let value = Int(text),
+              value >= 0 else {
+            throw BridgeInternalError.invalidResponse
+        }
+        return value
     }
 
     private static func terminalHistoryRows(from output: Data) -> [Data] {

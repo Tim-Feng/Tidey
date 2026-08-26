@@ -66,6 +66,8 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         let initialSize: TmuxInteractivePTYSize
         var preProofBytes = Data()
         var verifiedAttach: TmuxInteractiveVerifiedAttach?
+        var didCaptureHistoryAnchor = false
+        var historyAnchor: TerminalHistoryAnchorV1?
         var authoritativeStartCollectionBeganAtUptimeNanoseconds: UInt64?
         var didRequestClientRefresh = false
         var didObserveOutputAfterRefreshRequest = false
@@ -101,6 +103,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
     private let controller: TmuxInteractivePTYControlling
     private let attachProver: TmuxInteractiveAttachProving
     private let clientRefreshRequester: TmuxInteractiveClientRefreshRequesting
+    private let captureHistoryAnchor: @Sendable (
+        OrdinaryTmuxPanelRoute
+    ) throws -> TerminalHistoryAnchorV1?
     private let maximumPreProofBytes: Int
     private let maximumAuthoritativeStartBytes: Int
     private let authoritativeStartQuiescenceNanoseconds: UInt64
@@ -118,6 +123,9 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         attachProver: TmuxInteractiveAttachProving = TmuxInteractiveAttachProver(),
         clientRefreshRequester: TmuxInteractiveClientRefreshRequesting =
             DisabledTmuxInteractiveClientRefreshRequester(),
+        captureHistoryAnchor: @escaping @Sendable (
+            OrdinaryTmuxPanelRoute
+        ) throws -> TerminalHistoryAnchorV1? = { _ in nil },
         maximumPreProofBytes: Int = 1_024 * 1_024,
         maximumAuthoritativeStartBytes: Int = 1_024 * 1_024,
         authoritativeStartQuiescenceNanoseconds: UInt64 = 0,
@@ -133,6 +141,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
         self.controller = controller
         self.attachProver = attachProver
         self.clientRefreshRequester = clientRefreshRequester
+        self.captureHistoryAnchor = captureHistoryAnchor
         self.maximumPreProofBytes = max(1, maximumPreProofBytes)
         self.maximumAuthoritativeStartBytes = max(1, maximumAuthoritativeStartBytes)
         self.authoritativeStartQuiescenceNanoseconds =
@@ -441,6 +450,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                         let start = TmuxInteractiveAuthoritativeStart(
                             binding: subscribe.binding,
                             attachProof: verifiedAttach.attachProof,
+                            historyAnchor: historyAnchor(for: resources),
                             viewport: subscribe.viewport,
                             initialBytes: resources.authoritativeStartBytes
                         )
@@ -515,6 +525,7 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
                 let attached = TmuxInteractiveAttached(
                     binding: resources.request.subscribe.binding,
                     attachProof: verifiedAttach.attachProof,
+                    historyAnchor: historyAnchor(for: resources),
                     viewport: resources.request.subscribe.viewport,
                     initialBytes: resources.authoritativeStartBytes,
                     sequence: try takeNextOutputSequence(resources)
@@ -739,5 +750,18 @@ final class TmuxInteractivePTYSessionOwner: @unchecked Sendable {
             columns: UInt16(subscribe.viewport.columns),
             rows: UInt16(subscribe.viewport.rows)
         )
+    }
+
+    private func historyAnchor(
+        for resources: ActiveResources
+    ) -> TerminalHistoryAnchorV1? {
+        guard resources.didCaptureHistoryAnchor == false else {
+            return resources.historyAnchor
+        }
+        resources.didCaptureHistoryAnchor = true
+        resources.historyAnchor = try? captureHistoryAnchor(
+            resources.request.route
+        )
+        return resources.historyAnchor
     }
 }

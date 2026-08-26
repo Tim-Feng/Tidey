@@ -44,6 +44,39 @@ final class TerminalHistoryPagingTests: XCTestCase {
         }
     }
 
+    private struct AttachBoundaryPageServer: OrdinaryTmuxHistoryPageServing {
+        let expectedRoute: OrdinaryTmuxPanelRoute
+
+        func page(
+            route: OrdinaryTmuxPanelRoute,
+            offset: Int,
+            pageLines: Int,
+            anchor: TerminalHistoryAnchorV1?
+        ) throws -> OrdinaryTmuxHistoryPage {
+            XCTAssertEqual(route, expectedRoute)
+            XCTAssertEqual(offset, 0)
+            XCTAssertEqual(pageLines, 2)
+            XCTAssertEqual(anchor?.offset, 0)
+            XCTAssertEqual(anchor?.sha16, "0123456789abcdef")
+            XCTAssertEqual(anchor?.attachHistorySize, 10)
+            let row = Data("OLD".utf8)
+            return OrdinaryTmuxHistoryPage(
+                route: route,
+                evaluation: OrdinaryTmuxHistoryPageEvaluation(
+                    rows: [row],
+                    nextOffset: 1,
+                    anchor: TerminalHistoryAnchorV1(
+                        offset: 1,
+                        sha16: OrdinaryTmuxHistoryPagePolicy.sha16(row),
+                        attachHistorySize: 10
+                    ),
+                    invalidated: false,
+                    oldestReached: false
+                )
+            )
+        }
+    }
+
     func testTmuxCapturePlanUsesFixedBoundsAndInvalidatesMismatchedOverlap() throws {
         let firstPlan = try OrdinaryTmuxHistoryPagePolicy.capturePlan(
             offset: 0,
@@ -97,6 +130,46 @@ final class TerminalHistoryPagingTests: XCTestCase {
         XCTAssertNil(invalidated.anchor)
     }
 
+    func testInteractiveAttachBoundaryKeepsHistoryStrictlyBeforeLivePTYBytes() throws {
+        let attachTop = Data("ATTACH-TOP".utf8)
+        let attachAnchor = TerminalHistoryAnchorV1(
+            offset: 0,
+            sha16: OrdinaryTmuxHistoryPagePolicy.sha16(attachTop),
+            attachHistorySize: 10
+        )
+        let plan = try OrdinaryTmuxHistoryPagePolicy.capturePlan(
+            offset: 0,
+            pageLines: 2,
+            anchor: attachAnchor,
+            currentHistorySize: 13,
+            paneID: "%7"
+        )
+
+        XCTAssertEqual(
+            plan.arguments,
+            ["capture-pane", "-e", "-p", "-S", "-5", "-E", "-3", "-t", "%7"]
+        )
+        let page = OrdinaryTmuxHistoryPagePolicy.evaluate(
+            rows: [Data("OLDER".utf8), Data("OLD".utf8), attachTop],
+            plan: plan
+        )
+        XCTAssertFalse(page.invalidated)
+        XCTAssertEqual(
+            page.rows.map { String(decoding: $0, as: UTF8.self) },
+            ["OLDER", "OLD"]
+        )
+        XCTAssertEqual(page.nextOffset, 2)
+        XCTAssertEqual(page.anchor?.offset, 2)
+        XCTAssertEqual(page.anchor?.attachHistorySize, 10)
+
+        let shifted = OrdinaryTmuxHistoryPagePolicy.evaluate(
+            rows: [Data("OLDER".utf8), Data("OLD".utf8), Data("LIVE".utf8)],
+            plan: plan
+        )
+        XCTAssertTrue(shifted.invalidated)
+        XCTAssertTrue(shifted.rows.isEmpty)
+    }
+
     func testBridgeHistoryPageActionPagesValidatedTmuxAndForwardsNativeRoutes() throws {
         let route = ordinaryRoute()
         let handler = TerminalHistoryPageActionHandler(
@@ -144,6 +217,59 @@ final class TerminalHistoryPagingTests: XCTestCase {
             ]
         ))
         XCTAssertNil(native, "native history requests must continue to the Tidey socket")
+    }
+
+    func testBridgeHistoryPageActionPreservesInteractiveAttachBoundary() throws {
+        let route = ordinaryRoute()
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: StubResolver(route: route),
+            tmuxPageServer: AttachBoundaryPageServer(expectedRoute: route)
+        )
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(
+            id: "history-attach",
+            action: "get_terminal_history_page",
+            params: [
+                "source": .string("tmux"),
+                "workspace_id": .string(route.workspaceID),
+                "panel_id": .string(route.panelID),
+                "route_generation": .number(9),
+                "page_lines": .number(2),
+                "cursor": .object([
+                    "offset": .number(0),
+                    "anchor": .object([
+                        "offset": .number(0),
+                        "sha16": .string("0123456789abcdef"),
+                        "attach_history_size": .number(10),
+                    ]),
+                ]),
+            ]
+        )))
+
+        XCTAssertEqual(
+            response.result?["cursor"]?.objectValue?["anchor"]?
+                .objectValue?["attach_history_size"]?.intValue,
+            10
+        )
+
+        XCTAssertThrowsError(try handler.handle(BridgeRequest(
+            id: "history-malformed-attach",
+            action: "get_terminal_history_page",
+            params: [
+                "source": .string("tmux"),
+                "workspace_id": .string(route.workspaceID),
+                "panel_id": .string(route.panelID),
+                "route_generation": .number(9),
+                "page_lines": .number(2),
+                "cursor": .object([
+                    "offset": .number(0),
+                    "anchor": .object([
+                        "offset": .number(0),
+                        "sha16": .string("0123456789abcdef"),
+                        "attach_history_size": .string("10"),
+                    ]),
+                ]),
+            ]
+        )))
     }
 
     private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {

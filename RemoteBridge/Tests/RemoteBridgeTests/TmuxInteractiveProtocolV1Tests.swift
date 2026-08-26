@@ -91,6 +91,11 @@ final class TmuxInteractiveProtocolV1Tests: XCTestCase {
         let start = TmuxInteractiveAuthoritativeStart(
             binding: binding,
             attachProof: attachProof,
+            historyAnchor: TerminalHistoryAnchorV1(
+                offset: 0,
+                sha16: "0123456789abcdef",
+                attachHistorySize: 42
+            ),
             viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
             initialBytes: Data([0x1b, 0x5b, 0x48])
         )
@@ -101,6 +106,8 @@ final class TmuxInteractiveProtocolV1Tests: XCTestCase {
         XCTAssertEqual(start.attachProof.sessionID, "$7")
         XCTAssertEqual(start.attachProof.windowID, "@11")
         XCTAssertEqual(start.attachProof.paneID, "%19")
+        XCTAssertEqual(start.historyAnchor?.offset, 0)
+        XCTAssertEqual(start.historyAnchor?.attachHistorySize, 42)
     }
 
     func testProtocolValuesFenceEveryMutableAndEmittedValueBySubscriptionAndGeneration() {

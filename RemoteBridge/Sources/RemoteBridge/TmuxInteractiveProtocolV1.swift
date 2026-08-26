@@ -87,6 +87,7 @@ struct TmuxInteractiveAuthoritativeStart: Equatable, Sendable {
     let binding: TmuxInteractiveSubscriptionBinding
     let attachProof: TmuxInteractiveAttachProof
     let bootstrapPhase: TmuxInteractiveBootstrapPhase?
+    let historyAnchor: TerminalHistoryAnchorV1?
     let viewport: TmuxInteractiveViewport
     let initialBytes: Data
 
@@ -94,12 +95,14 @@ struct TmuxInteractiveAuthoritativeStart: Equatable, Sendable {
         binding: TmuxInteractiveSubscriptionBinding,
         attachProof: TmuxInteractiveAttachProof,
         bootstrapPhase: TmuxInteractiveBootstrapPhase? = nil,
+        historyAnchor: TerminalHistoryAnchorV1? = nil,
         viewport: TmuxInteractiveViewport,
         initialBytes: Data
     ) {
         self.binding = binding
         self.attachProof = attachProof
         self.bootstrapPhase = bootstrapPhase
+        self.historyAnchor = historyAnchor
         self.viewport = viewport
         self.initialBytes = initialBytes
     }
@@ -108,9 +111,26 @@ struct TmuxInteractiveAuthoritativeStart: Equatable, Sendable {
 struct TmuxInteractiveAttached: Equatable, Sendable {
     let binding: TmuxInteractiveSubscriptionBinding
     let attachProof: TmuxInteractiveAttachProof
+    let historyAnchor: TerminalHistoryAnchorV1?
     let viewport: TmuxInteractiveViewport
     let initialBytes: Data
     let sequence: UInt64
+
+    init(
+        binding: TmuxInteractiveSubscriptionBinding,
+        attachProof: TmuxInteractiveAttachProof,
+        historyAnchor: TerminalHistoryAnchorV1? = nil,
+        viewport: TmuxInteractiveViewport,
+        initialBytes: Data,
+        sequence: UInt64
+    ) {
+        self.binding = binding
+        self.attachProof = attachProof
+        self.historyAnchor = historyAnchor
+        self.viewport = viewport
+        self.initialBytes = initialBytes
+        self.sequence = sequence
+    }
 }
 
 struct TmuxInteractiveOutputChunk: Equatable, Sendable {

@@ -710,11 +710,20 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         let prover = ProverProbe()
         prover.results = [verifiedAttach]
         let clientRefreshRequester = ClientRefreshRequesterProbe()
+        let historyAnchor = TerminalHistoryAnchorV1(
+            offset: 0,
+            sha16: "0123456789abcdef",
+            attachHistorySize: 42
+        )
         let owner = TmuxInteractivePTYSessionOwner(
             admissionStore: OrdinaryTmuxInputSubmissionStore(),
             controller: controller,
             attachProver: prover,
-            clientRefreshRequester: clientRefreshRequester
+            clientRefreshRequester: clientRefreshRequester,
+            captureHistoryAnchor: { capturedRoute in
+                XCTAssertEqual(capturedRoute, route)
+                return historyAnchor
+            }
         )
 
         try owner.begin(request)
@@ -732,6 +741,7 @@ final class TmuxInteractivePTYSessionOwnerTests: XCTestCase {
         XCTAssertEqual(start.viewport, request.subscribe.viewport)
         XCTAssertNil(start.bootstrapPhase)
         XCTAssertEqual(start.initialBytes, attachBytes)
+        XCTAssertEqual(start.historyAnchor, historyAnchor)
         XCTAssertTrue(clientRefreshRequester.requests.isEmpty)
         XCTAssertEqual(owner.lifecycleState, .live)
 

@@ -106,9 +106,15 @@ final class TmuxInteractiveWireCodecTests: XCTestCase {
             paneID: "%19"
         )
         let initialBytes = Data([0x1b, 0x5b, 0x3e, 0x63])
+        let historyAnchor = TerminalHistoryAnchorV1(
+            offset: 0,
+            sha16: "0123456789abcdef",
+            attachHistorySize: 42
+        )
         let attached = TmuxInteractiveAttached(
             binding: binding,
             attachProof: proof,
+            historyAnchor: historyAnchor,
             viewport: TmuxInteractiveViewport(columns: 80, rows: 24),
             initialBytes: initialBytes,
             sequence: 1
@@ -150,6 +156,9 @@ final class TmuxInteractiveWireCodecTests: XCTestCase {
         XCTAssertEqual(attachedObject["rows"] as? Int, 24)
         XCTAssertEqual(attachedObject["data_base64"] as? String, initialBytes.base64EncodedString())
         XCTAssertEqual(attachedObject["sequence"] as? Int, 1)
+        XCTAssertEqual(attachedObject["history_anchor_offset"] as? Int, 0)
+        XCTAssertEqual(attachedObject["history_anchor_sha16"] as? String, historyAnchor.sha16)
+        XCTAssertEqual(attachedObject["history_attach_size"] as? Int, 42)
         XCTAssertEqual(readyEnvelope.type, "tmux_interactive_ready")
         XCTAssertEqual(readyEnvelope.subscriptionID, binding.subscriptionID)
         XCTAssertEqual(readyEnvelope.generation, binding.generation)
@@ -313,6 +322,11 @@ final class TmuxInteractiveWireCodecTests: XCTestCase {
                 viewport: TmuxInteractiveViewport(columns: 80, rows: 23),
                 bytes: Data("bootstrap-state".utf8)
             ),
+            historyAnchor: TerminalHistoryAnchorV1(
+                offset: 0,
+                sha16: "0123456789abcdef",
+                attachHistorySize: 42
+            ),
             viewport: viewport,
             initialBytes: opaqueBytes
         )
@@ -373,6 +387,9 @@ final class TmuxInteractiveWireCodecTests: XCTestCase {
             Data("bootstrap-state".utf8).base64EncodedString()
         )
         XCTAssertEqual(startObject["data_base64"] as? String, opaqueBytes.base64EncodedString())
+        XCTAssertEqual(startObject["history_anchor_offset"] as? Int, 0)
+        XCTAssertEqual(startObject["history_anchor_sha16"] as? String, "0123456789abcdef")
+        XCTAssertEqual(startObject["history_attach_size"] as? Int, 42)
         XCTAssertEqual(outputEnvelope.dataBase64, opaqueBytes.base64EncodedString())
         XCTAssertEqual(outputEnvelope.sequence, 3)
         XCTAssertEqual(stateEnvelope.state, "detached")
