@@ -12,6 +12,7 @@ final class TideySocketClient {
     private let socketPathResolver: SocketPathResolver
     private let socketConnector: SocketConnector
     private let retryWait: RetryWait
+    private let transportLock = NSLock()
 
     convenience init(locator: TideySocketLocator) {
         self.init(socketPathResolver: locator.resolveLiveSocketPath,
@@ -28,6 +29,8 @@ final class TideySocketClient {
     }
 
     func send(_ request: BridgeRequest) throws -> BridgeResponse {
+        transportLock.lock()
+        defer { transportLock.unlock() }
         guard let socketPath = socketPathResolver() else {
             throw BridgeInternalError.socketUnavailable
         }
@@ -42,6 +45,8 @@ final class TideySocketClient {
     }
 
     func send(command: String) throws {
+        transportLock.lock()
+        defer { transportLock.unlock() }
         guard let socketPath = socketPathResolver() else {
             throw BridgeInternalError.socketUnavailable
         }
