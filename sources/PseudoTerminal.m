@@ -4542,6 +4542,30 @@ ITERM_WEAKLY_REFERENCEABLE
     return [result autorelease];
 }
 
++ (NSDictionary *)tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:(long long)oldestRetainedAbsoluteLine
+                                                       newestExclusiveAbsoluteLine:(long long)newestExclusiveAbsoluteLine
+                                                        requestedBeforeAbsoluteLine:(NSNumber *)requestedBeforeAbsoluteLine
+                                                                         pageLines:(NSInteger)pageLines {
+    const long long boundedOldest = MAX(0, oldestRetainedAbsoluteLine);
+    const long long boundedNewest = MAX(boundedOldest, newestExclusiveAbsoluteLine);
+    const NSInteger boundedPageLines = MAX(1, MIN(pageLines, 500));
+    const long long requestedEnd = requestedBeforeAbsoluteLine
+        ? [requestedBeforeAbsoluteLine longLongValue]
+        : boundedNewest;
+    const long long end = MAX(0, MIN(requestedEnd, boundedNewest));
+    const long long requestedStart = MAX(0, end - boundedPageLines);
+    const BOOL trimmed = requestedStart < boundedOldest || end < boundedOldest;
+    const long long retainedEnd = MAX(boundedOldest, end);
+    const long long start = MIN(retainedEnd, MAX(boundedOldest, requestedStart));
+    return @{
+        @"start_abs": @(start),
+        @"end_abs": @(retainedEnd),
+        @"oldest_retained_abs": @(boundedOldest),
+        @"trimmed": @(trimmed),
+        @"oldest_reached": @(start == boundedOldest),
+    };
+}
+
 + (NSDictionary *)tideyPresentedSnapshotForCurrentGrid:(id<VT100GridReading>)currentGrid
                                           cursorVisible:(BOOL)cursorVisible
                                       synchronizedState:(id<PTYTextViewSynchronousUpdateStateReading>)synchronizedState {

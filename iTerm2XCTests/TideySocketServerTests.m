@@ -68,6 +68,10 @@ typedef NSDictionary * _Nullable (^TideySocketRuntimeTmuxServerPreparationHandle
 + (NSDictionary *)tideySnapshot:(NSDictionary *)snapshot
     byAddingScrollbackScreenCharacterRows:(NSArray<NSData *> *)screenCharacterRows
                                    width:(NSInteger)width;
++ (NSDictionary *)tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:(long long)oldestRetainedAbsoluteLine
+                                                       newestExclusiveAbsoluteLine:(long long)newestExclusiveAbsoluteLine
+                                                        requestedBeforeAbsoluteLine:(nullable NSNumber *)requestedBeforeAbsoluteLine
+                                                                         pageLines:(NSInteger)pageLines;
 @end
 
 @interface PseudoTerminal (TideyNativeSessionPanelIdentityTesting)
@@ -640,6 +644,47 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
     NSString *capture = [[NSString alloc] initWithData:captureData
                                                encoding:NSUTF8StringEncoding];
     XCTAssertEqualObjects(capture, @"\033[0;36;1mOLD\033[0m\r\nLS");
+}
+
+- (void)testNativeHistoryPagePolicyUsesAbsoluteCursorAndFailsClosedAfterTrim {
+    NSDictionary *latest = [PseudoTerminal
+        tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:100
+                                             newestExclusiveAbsoluteLine:110
+                                              requestedBeforeAbsoluteLine:nil
+                                                               pageLines:3];
+    XCTAssertEqualObjects(latest[@"start_abs"], @107);
+    XCTAssertEqualObjects(latest[@"end_abs"], @110);
+    XCTAssertEqualObjects(latest[@"oldest_retained_abs"], @100);
+    XCTAssertEqualObjects(latest[@"trimmed"], @NO);
+    XCTAssertEqualObjects(latest[@"oldest_reached"], @NO);
+
+    NSDictionary *older = [PseudoTerminal
+        tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:100
+                                             newestExclusiveAbsoluteLine:110
+                                              requestedBeforeAbsoluteLine:@107
+                                                               pageLines:3];
+    XCTAssertEqualObjects(older[@"start_abs"], @104);
+    XCTAssertEqualObjects(older[@"end_abs"], @107);
+    XCTAssertEqualObjects(older[@"trimmed"], @NO);
+
+    NSDictionary *trimmed = [PseudoTerminal
+        tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:105
+                                             newestExclusiveAbsoluteLine:110
+                                              requestedBeforeAbsoluteLine:@108
+                                                               pageLines:5];
+    XCTAssertEqualObjects(trimmed[@"start_abs"], @105);
+    XCTAssertEqualObjects(trimmed[@"end_abs"], @108);
+    XCTAssertEqualObjects(trimmed[@"oldest_retained_abs"], @105);
+    XCTAssertEqualObjects(trimmed[@"trimmed"], @YES);
+    XCTAssertEqualObjects(trimmed[@"oldest_reached"], @YES);
+
+    NSDictionary *clamped = [PseudoTerminal
+        tideyNativeHistoryPageRangeWithOldestRetainedAbsoluteLine:0
+                                             newestExclusiveAbsoluteLine:1000
+                                              requestedBeforeAbsoluteLine:nil
+                                                               pageLines:9999];
+    XCTAssertEqualObjects(clamped[@"start_abs"], @500);
+    XCTAssertEqualObjects(clamped[@"end_abs"], @1000);
 }
 
 @end
