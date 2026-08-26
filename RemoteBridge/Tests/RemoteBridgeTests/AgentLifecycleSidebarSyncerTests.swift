@@ -64,6 +64,31 @@ final class AgentLifecycleSidebarSyncerTests: XCTestCase {
         ])
     }
 
+    func testRetriesFailedWorkspaceResetOnNextSyncAndConverges() {
+        let store = AgentSessionLifecycleStore()
+        let sender = CapturingLifecycleSidebarSender(failuresRemaining: 1)
+        let syncer = AgentLifecycleSidebarSyncer(store: store,
+                                                 socketIdentityProvider: { "tidey-socket-generation-1" },
+                                                 commandSender: sender.send)
+        let record = Self.record()
+        syncer.attach()
+        let identity = AgentSessionLifecycleIdentity(workspaceID: record.workspaceID,
+                                                     panelID: record.panelID ?? "",
+                                                     sessionID: record.sessionID)
+        store.claimGeneration(identity, vendor: record.vendor, generation: 1)
+        store.waitForDeliveriesForTesting()
+
+        syncer.sync(records: [record])
+        syncer.sync(records: [record])
+        syncer.sync(records: [record])
+
+        XCTAssertEqual(sender.commands, [
+            #"{"action":"clear_status","key":"shell_state","workspace_id":"workspace-1"}"#,
+            #"{"action":"clear_status","key":"shell_state","workspace_id":"workspace-1"}"#,
+            "report_shell_state prompt --workspace_id=workspace-1 --panel_id=panel-1 --session_id=session-1",
+        ])
+    }
+
     private static func record(sessionID: String = "session-1",
                                panelID: String = "panel-1",
                                pid: Int32 = 123) -> AgentSessionRegistryRecord {
@@ -81,8 +106,17 @@ final class AgentLifecycleSidebarSyncerTests: XCTestCase {
 
 private final class CapturingLifecycleSidebarSender {
     private(set) var commands = [String]()
+    private var failuresRemaining: Int
+
+    init(failuresRemaining: Int = 0) {
+        self.failuresRemaining = failuresRemaining
+    }
 
     func send(_ command: String) throws {
         commands.append(command)
+        if failuresRemaining > 0 {
+            failuresRemaining -= 1
+            throw POSIXError(.ECONNREFUSED)
+        }
     }
 }
