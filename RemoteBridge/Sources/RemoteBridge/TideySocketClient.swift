@@ -5,17 +5,33 @@ protocol TideyCommandSending: AnyObject {
 }
 
 final class TideySocketClient {
-    private let locator: TideySocketLocator
+    typealias SocketPathResolver = () -> String?
+    typealias SocketConnector = (String) throws -> Int32
+    typealias RetryWait = (TimeInterval) -> Void
 
-    init(locator: TideySocketLocator) {
-        self.locator = locator
+    private let socketPathResolver: SocketPathResolver
+    private let socketConnector: SocketConnector
+    private let retryWait: RetryWait
+
+    convenience init(locator: TideySocketLocator) {
+        self.init(socketPathResolver: locator.resolveLiveSocketPath,
+                  socketConnector: Self.connectUnixSocket,
+                  retryWait: Thread.sleep(forTimeInterval:))
+    }
+
+    init(socketPathResolver: @escaping SocketPathResolver,
+         socketConnector: @escaping SocketConnector,
+         retryWait: @escaping RetryWait) {
+        self.socketPathResolver = socketPathResolver
+        self.socketConnector = socketConnector
+        self.retryWait = retryWait
     }
 
     func send(_ request: BridgeRequest) throws -> BridgeResponse {
-        guard let socketPath = locator.resolveLiveSocketPath() else {
+        guard let socketPath = socketPathResolver() else {
             throw BridgeInternalError.socketUnavailable
         }
-        let fd = try Self.connectUnixSocket(path: socketPath)
+        let fd = try socketConnector(socketPath)
         defer { close(fd) }
         let data = try JSONSerialization.data(withJSONObject: request.tideySocketJSONObject)
         var payload = data
@@ -26,10 +42,10 @@ final class TideySocketClient {
     }
 
     func send(command: String) throws {
-        guard let socketPath = locator.resolveLiveSocketPath() else {
+        guard let socketPath = socketPathResolver() else {
             throw BridgeInternalError.socketUnavailable
         }
-        let fd = try Self.connectUnixSocket(path: socketPath)
+        let fd = try socketConnector(socketPath)
         defer { close(fd) }
         var payload = Data(command.utf8)
         payload.append(0x0a)
