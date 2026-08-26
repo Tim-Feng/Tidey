@@ -2,6 +2,48 @@ import XCTest
 @testable import RemoteBridge
 
 final class TerminalHistoryPagingTests: XCTestCase {
+    private struct StubResolver: OrdinaryTmuxRouteResolving {
+        let route: OrdinaryTmuxPanelRoute?
+
+        func route(forPanelID panelID: String, workspaceID: String?) throws -> OrdinaryTmuxPanelRoute? {
+            guard route?.panelID == panelID,
+                  workspaceID == nil || route?.workspaceID == workspaceID else {
+                return nil
+            }
+            return route
+        }
+    }
+
+    private struct StubPageServer: OrdinaryTmuxHistoryPageServing {
+        let expectedRoute: OrdinaryTmuxPanelRoute
+
+        func page(
+            route: OrdinaryTmuxPanelRoute,
+            offset: Int,
+            pageLines: Int,
+            anchor: TerminalHistoryAnchorV1?
+        ) throws -> OrdinaryTmuxHistoryPage {
+            XCTAssertEqual(route, expectedRoute)
+            XCTAssertEqual(offset, 0)
+            XCTAssertEqual(pageLines, 2)
+            XCTAssertNil(anchor)
+            let rows = [Data("OLDER".utf8), Data("OLD".utf8)]
+            return OrdinaryTmuxHistoryPage(
+                route: route,
+                evaluation: OrdinaryTmuxHistoryPageEvaluation(
+                    rows: rows,
+                    nextOffset: 2,
+                    anchor: TerminalHistoryAnchorV1(
+                        offset: 2,
+                        sha16: OrdinaryTmuxHistoryPagePolicy.sha16(rows[0])
+                    ),
+                    invalidated: false,
+                    oldestReached: false
+                )
+            )
+        }
+    }
+
     func testTmuxCapturePlanUsesFixedBoundsAndInvalidatesMismatchedOverlap() throws {
         let firstPlan = try OrdinaryTmuxHistoryPagePolicy.capturePlan(
             offset: 0,
@@ -53,5 +95,70 @@ final class TerminalHistoryPagingTests: XCTestCase {
         XCTAssertTrue(invalidated.rows.isEmpty)
         XCTAssertEqual(invalidated.nextOffset, 2)
         XCTAssertNil(invalidated.anchor)
+    }
+
+    func testBridgeHistoryPageActionPagesValidatedTmuxAndForwardsNativeRoutes() throws {
+        let route = ordinaryRoute()
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: StubResolver(route: route),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+        let response = try XCTUnwrap(handler.handle(BridgeRequest(
+            id: "history-1",
+            action: "get_terminal_history_page",
+            params: [
+                "source": .string("tmux"),
+                "workspace_id": .string(route.workspaceID),
+                "panel_id": .string(route.panelID),
+                "route_generation": .number(9),
+                "page_lines": .number(2),
+                "cursor": .object(["offset": .number(0)]),
+            ]
+        )))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["source"]?.stringValue, "tmux")
+        XCTAssertEqual(response.result?["workspace_id"]?.stringValue, route.workspaceID)
+        XCTAssertEqual(response.result?["panel_id"]?.stringValue, route.panelID)
+        XCTAssertEqual(response.result?["route_generation"]?.intValue, 9)
+        XCTAssertEqual(
+            response.result?["rows"]?.arrayValue?.compactMap(\.stringValue),
+            [Data("OLDER".utf8).base64EncodedString(), Data("OLD".utf8).base64EncodedString()]
+        )
+        let cursor = try XCTUnwrap(response.result?["cursor"]?.objectValue)
+        XCTAssertEqual(cursor["offset"]?.intValue, 2)
+        XCTAssertEqual(cursor["anchor"]?.objectValue?["offset"]?.intValue, 2)
+        XCTAssertEqual(cursor["anchor"]?.objectValue?["sha16"]?.stringValue?.count, 16)
+        XCTAssertEqual(response.result?["invalidated"]?.boolValue, false)
+        XCTAssertEqual(response.result?["oldest_reached"]?.boolValue, false)
+
+        let native = try handler.handle(BridgeRequest(
+            id: "history-native",
+            action: "get_terminal_history_page",
+            params: [
+                "source": .string("native"),
+                "workspace_id": .string("workspace-native"),
+                "panel_id": .string("panel-native"),
+                "route_generation": .number(4),
+                "page_lines": .number(200),
+            ]
+        ))
+        XCTAssertNil(native, "native history requests must continue to the Tidey socket")
+    }
+
+    private func ordinaryRoute() -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "ordinary-tmux:/tmp/tmux-\(getuid())/default:$7:@16",
+            carrierPanelID: "carrier-panel",
+            socket: .path("/tmp/tmux-\(getuid())/default"),
+            sessionID: "$7",
+            sessionName: "genesis-extraction",
+            windowID: "@16",
+            windowIndex: 1,
+            activePaneID: "%16",
+            cwd: "/Users/timfeng/GitHub/mother_nature",
+            currentCommand: "codex"
+        )
     }
 }

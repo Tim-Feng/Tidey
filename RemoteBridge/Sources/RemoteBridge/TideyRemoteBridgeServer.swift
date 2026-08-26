@@ -1070,6 +1070,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     private let inputActionHandler: BridgeInputActionHandler
     private let fileActionHandler: BridgeFileActionHandler
     private let ordinaryTmuxRecentOutputHandler: OrdinaryTmuxRecentOutputHandler
+    private let terminalHistoryPageActionHandler: TerminalHistoryPageActionHandler
     private let ordinaryTmuxOutputStreamHandler: OrdinaryTmuxOutputStreaming
     private let requestSequencer: BridgeRequestSequencer
     private let terminalStreamLaneRegistry: OrdinaryTmuxTerminalStreamLaneRegistry
@@ -1161,6 +1162,9 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
         self.fileActionHandler = BridgeFileActionHandler(rootResolver: TideyPanelFileRootResolver(socketSender: socketClient,
                                                                                                   ordinaryTmuxRouteResolver: routeResolver))
         self.ordinaryTmuxRecentOutputHandler = OrdinaryTmuxRecentOutputHandler(routeResolver: routeResolver)
+        self.terminalHistoryPageActionHandler = TerminalHistoryPageActionHandler(
+            routeResolver: routeResolver
+        )
         self.ordinaryTmuxOutputStreamHandler = ordinaryTmuxOutputStreamHandler ?? OrdinaryTmuxOutputStreamHandler(
             routeResolver: routeResolver,
             terminalObserver: terminalObserver
@@ -1514,6 +1518,11 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
                                           workspaceReplayEnvelopes: [])
             }
             if let response = try ordinaryTmuxRecentOutputHandler.handle(request) {
+                return LocalRequestResult(response: response,
+                                          agentReplayEnvelopes: [],
+                                          workspaceReplayEnvelopes: [])
+            }
+            if let response = try terminalHistoryPageActionHandler.handle(request) {
                 return LocalRequestResult(response: response,
                                           agentReplayEnvelopes: [],
                                           workspaceReplayEnvelopes: [])

@@ -21,6 +21,20 @@ struct OrdinaryTmuxHistoryPageEvaluation: Equatable, Sendable {
     let oldestReached: Bool
 }
 
+struct OrdinaryTmuxHistoryPage: Equatable, Sendable {
+    let route: OrdinaryTmuxPanelRoute
+    let evaluation: OrdinaryTmuxHistoryPageEvaluation
+}
+
+protocol OrdinaryTmuxHistoryPageServing: Sendable {
+    func page(
+        route: OrdinaryTmuxPanelRoute,
+        offset: Int,
+        pageLines: Int,
+        anchor: TerminalHistoryAnchorV1?
+    ) throws -> OrdinaryTmuxHistoryPage
+}
+
 enum OrdinaryTmuxHistoryPagePolicy {
     static let maximumPageLines = 500
 
@@ -107,5 +121,111 @@ enum OrdinaryTmuxHistoryPagePolicy {
             invalidated: true,
             oldestReached: false
         )
+    }
+}
+
+struct TerminalHistoryPageActionHandler {
+    private let routeResolver: OrdinaryTmuxRouteResolving
+    private let tmuxPageServer: any OrdinaryTmuxHistoryPageServing
+
+    init(
+        routeResolver: OrdinaryTmuxRouteResolving,
+        tmuxPageServer: any OrdinaryTmuxHistoryPageServing = OrdinaryTmuxCLIAdapter()
+    ) {
+        self.routeResolver = routeResolver
+        self.tmuxPageServer = tmuxPageServer
+    }
+
+    func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
+        guard request.action == "get_terminal_history_page" else {
+            return nil
+        }
+        guard request.params?["source"]?.stringValue == "tmux" else {
+            return nil
+        }
+        guard let workspaceID = request.params?["workspace_id"]?.stringValue,
+              workspaceID.isEmpty == false,
+              let panelID = request.params?["panel_id"]?.stringValue,
+              panelID.hasPrefix("\(OrdinaryTmuxLogicalPanelID.prefix):"),
+              let routeGeneration = request.params?["route_generation"]?.intValue,
+              routeGeneration >= 0,
+              let pageLines = request.params?["page_lines"]?.intValue,
+              (1...OrdinaryTmuxHistoryPagePolicy.maximumPageLines).contains(pageLines),
+              let cursor = request.params?["cursor"]?.objectValue,
+              let offset = cursor["offset"]?.intValue,
+              offset >= 0 else {
+            throw BridgeInternalError.invalidRequest(
+                "tmux terminal history paging requires workspace_id, panel_id, route_generation, page_lines, and cursor"
+            )
+        }
+        let anchor = try Self.decodeAnchor(cursor["anchor"], expectedOffset: offset)
+        guard let route = try routeResolver.route(
+            forPanelID: panelID,
+            workspaceID: workspaceID
+        ) else {
+            throw BridgeInternalError.notFound(
+                "ordinary tmux logical panel is not authorized"
+            )
+        }
+        let page = try tmuxPageServer.page(
+            route: route,
+            offset: offset,
+            pageLines: pageLines,
+            anchor: anchor
+        )
+        let evaluation = page.evaluation
+        let nextAnchor: JSONValue = evaluation.anchor.map {
+            .object([
+                "offset": .number(Double($0.offset)),
+                "sha16": .string($0.sha16),
+            ])
+        } ?? .null
+        return BridgeResponse(
+            id: request.id,
+            ok: true,
+            result: [
+                "source": .string("tmux"),
+                "workspace_id": .string(page.route.workspaceID),
+                "panel_id": .string(page.route.panelID),
+                "route_generation": .number(Double(routeGeneration)),
+                "rows": .array(evaluation.rows.map {
+                    .string($0.base64EncodedString())
+                }),
+                "cursor": .object([
+                    "offset": .number(Double(evaluation.nextOffset)),
+                    "anchor": nextAnchor,
+                ]),
+                "invalidated": .bool(evaluation.invalidated),
+                "oldest_reached": .bool(evaluation.oldestReached),
+            ],
+            error: nil
+        )
+    }
+
+    private static func decodeAnchor(
+        _ value: JSONValue?,
+        expectedOffset: Int
+    ) throws -> TerminalHistoryAnchorV1? {
+        guard let value, value != .null else {
+            guard expectedOffset == 0 else {
+                throw BridgeInternalError.invalidRequest(
+                    "tmux terminal history cursor requires an anchor after the first page"
+                )
+            }
+            return nil
+        }
+        guard let object = value.objectValue,
+              let offset = object["offset"]?.intValue,
+              offset == expectedOffset,
+              let sha16 = object["sha16"]?.stringValue,
+              sha16.utf8.count == 16,
+              sha16.utf8.allSatisfy({ byte in
+                  (48...57).contains(byte) || (97...102).contains(byte)
+              }) else {
+            throw BridgeInternalError.invalidRequest(
+                "tmux terminal history cursor anchor is invalid"
+            )
+        }
+        return TerminalHistoryAnchorV1(offset: offset, sha16: sha16)
     }
 }

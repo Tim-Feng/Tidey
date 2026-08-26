@@ -1635,6 +1635,46 @@ final class OrdinaryTmuxCLIAdapter {
             .map(String.init)
     }
 
+    func page(
+        route: OrdinaryTmuxPanelRoute,
+        offset: Int,
+        pageLines: Int,
+        anchor: TerminalHistoryAnchorV1?
+    ) throws -> OrdinaryTmuxHistoryPage {
+        let refreshed = try refreshedRoute(route)
+        let plan = try OrdinaryTmuxHistoryPagePolicy.capturePlan(
+            offset: offset,
+            pageLines: pageLines,
+            anchor: anchor,
+            paneID: refreshed.activePaneID
+        )
+        let output = try rawCommandRunner(refreshed.socket, plan.arguments, nil)
+        let evaluation = OrdinaryTmuxHistoryPagePolicy.evaluate(
+            rows: Self.terminalHistoryRows(from: output),
+            plan: plan
+        )
+        return OrdinaryTmuxHistoryPage(
+            route: refreshed,
+            evaluation: evaluation
+        )
+    }
+
+    private static func terminalHistoryRows(from output: Data) -> [Data] {
+        guard output.isEmpty == false else {
+            return []
+        }
+        var rows = [Data]()
+        var rowStart = output.startIndex
+        for index in output.indices where output[index] == 0x0a {
+            rows.append(Data(output[rowStart..<index]))
+            rowStart = output.index(after: index)
+        }
+        if rowStart < output.endIndex {
+            rows.append(Data(output[rowStart..<output.endIndex]))
+        }
+        return rows
+    }
+
     private static func singleQuotedShellArgument(_ value: String) -> String {
         "'" + value.replacingOccurrences(of: "'", with: "'\\''") + "'"
     }
@@ -1643,6 +1683,7 @@ final class OrdinaryTmuxCLIAdapter {
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxWindowProjecting {}
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxRouteRefreshing {}
 extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxTerminalStreaming {}
+extension OrdinaryTmuxCLIAdapter: OrdinaryTmuxHistoryPageServing {}
 extension OrdinaryTmuxCLIAdapter: RuntimeResumeTmuxSessionReading {}
 
 private extension String {
