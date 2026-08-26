@@ -6,15 +6,15 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.5.2
+## Latest in 0.6.0
 
-- **Reliable file links in TUIs** — ⌘-click now reconstructs file paths split across terminal hard wraps, including paths shown inside mouse-reporting TUIs.
-- **More dependable Remote agents** — restored tmux panels retain their live workspace and panel identity, so prompts, approvals, status, and notifications reach the correct agent.
-- **Cleaner workspace controls** — sidebar close buttons stay visible and fixed to the upper-right corner across compact and expanded workspace rows.
+- **Browser automation for agents** — Codex and Claude Code can work with hidden in-app browser pages, inspect and interact with page content, manage multiple pages, and present them in Tidey when needed.
+- **A real terminal on Tidey Remote** — use interactive tmux sessions from iPhone with responsive input, scrolling, terminal colors, native split awareness, and video previews for local media.
+- **More resilient long-running work** — runtime descriptors preserve agent identity across controlled Tidey restarts, browser downloads recover correctly, crowded tabs stay closable, and Codex completion sounds are restored.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.5.2/Tidey.dmg) (macOS 12.4+, Apple Silicon)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.6.0/Tidey.dmg) (macOS 12.4+, Apple Silicon)
 
 Tidey Remote requires macOS 13 or later.
 
