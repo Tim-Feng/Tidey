@@ -6,6 +6,7 @@
 #import "iTermFlippedView.h"
 #import "iTermFontPanel.h"
 #import "iTermRootTerminalView.h"
+#import "iTerm2SharedARC-Swift.h"
 
 // ----- Card view: rounded rect with border -----
 @interface TideySettingsCardView : NSView
@@ -23,11 +24,11 @@
                                                          xRadius:13
                                                          yRadius:13];
     // Card background: rgba(255,255,255,0.04)
-    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.04] setFill];
+    [TideyInterfaceThemeTokens.classic.settingsCardBackgroundColor setFill];
     [path fill];
 
     // Card border: rgba(255,255,255,0.08)
-    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.08] setStroke];
+    [TideyInterfaceThemeTokens.classic.settingsCardBorderColor setStroke];
     [path setLineWidth:1.0];
     [path stroke];
 }
@@ -42,7 +43,7 @@
 
 - (void)drawRect:(NSRect)dirtyRect {
     // Separator: rgba(255,255,255,0.06)
-    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06] setFill];
+    [TideyInterfaceThemeTokens.classic.settingsDividerColor setFill];
     NSRectFill(self.bounds);
 }
 
@@ -50,11 +51,11 @@
 
 // ----- Colors -----
 static NSColor *TideySettingsPrimaryTextColor(void) {
-    return [NSColor colorWithSRGBRed:0xe8/255.0 green:0xe8/255.0 blue:0xe8/255.0 alpha:1.0];
+    return TideyInterfaceThemeTokens.classic.settingsPrimaryTextColor;
 }
 
 static NSColor *TideySettingsSecondaryTextColor(void) {
-    return [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0];
+    return TideyInterfaceThemeTokens.classic.settingsSecondaryTextColor;
 }
 
 // ----- Main VC -----

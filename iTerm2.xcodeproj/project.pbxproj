@@ -938,6 +938,7 @@
 		56C476620E56B783B8972219 /* iTermCharacterSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E188B891EEA2947C8B12466D /* iTermCharacterSourceTests.swift */; };
 		5E671E2FA838E668A33564BC /* TideyBrowserAutomationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */; };
 		5ECE005F1454E59B004861E9 /* PseudoTerminalRestorer.h in Headers */ = {isa = PBXBuildFile; fileRef = 5ECE005D1454E59B004861E9 /* PseudoTerminalRestorer.h */; };
+		5FDFE8EB3CADAD614FCF6E53 /* TideyInterfaceThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */; };
 		63784809C4F1C06074729416 /* IntervalTreeForwardLocationEnumeratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */; };
 		6998793AE8C54A0EAE7D5D0F /* PillBackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3AA921DF1744D7BA890104 /* PillBackgroundRenderer.swift */; };
 		6B0AA05F4218D8AEC31BCB30 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
@@ -5155,6 +5156,7 @@
 		CFB74E789E61AA2F8D004482 /* TideyBrowserAuthenticatedTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF05EF621D98B3E01E958E0 /* TideyBrowserAuthenticatedTransfer.swift */; };
 		D3CE2D4E1A00936F0098ED99 /* PSMDarkTabStyle.h in Headers */ = {isa = PBXBuildFile; fileRef = D3CE2D4C1A00936F0098ED99 /* PSMDarkTabStyle.h */; };
 		D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */ = {isa = PBXBuildFile; fileRef = 93EDFB853885460AA504C6B9 /* iTermLayoutCalculator.h */; };
+		D922FE28535D3755ADC629FD /* TideyInterfaceTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */; };
 		D9A2368683D7DDB73A826821 /* iTermStreamingPNGWriter.m in Sources */ = {isa = PBXBuildFile; fileRef = 11C735CA9A1AF5E864EC718E /* iTermStreamingPNGWriter.m */; };
 		DCE63F57A37160221DC5B939 /* iTermScreenshotPreviewOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */; };
 		DDF0FD65062916F70080EF74 /* iTermApplication.h in Headers */ = {isa = PBXBuildFile; fileRef = DDF0FD63062916F70080EF74 /* iTermApplication.h */; };
@@ -6046,8 +6048,10 @@
 		2B9A9D7BB06953CE9297F1FC /* iTermStreamingScreenshotEncoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermStreamingScreenshotEncoder.swift; sourceTree = "<group>"; };
 		31039BDCA3000FF0DB6B6D7C /* IntervalTreeSmallestLocationBugTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IntervalTreeSmallestLocationBugTests.swift; sourceTree = "<group>"; };
 		3335AD96138BA74CC79D25A8 /* iTermUnicodeNormalization.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = iTermUnicodeNormalization.h; sourceTree = "<group>"; };
+		37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyInterfaceThemeTests.swift; sourceTree = "<group>"; };
 		38BC6E4FFFBFF4AEEA99EDEB /* TideyBrowserNavigationGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserNavigationGate.swift; sourceTree = "<group>"; };
 		40463B3F406C007568BC50DB /* TideyBrowserAutomationEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationEngine.swift; sourceTree = "<group>"; };
+		41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyInterfaceTheme.swift; sourceTree = "<group>"; };
 		424FA2350959ED4159AA0568 /* FIFOQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FIFOQueueTests.swift; sourceTree = "<group>"; };
 		426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationState.swift; sourceTree = "<group>"; };
 		43285D54833977B282AAB709 /* TideyApplicationEnvironmentPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyApplicationEnvironmentPolicy.swift; sourceTree = "<group>"; };
@@ -9701,6 +9705,7 @@
 				D59E7D50AE471A083EEA7B45 /* TideySidebarViews.m */,
 				A19ACAEE2C87340ED56E653E /* TideySidebarRowPresentation.h */,
 				22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */,
+				41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */,
 			);
 			name = Classes;
 			path = sources/;
@@ -10107,6 +10112,7 @@
 				5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */,
 				ED06023E9B9B0E7678D32E3F /* TideyBrowserAuthenticatedTransferTests.swift */,
 				9B060E519B9C7F7D84874A62 /* TideyApplicationEnvironmentPolicyTests.swift */,
+				37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -20447,6 +20453,7 @@
 				83138F878F9B77504B17CA69 /* TideyApplicationEnvironmentPolicy.swift in Sources */,
 				84D0E4A7C563506B0880B189 /* TideySidebarViews.m in Sources */,
 				551519642B90B2D5B0207FD3 /* TideySidebarRowPresentation.m in Sources */,
+				D922FE28535D3755ADC629FD /* TideyInterfaceTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20523,6 +20530,7 @@
 				3538DE1D25D0E62BBD3612E3 /* TideyBrowserNavigationGateTests.swift in Sources */,
 				A19EB11C6A48D547086BC106 /* TideyBrowserAuthenticatedTransferTests.swift in Sources */,
 				92B3FC50E8D302E881489506 /* TideyApplicationEnvironmentPolicyTests.swift in Sources */,
+				5FDFE8EB3CADAD614FCF6E53 /* TideyInterfaceThemeTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

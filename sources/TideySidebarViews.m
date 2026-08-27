@@ -1,5 +1,7 @@
 #import "TideySidebarViews.h"
 
+#import "iTerm2SharedARC-Swift.h"
+
 const CGFloat kTideySidebarBadgeSize = 6;
 const CGFloat kTideySidebarBadgeLeadingInset = 1;
 const CGFloat kTideySidebarCloseButtonTopInset = 10;
@@ -137,11 +139,17 @@ NSView *TideyFindCloseView(NSView *container) {
     if (!self.selectionHighlightStyle || !self.isSelected) {
         return;
     }
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 6, 4)
-                                                         xRadius:8
-                                                         yRadius:8];
-    [[NSColor selectedContentBackgroundColor] setFill];
+                                                         xRadius:tokens.sidebarSelectionCornerRadius
+                                                         yRadius:tokens.sidebarSelectionCornerRadius];
+    [tokens.sidebarSelectionColor setFill];
     [path fill];
+    if (tokens.usesRaisedSidebarSelection) {
+        [tokens.sidebarSelectionBorderColor setStroke];
+        path.lineWidth = 1;
+        [path stroke];
+    }
 }
 
 - (BOOL)isEmphasized {
