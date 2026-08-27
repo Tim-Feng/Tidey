@@ -1,5 +1,34 @@
 import AppKit
 
+@objc enum TideyInterfaceTheme: Int {
+    case classic
+}
+
+@objcMembers
+final class TideyInterfaceThemeController: NSObject {
+    static let didChangeNotification = Notification.Name("TideyInterfaceThemeDidChangeNotification")
+    static let shared = TideyInterfaceThemeController(userDefaults: .standard)
+
+    private let userDefaults: UserDefaults
+
+    init(userDefaults: UserDefaults) {
+        self.userDefaults = userDefaults
+        super.init()
+    }
+
+    var currentThemeIdentifier: String {
+        "classic"
+    }
+
+    var currentTokens: TideyInterfaceThemeTokens {
+        .classic
+    }
+
+    func reapplyCurrentTheme() {
+        NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
+    }
+}
+
 @objcMembers
 final class TideyInterfaceThemeTokens: NSObject {
     static let classic = TideyInterfaceThemeTokens(

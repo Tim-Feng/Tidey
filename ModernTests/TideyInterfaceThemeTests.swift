@@ -35,6 +35,28 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertFalse(tokens.usesRaisedRightPanelTabs)
     }
 
+    func testControllerReapplyPostsOneNotificationWithoutChangingClassicTheme() {
+        let suiteName = "TideyInterfaceThemeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = TideyInterfaceThemeController(userDefaults: defaults)
+        var notifications = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: TideyInterfaceThemeController.didChangeNotification,
+            object: controller,
+            queue: nil
+        ) { _ in
+            notifications += 1
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        controller.reapplyCurrentTheme()
+
+        XCTAssertEqual(notifications, 1)
+        XCTAssertEqual(controller.currentThemeIdentifier, "classic")
+        XCTAssertTrue(controller.currentTokens === TideyInterfaceThemeTokens.classic)
+    }
+
     private func assertColor(_ color: NSColor,
                              red: CGFloat,
                              green: CGFloat,

@@ -512,6 +512,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (NSInteger)tideySidebarSelectedWorkspaceIndex;
 - (void)syncTideySidebarSelection;
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification;
+- (void)tideyApplyInterfaceThemeTokens;
 - (NSInteger)tideySidebarWorkspaceIndexForIdentifier:(NSString *)workspaceIdentifier;
 - (TideyNotificationItem *)tideySidebarLatestUnreadNotificationAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index;
@@ -670,7 +672,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {
-        TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
+        TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
         self.wantsLayer = YES;
         self.layer.backgroundColor = NSColor.clearColor.CGColor;
 
@@ -765,7 +767,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 - (void)tideyUpdateAppearance {
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     self.layer.cornerRadius = tokens.rightPanelTabCornerRadius;
     self.layer.borderWidth = tokens.usesRaisedRightPanelTabs && _tideySelected ? 1 : 0;
     self.layer.borderColor = tokens.rightPanelTabSelectionBorderColor.CGColor;
@@ -1787,7 +1789,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideySidebarView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideySidebarView.autoresizingMask = NSViewHeightSizable;
         _tideySidebarView.wantsLayer = YES;
-        _tideySidebarView.layer.backgroundColor = TideyInterfaceThemeTokens.classic.sidebarBackgroundColor.CGColor;
+        _tideySidebarView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.sidebarBackgroundColor.CGColor;
         [self addSubview:_tideySidebarView];
 
         _tideySidebarScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -1832,6 +1834,10 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                                  selector:@selector(tideyApplicationDidBecomeActive:)
                                                      name:NSApplicationDidBecomeActiveNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyInterfaceThemeDidChange:)
+                                                     name:TideyInterfaceThemeController.didChangeNotification
+                                                   object:TideyInterfaceThemeController.shared];
 
         _tideyMouseDownMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
                                                                        handler:^NSEvent *(NSEvent *event) {
@@ -1852,14 +1858,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorPanelView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
         _tideyEditorPanelView.wantsLayer = YES;
-        _tideyEditorPanelView.layer.backgroundColor = TideyInterfaceThemeTokens.classic.rightPanelBackgroundColor.CGColor;
+        _tideyEditorPanelView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelBackgroundColor.CGColor;
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
 
         _tideyEditorTabStripView = [[TideyRightPanelTabStripView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
         _tideyEditorTabStripView.wantsLayer = YES;
-        _tideyEditorTabStripView.layer.backgroundColor = TideyInterfaceThemeTokens.classic.rightPanelTabStripBackgroundColor.CGColor;
+        _tideyEditorTabStripView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelTabStripBackgroundColor.CGColor;
         _tideyEditorTabStripView.layer.masksToBounds = YES;
         ((TideyRightPanelTabStripView *)_tideyEditorTabStripView).tideyOwner = self;
         _primaryPane.tabStripView = _tideyEditorTabStripView;
@@ -1889,7 +1895,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorFileTreeContainerView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeContainerView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
         _tideyEditorFileTreeContainerView.wantsLayer = YES;
-        _tideyEditorFileTreeContainerView.layer.backgroundColor = TideyInterfaceThemeTokens.classic.rightPanelFileTreeBackgroundColor.CGColor;
+        _tideyEditorFileTreeContainerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelFileTreeBackgroundColor.CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
 
         _tideyEditorFileTreeScrollView = [[TideyVerticalOnlyScrollView alloc] initWithFrame:NSZeroRect];
@@ -1972,7 +1978,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
         self.tideyEditorSplitDividerView = [[NSView alloc] initWithFrame:NSZeroRect];
         self.tideyEditorSplitDividerView.wantsLayer = YES;
-        self.tideyEditorSplitDividerView.layer.backgroundColor = TideyInterfaceThemeTokens.classic.rightPanelSplitDividerColor.CGColor;
+        self.tideyEditorSplitDividerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelSplitDividerColor.CGColor;
         self.tideyEditorSplitDividerView.hidden = YES;
         [_tideyEditorPanelView addSubview:self.tideyEditorSplitDividerView positioned:NSWindowAbove relativeTo:nil];
 
@@ -2262,6 +2268,9 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:NSApplicationDidBecomeActiveNotification
                                                   object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyInterfaceThemeController.didChangeNotification
+                                                  object:TideyInterfaceThemeController.shared];
     [self tideyStopWatchingCurrentEditorFile];
     [self tideyStopWatchingEditorFileTree];
     for (TideyRightPanelPane *pane in @[ _primaryPane, _secondaryPane ?: (id)kCFNull ]) {
@@ -5002,7 +5011,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
 
     BOOL activePane = (pane == self.activePane);
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     tabStripView.layer.backgroundColor = (activePane
         ? tokens.rightPanelActiveTabStripBackgroundColor
         : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
@@ -6728,6 +6737,23 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self reloadTideySidebar];
 }
 
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self tideyApplyInterfaceThemeTokens];
+}
+
+- (void)tideyApplyInterfaceThemeTokens {
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    _tideySidebarView.layer.backgroundColor = tokens.sidebarBackgroundColor.CGColor;
+    _tideyEditorPanelView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
+    _tideyEditorTabStripView.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
+    _tideyEditorFileTreeContainerView.layer.backgroundColor = tokens.rightPanelFileTreeBackgroundColor.CGColor;
+    self.tideyEditorSplitDividerView.layer.backgroundColor = tokens.rightPanelSplitDividerColor.CGColor;
+    [self reloadTideySidebar];
+    [self reloadTideyRightPanelTabs];
+    [self setNeedsDisplay:YES];
+}
+
 - (void)tideyStatusStoreDidChange:(NSNotification *)notification {
     NSString *workspaceIdentifier = notification.userInfo[@"workspaceID"];
     NSInteger row = [self tideySidebarWorkspaceIndexForIdentifier:workspaceIdentifier];
@@ -7697,7 +7723,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 }
 
 - (NSTableCellView *)newTideySidebarCellView {
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     TideySidebarCellView *cellView = [[TideySidebarCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideySidebarSessionCell";
 
@@ -7863,7 +7889,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView
                          presentation:(TideySidebarRowPresentation *)presentation {
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     NSView *badgeView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarBadgeViewIdentifier);
     NSTextField *badgeLabel = (NSTextField *)[badgeView viewWithTag:1006];
     badgeView.hidden = (presentation.unreadCount <= 0);

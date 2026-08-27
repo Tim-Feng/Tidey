@@ -24,11 +24,11 @@
                                                          xRadius:13
                                                          yRadius:13];
     // Card background: rgba(255,255,255,0.04)
-    [TideyInterfaceThemeTokens.classic.settingsCardBackgroundColor setFill];
+    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBackgroundColor setFill];
     [path fill];
 
     // Card border: rgba(255,255,255,0.08)
-    [TideyInterfaceThemeTokens.classic.settingsCardBorderColor setStroke];
+    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBorderColor setStroke];
     [path setLineWidth:1.0];
     [path stroke];
 }
@@ -43,7 +43,7 @@
 
 - (void)drawRect:(NSRect)dirtyRect {
     // Separator: rgba(255,255,255,0.06)
-    [TideyInterfaceThemeTokens.classic.settingsDividerColor setFill];
+    [TideyInterfaceThemeController.shared.currentTokens.settingsDividerColor setFill];
     NSRectFill(self.bounds);
 }
 
@@ -51,11 +51,11 @@
 
 // ----- Colors -----
 static NSColor *TideySettingsPrimaryTextColor(void) {
-    return TideyInterfaceThemeTokens.classic.settingsPrimaryTextColor;
+    return TideyInterfaceThemeController.shared.currentTokens.settingsPrimaryTextColor;
 }
 
 static NSColor *TideySettingsSecondaryTextColor(void) {
-    return TideyInterfaceThemeTokens.classic.settingsSecondaryTextColor;
+    return TideyInterfaceThemeController.shared.currentTokens.settingsSecondaryTextColor;
 }
 
 // ----- Main VC -----

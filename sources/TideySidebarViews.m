@@ -139,7 +139,7 @@ NSView *TideyFindCloseView(NSView *container) {
     if (!self.selectionHighlightStyle || !self.isSelected) {
         return;
     }
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeTokens.classic;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 6, 4)
                                                          xRadius:tokens.sidebarSelectionCornerRadius
                                                          yRadius:tokens.sidebarSelectionCornerRadius];
