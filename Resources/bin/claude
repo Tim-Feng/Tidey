@@ -263,6 +263,13 @@ find_real_claude() {
     return 1
 }
 
+# Tidey Dev deliberately provides terminal UI without attaching agent
+# lifecycle, Browser MCP, or Remote Bridge state to the production runtime.
+if [[ "${TIDEY_DEV_SANDBOX:-}" == "1" ]]; then
+    REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude not found in PATH" >&2; exit 127; }
+    exec "$REAL_CLAUDE" "$@"
+fi
+
 # A Tidey client may attach to a tmux pane whose shell was created earlier by
 # SSH/Termius. Hydrate the currently available runtime context before deciding
 # whether this invocation belongs to Tidey.
