@@ -9,6 +9,7 @@
 @interface iTermRootTerminalView (TideySidebarPresentationCharacterizationTests)
 - (NSTableCellView *)newTideySidebarCellView;
 + (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm;
++ (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row;
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row;
@@ -351,6 +352,15 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
         XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:NO],
                        NSTableViewStyleSourceList);
     }
+}
+
+- (void)testWarmSidebarHasReadableMinimumWidthWithoutChangingClassic {
+    XCTAssertEqualWithAccuracy([iTermRootTerminalView tideySidebarMinimumWidthForWarmTheme:YES],
+                               240,
+                               0.001);
+    XCTAssertEqualWithAccuracy([iTermRootTerminalView tideySidebarMinimumWidthForWarmTheme:NO],
+                               160,
+                               0.001);
 }
 
 - (void)testPinnedHoveredRowPreservesPinAndCloseControlGeometry {

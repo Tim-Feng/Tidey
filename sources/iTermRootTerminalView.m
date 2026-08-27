@@ -72,6 +72,7 @@ static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 200;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
 static const CGFloat kTideyMinimumSidebarWidth = 160;
+static const CGFloat kTideyWarmMinimumSidebarWidth = 240;
 static const CGFloat kTideyMinimumTerminalWidth = 200;
 static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
@@ -574,6 +575,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
                                                       closeTabsToRight:(BOOL)closeTabsToRight;
 + (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets;
 + (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm;
++ (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm;
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
@@ -1351,6 +1353,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 + (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm {
     return warm ? NSTableViewStylePlain : NSTableViewStyleSourceList;
+}
+
++ (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm {
+    return warm ? kTideyWarmMinimumSidebarWidth : kTideyMinimumSidebarWidth;
 }
 
 + (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
@@ -3304,7 +3310,9 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     if (maxWidth <= 0) {
         return 0;
     }
-    const CGFloat minWidth = MIN(kTideyMinimumSidebarWidth, maxWidth);
+    const CGFloat themeMinimumWidth = [[self class]
+        tideySidebarMinimumWidthForWarmTheme:TideyWarmInterfaceThemeIsActive()];
+    const CGFloat minWidth = MIN(themeMinimumWidth, maxWidth);
     return MAX(minWidth, MIN(_tideySidebarPreferredWidth, maxWidth));
 }
 
@@ -6872,6 +6880,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self layoutTideyEditorContents];
     [self reloadTideySidebar];
     [self reloadTideyRightPanelTabs];
+    [self layoutSubviews];
     [self setNeedsDisplay:YES];
 }
 
