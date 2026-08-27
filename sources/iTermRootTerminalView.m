@@ -8028,6 +8028,11 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         ? [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
         : [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
     cellView.textField.textColor = tokens.sidebarPrimaryTextColor;
+    cellView.textField.lineBreakMode = warm ? NSLineBreakByTruncatingTail : NSLineBreakByClipping;
+    cellView.textField.usesSingleLineMode = warm;
+    cellView.textField.cell.wraps = !warm;
+    cellView.textField.cell.scrollable = NO;
+    cellView.textField.cell.truncatesLastVisibleLine = warm;
     NSView *closeView = TideyFindCloseView(cellView);
     NSTextField *closeSymbol = (NSTextField *)closeView.subviews.firstObject;
     if ([closeSymbol isKindOfClass:NSTextField.class]) {
@@ -8036,6 +8041,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     CGFloat width = NSWidth(cellView.bounds);
     BOOL hasBody = presentation.hasBody;
     BOOL hasStatus = presentation.hasStatus;
+    BOOL reservesPinOrHint = presentation.pinned || presentation.shortcutHint.length > 0;
+    CGFloat titleTrailingReserve = (warm && !reservesPinOrHint) ? 36 : 56;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
@@ -8055,7 +8062,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         cellView.textField.stringValue = presentation.title;
         CGFloat titleY = 51 + sOff;
         CGFloat titleX = 8;
-        CGFloat titleMaxW = width - 56;
+        CGFloat titleMaxW = width - titleTrailingReserve;
         cellView.textField.frame = NSMakeRect(titleX, titleY, MAX(0, titleMaxW), 14);
 
         CGFloat badgeY = titleY + floor((14.0 - kTideySidebarBadgeSize) / 2.0);
@@ -8094,7 +8101,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
-        CGFloat textMaxW = width - 56;
+        CGFloat textMaxW = width - titleTrailingReserve;
 
         cellView.textField.stringValue = presentation.title;
         CGFloat titleY = hasStatus ? 38 : 30;

@@ -326,6 +326,24 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
                      appearance);
 }
 
+- (void)testWarmLongTitleUsesAvailableMinimumWidthAndTailTruncation {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Tidey UI Redesign Workspace" ],
+                                     @[ @"~/Tidey-UI-Redesign" ],
+                                     @[ @NO ]);
+    TideyCharacterizationSidebarTableView *tableView =
+        TideyInstallPresentationTable(view, 160, 60, -1);
+    NSTableCellView *cellView = TideyConfiguredPresentationCell(view, tableView, 0, 160, 60);
+    NSTextField *titleField = cellView.textField;
+
+    TideyAssertRect(titleField.frame, NSMakeRect(8, 30, 124, 14));
+    XCTAssertEqual(titleField.lineBreakMode, NSLineBreakByTruncatingTail);
+    XCTAssertTrue(titleField.usesSingleLineMode);
+    XCTAssertFalse(titleField.cell.wraps);
+    XCTAssertTrue(titleField.cell.truncatesLastVisibleLine);
+}
+
 - (void)testWarmSidebarUsesPlainTableChromeAndClassicRestoresSourceListChrome {
     if (@available(macOS 11.0, *)) {
         XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:YES],
