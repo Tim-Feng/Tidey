@@ -8,9 +8,7 @@
 
 /* Begin PBXBuildFile section */
 		06E0C88E1DF9695400AA061B /* iTermServiceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */; };
-		07FDDC98ACA9B287FADE17EB /* TideySidebarRowPresentation.m in Sources */ = {isa = PBXBuildFile; fileRef = 22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */; };
 		084F626684E68821BAEC7D9B /* iTermNonTextPasteHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED49EE365D629DAE80503BFD /* iTermNonTextPasteHelper.swift */; };
-		0879458071834417FF483390 /* TideySidebarViews.m in Sources */ = {isa = PBXBuildFile; fileRef = D59E7D50AE471A083EEA7B45 /* TideySidebarViews.m */; };
 		0E917DB125F460B221026B56 /* iTermCharacterSourceTestHelper.h in Sources */ = {isa = PBXBuildFile; fileRef = 2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */; };
 		10AAA7668EA8FBDD64696AB7 /* iTermEventTriggerParameterView.swift in Sources */ = {isa = PBXBuildFile; fileRef = DE7B0AE10E1598EDE1E01795 /* iTermEventTriggerParameterView.swift */; };
 		10D567B3DD4E3FB05673BF65 /* iTermAnnotatedScreenshot.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7C74C12959E7040AF3A3B12F /* iTermAnnotatedScreenshot.swift */; };
@@ -935,6 +933,7 @@
 		53FF982B2093C823008688D7 /* iTermSignatureVerifier.m in Sources */ = {isa = PBXBuildFile; fileRef = 53FF98292093C823008688D7 /* iTermSignatureVerifier.m */; };
 		53FF984B20967806008688D7 /* iTermMetalDeviceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 53FF984920967805008688D7 /* iTermMetalDeviceProvider.h */; };
 		53FF984C20967806008688D7 /* iTermMetalDeviceProvider.m in Sources */ = {isa = PBXBuildFile; fileRef = 53FF984A20967805008688D7 /* iTermMetalDeviceProvider.m */; };
+		551519642B90B2D5B0207FD3 /* TideySidebarRowPresentation.m in Sources */ = {isa = PBXBuildFile; fileRef = 22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */; };
 		564EA2FD15A05A60A95ABBB9 /* PrivateIPChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 625C956DD832F4FD0D8F9715 /* PrivateIPChecker.swift */; };
 		56C476620E56B783B8972219 /* iTermCharacterSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E188B891EEA2947C8B12466D /* iTermCharacterSourceTests.swift */; };
 		5E671E2FA838E668A33564BC /* TideyBrowserAutomationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */; };
@@ -958,6 +957,7 @@
 		82FAE5CD376B4D65172ECCF2 /* NSStringQuotedStringForPasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78783C5E320CF711E81627F /* NSStringQuotedStringForPasteTests.swift */; };
 		83138F878F9B77504B17CA69 /* TideyApplicationEnvironmentPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43285D54833977B282AAB709 /* TideyApplicationEnvironmentPolicy.swift */; };
 		84914ABAD880FC4B174DFAF5 /* iTermTouchIDHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207C83644F1E850C9F1E918A /* iTermTouchIDHelper.swift */; };
+		84D0E4A7C563506B0880B189 /* TideySidebarViews.m in Sources */ = {isa = PBXBuildFile; fileRef = D59E7D50AE471A083EEA7B45 /* TideySidebarViews.m */; };
 		874206490564169600CFC3F1 /* iTermApplicationDelegate.h in Headers */ = {isa = PBXBuildFile; fileRef = 20D5CC6304E7AA0500000106 /* iTermApplicationDelegate.h */; };
 		874206530564169600CFC3F1 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0464AB2F006CD2EC7F000001 /* AppKit.framework */; };
 		8773EDCC5D6FB0E9C4CE2202 /* iTermScreenshotOnDemandPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AF992AB875E6786421227B /* iTermScreenshotOnDemandPreview.swift */; };
@@ -19150,8 +19150,6 @@
 				A60EBD171FAED952008C7F5B /* iTermCopyBackground.metal in Sources */,
 				A67960E81F8202C0008A42BC /* iTermBackgroundImage.metal in Sources */,
 				4705C05130977E2C81FD75E8 /* iTermUnicodeNormalization.h in Sources */,
-				0879458071834417FF483390 /* TideySidebarViews.m in Sources */,
-				07FDDC98ACA9B287FADE17EB /* TideySidebarRowPresentation.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20447,6 +20445,8 @@
 				99BFD576CA7D163127793811 /* TideyBrowserNavigationGate.swift in Sources */,
 				CFB74E789E61AA2F8D004482 /* TideyBrowserAuthenticatedTransfer.swift in Sources */,
 				83138F878F9B77504B17CA69 /* TideyApplicationEnvironmentPolicy.swift in Sources */,
+				84D0E4A7C563506B0880B189 /* TideySidebarViews.m in Sources */,
+				551519642B90B2D5B0207FD3 /* TideySidebarRowPresentation.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
