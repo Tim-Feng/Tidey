@@ -57,6 +57,66 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertTrue(controller.currentTokens === TideyInterfaceThemeTokens.classic)
     }
 
+    func testStoredThemeParsingAcceptsWarmAndFallsBackToClassic() {
+        XCTAssertEqual(TideyInterfaceThemeController.normalizedThemeIdentifier(nil), "classic")
+        XCTAssertEqual(TideyInterfaceThemeController.normalizedThemeIdentifier("classic"), "classic")
+        XCTAssertEqual(TideyInterfaceThemeController.normalizedThemeIdentifier("warm"), "warm")
+        XCTAssertEqual(TideyInterfaceThemeController.normalizedThemeIdentifier("tech"), "classic")
+        XCTAssertEqual(TideyInterfaceThemeController.normalizedThemeIdentifier("unexpected"), "classic")
+    }
+
+    func testWarmTokensMatchFrozenDesignValues() {
+        let tokens = TideyInterfaceThemeTokens.warm
+
+        assertColor(tokens.sidebarBackgroundColor, hex: 0x171615)
+        assertColor(tokens.sidebarSelectionColor, hex: 0x232120)
+        assertColor(tokens.sidebarPrimaryTextColor, hex: 0xEAE4D4)
+        assertColor(tokens.sidebarSecondaryTextColor, hex: 0xA89F8D)
+        assertColor(tokens.sidebarIdleColor, hex: 0x6F6A60)
+        assertColor(tokens.sidebarRunningColor, hex: 0x7FB4A3)
+        assertColor(tokens.sidebarUnreadColor, hex: 0xD19A66)
+        assertColor(tokens.rightPanelBackgroundColor, hex: 0x151413)
+        assertColor(tokens.rightPanelTabStripBackgroundColor, hex: 0x191817)
+        assertColor(tokens.rightPanelTabSelectionColor, hex: 0x232120)
+        assertColor(tokens.terminalSurroundColor, hex: 0x100F0E)
+        XCTAssertTrue(tokens.usesRaisedSidebarSelection)
+        XCTAssertTrue(tokens.usesRaisedRightPanelTabs)
+        XCTAssertEqual(tokens.sidebarSelectionCornerRadius, 9)
+        XCTAssertEqual(tokens.rightPanelTabCornerRadius, 8)
+    }
+
+    func testControllerPersistsEffectiveThemeAndNotifiesOnlyOnChange() {
+        let suiteName = "TideyInterfaceThemeTests.\(UUID().uuidString)"
+        let defaults = UserDefaults(suiteName: suiteName)!
+        defer { defaults.removePersistentDomain(forName: suiteName) }
+        let controller = TideyInterfaceThemeController(userDefaults: defaults)
+        var notifications = 0
+        let observer = NotificationCenter.default.addObserver(
+            forName: TideyInterfaceThemeController.didChangeNotification,
+            object: controller,
+            queue: nil
+        ) { _ in
+            notifications += 1
+        }
+        defer { NotificationCenter.default.removeObserver(observer) }
+
+        controller.currentThemeIdentifier = "warm"
+
+        XCTAssertEqual(controller.currentThemeIdentifier, "warm")
+        XCTAssertEqual(defaults.string(forKey: TideyInterfaceThemeController.defaultsKey), "warm")
+        XCTAssertTrue(controller.currentTokens === TideyInterfaceThemeTokens.warm)
+        XCTAssertEqual(notifications, 1)
+
+        controller.currentThemeIdentifier = "warm"
+        XCTAssertEqual(notifications, 1)
+
+        controller.currentThemeIdentifier = "tech"
+        XCTAssertEqual(controller.currentThemeIdentifier, "classic")
+        XCTAssertEqual(defaults.string(forKey: TideyInterfaceThemeController.defaultsKey), "classic")
+        XCTAssertTrue(controller.currentTokens === TideyInterfaceThemeTokens.classic)
+        XCTAssertEqual(notifications, 2)
+    }
+
     private func assertColor(_ color: NSColor,
                              red: CGFloat,
                              green: CGFloat,
@@ -71,6 +131,20 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(converted.greenComponent, green, accuracy: 0.001, file: file, line: line)
         XCTAssertEqual(converted.blueComponent, blue, accuracy: 0.001, file: file, line: line)
         XCTAssertEqual(converted.alphaComponent, alpha, accuracy: 0.001, file: file, line: line)
+    }
+
+    private func assertColor(_ color: NSColor,
+                             hex: Int,
+                             alpha: CGFloat = 1,
+                             file: StaticString = #filePath,
+                             line: UInt = #line) {
+        assertColor(color,
+                    red: CGFloat((hex >> 16) & 0xff) / 255,
+                    green: CGFloat((hex >> 8) & 0xff) / 255,
+                    blue: CGFloat(hex & 0xff) / 255,
+                    alpha: alpha,
+                    file: file,
+                    line: line)
     }
 
     private func assertColor(_ color: NSColor,
