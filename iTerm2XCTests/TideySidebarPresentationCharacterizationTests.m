@@ -2,11 +2,7 @@
 
 #import "iTermRootTerminalView.h"
 #import "TideyNotificationStore.h"
-
-@interface TideySidebarTableView : NSTableView
-- (BOOL)tideyShouldShowCloseButtonForRow:(NSInteger)row;
-- (void)updateTideyCloseButtonVisibility;
-@end
+#import "TideySidebarViews.h"
 
 @interface iTermRootTerminalView (TideySidebarPresentationCharacterizationTests)
 - (NSTableCellView *)newTideySidebarCellView;
