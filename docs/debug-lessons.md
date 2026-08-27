@@ -617,6 +617,11 @@
 - Pipeline 必須保留 producer 的 exit status
   - `xcodebuild ... | tee` 沒有 `set -o pipefail` 時，`** TEST FAILED **` 照樣印 `Tests passed`——CI 假綠了數月
   - 綠燈本身不代表測試跑過：同時驗 xcresult 的 total test count > 0（5897a021a）
+- isolated DerivedData 的 hosted tests 要先建立 app host
+  - 先用同一個 `-derivedDataPath` build `iTerm2` scheme 的 Development configuration，並確認 `Tidey Dev.app/Contents/MacOS/Tidey Dev` 存在，再執行 `iTerm2Tests`
+  - 直接對全新的 DerivedData 執行 hosted test，或沿用只完成部分 linkage 的舊快取，可能以缺少 test host binary 或第三方 undefined symbols 失敗；這是 infra red，不是產品行為 red
+- Xcode `-quiet` 的文字紀錄不保證含有測試總數
+  - Xcode 26 可能只留下 `Testing started`，即使測試已成功；用 `xcresulttool get test-results tests` 讀 `.xcresult`，確認 `Test Case` 數量大於零且沒有非 `Passed` 結果
 - `.xctestplan` 是執行環境的一部分
   - test plan 的 environment entries 會覆蓋 shell env，外部 unset 蓋不掉
   - Malloc diagnostics（StackLogging/GuardEdges/PreScribble）留在預設 plan 會讓 test host 啟動在 CI 超時（40a31f2cc）；這類 config diff 要當程式碼審查
