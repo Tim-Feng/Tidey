@@ -3,6 +3,11 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyInterfaceThemeTests: XCTestCase {
+    func testApplicationControllerUsesTideySuiteAwareDefaultsStore() {
+        XCTAssertTrue(TideyInterfaceThemeController.applicationUserDefaults() ===
+                      iTermUserDefaults.userDefaults())
+    }
+
     func testClassicTokensPreserveExistingChromeColors() {
         let tokens = TideyInterfaceThemeTokens.classic
 

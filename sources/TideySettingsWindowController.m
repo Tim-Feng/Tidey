@@ -1104,6 +1104,9 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         [self.remoteViewController remotePageDidBecomeHidden];
         self.remoteViewController = [[TideyRemoteSettingsViewController alloc] init];
     }
+    if (self.currentViewController != self.shortcutsViewController) {
+        self.shortcutsViewController = [[TideyKeyboardShortcutsViewController alloc] init];
+    }
 }
 
 - (void)applyCurrentInterfaceTheme {

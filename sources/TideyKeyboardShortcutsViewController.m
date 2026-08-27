@@ -1,6 +1,7 @@
 #import "TideyKeyboardShortcutsViewController.h"
 
 #import "iTermFlippedView.h"
+#import "iTerm2SharedARC-Swift.h"
 
 // Reuse the same card view class. Forward declare to avoid coupling.
 @interface TideyShortcutsCardView : NSView
@@ -17,9 +18,9 @@
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 0.5, 0.5)
                                                          xRadius:13
                                                          yRadius:13];
-    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.04] setFill];
+    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBackgroundColor setFill];
     [path fill];
-    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.08] setStroke];
+    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBorderColor setStroke];
     [path setLineWidth:1.0];
     [path stroke];
 }
@@ -32,7 +33,7 @@
 @implementation TideyShortcutsCardDivider
 
 - (void)drawRect:(NSRect)dirtyRect {
-    [[NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06] setFill];
+    [TideyInterfaceThemeController.shared.currentTokens.settingsDividerColor setFill];
     NSRectFill(self.bounds);
 }
 
@@ -41,11 +42,11 @@
 @implementation TideyKeyboardShortcutsViewController
 
 static NSColor *TideyShortcutsPrimaryTextColor(void) {
-    return [NSColor colorWithSRGBRed:0xe8/255.0 green:0xe8/255.0 blue:0xe8/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTokens.settingsPrimaryTextColor;
 }
 
 static NSColor *TideyShortcutsSecondaryTextColor(void) {
-    return [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTokens.settingsSecondaryTextColor;
 }
 
 - (void)loadView {

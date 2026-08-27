@@ -10,7 +10,11 @@ final class TideyInterfaceThemeController: NSObject {
     static let didChangeNotification = Notification.Name("TideyInterfaceThemeDidChangeNotification")
     static let defaultsKey = "TideyInterfaceTheme"
     static let supportedThemeIdentifiers = ["classic", "warm"]
-    static let shared = TideyInterfaceThemeController(userDefaults: .standard)
+    static let shared = TideyInterfaceThemeController(userDefaults: applicationUserDefaults())
+
+    static func applicationUserDefaults() -> UserDefaults {
+        iTermUserDefaults.userDefaults()
+    }
 
     private let userDefaults: UserDefaults
 

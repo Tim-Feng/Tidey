@@ -129,6 +129,14 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
     return kTideyEditorTabStripHeight;
 }
 
+static BOOL TideyWarmInterfaceThemeIsActive(void) {
+    return [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
+}
+
+static CGFloat TideyBrowserToolbarHeight(void) {
+    return TideyWarmInterfaceThemeIsActive() ? 54 : 28;
+}
+
 static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
     if (NSIsEmptyRect(anchorRect)) {
         return NSZeroRect;
@@ -514,6 +522,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (void)tideyInterfaceThemeDidChange:(NSNotification *)notification;
 - (void)tideyApplyInterfaceThemeTokens;
+- (void)tideyLayoutBrandMark;
 - (NSInteger)tideySidebarWorkspaceIndexForIdentifier:(NSString *)workspaceIdentifier;
 - (TideyNotificationItem *)tideySidebarLatestUnreadNotificationAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index;
@@ -565,6 +574,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
                                                      clickedIdentifier:(NSString *)clickedIdentifier
                                                       closeTabsToRight:(BOOL)closeTabsToRight;
 + (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets;
++ (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm;
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
@@ -774,6 +784,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     self.layer.backgroundColor = (tokens.usesRaisedRightPanelTabs && _tideySelected)
         ? tokens.rightPanelTabSelectionColor.CGColor
         : NSColor.clearColor.CGColor;
+    _tideyHoverView.layer.backgroundColor = tokens.rightPanelTabHoverColor.CGColor;
+    _tideyHoverView.layer.cornerRadius = tokens.rightPanelTabCornerRadius;
+    _tideySelectionLineView.layer.backgroundColor = tokens.rightPanelTabSelectionIndicatorColor.CGColor;
+    _tideySeparatorView.layer.backgroundColor = tokens.rightPanelTabSeparatorColor.CGColor;
     _tideySelectionLineView.hidden = (tokens.usesRaisedRightPanelTabs || !_tideySelected);
     _tideyHoverView.hidden = (_tideySelected || !_tideyHovered);
     _tideyHoverView.alphaValue = _tideyHoverView.hidden ? 0 : 1;
@@ -1124,7 +1138,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSNumber *_windowNumber;
     NSTextField *_windowNumberLabel;
     iTermFakeWindowTitleLabel *_windowTitleLabel;
+    NSImageView *_tideyBrandMarkView;
+    NSColor *_tideyClassicRootColor;
     iTermTabBarBacking *_tabBarBacking NS_AVAILABLE_MAC(10_14);
+    BOOL _tideyClassicTabBarVisualEffectHidden;
     iTermGenericStatusBarContainer *_statusBarContainer;
     NSDictionary *_desiredToolbeltProportions;
     iTermWindowSizeView *_windowSizeView NS_AVAILABLE_MAC(10_14);
@@ -1332,6 +1349,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         }
     }
     return matches;
+}
+
++ (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm {
+    return warm ? NSTableViewStylePlain : NSTableViewStyleSourceList;
 }
 
 + (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
@@ -1753,6 +1774,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                      delegate:(id<iTermRootTerminalViewDelegate, iTermToolbeltViewDelegate>)delegate {
     self = [super initWithFrame:frameRect color:color];
     if (self) {
+        _tideyClassicRootColor = [color copy];
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
         _shouldShowTideyTerminal = YES;
@@ -1806,7 +1828,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         sidebarTableView.tideyCloseActionTarget = (id<TideySidebarCloseAction>)self;
         _tideySidebarTableView = sidebarTableView;
         if (@available(macOS 11.0, *)) {
-            _tideySidebarTableView.style = NSTableViewStyleSourceList;
+            _tideySidebarTableView.style = [[self class]
+                tideySidebarTableStyleForWarmTheme:TideyWarmInterfaceThemeIsActive()];
         }
         _tideySidebarTableView.intercellSpacing = NSMakeSize(0, 0);
         _tideySidebarTableView.rowHeight = 60;
@@ -2015,6 +2038,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tabBarBacking = [[iTermTabBarBacking alloc] init];
         _tabBarBacking.hidesWhenTabBarHidden = [delegate rootTerminalViewShouldHideTabBarBackingWhenTabBarIsHidden];
         _tabBarBacking.autoresizesSubviews = YES;
+        _tideyClassicTabBarVisualEffectHidden = _tabBarBacking.visualEffectView.hidden;
 
         self.tabBarControl = [[iTermTabBarControlView alloc] initWithFrame:tabBarFrame];
         self.tabBarControl.height = [delegate rootTerminalViewHeightOfTabBar:self];
@@ -2096,6 +2120,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _windowTitleLabel.hidden = YES;
         _windowTitleLabel.autoresizingMask = (NSViewMinYMargin | NSViewWidthSizable);
         [self addSubview:_windowTitleLabel];
+
+        _tideyBrandMarkView = [[NSImageView alloc] initWithFrame:NSZeroRect];
+        _tideyBrandMarkView.image = [NSImage imageNamed:@"TideyBrandMark-26"];
+        _tideyBrandMarkView.imageScaling = NSImageScaleProportionallyUpOrDown;
+        _tideyBrandMarkView.autoresizingMask = (NSViewMaxXMargin | NSViewMinYMargin);
+        _tideyBrandMarkView.hidden = YES;
+        _tideyBrandMarkView.accessibilityLabel = @"Tidey";
+        [self addSubview:_tideyBrandMarkView];
         
         NSColor *borderColor = [NSColor colorWithWhite:0.5 alpha:0.75];
         {
@@ -2238,6 +2270,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
             _notchMask.hidden = YES;
             [self addSubview:_notchMask];
         }
+        [self tideyApplyInterfaceThemeTokens];
     }
     return self;
 }
@@ -2957,7 +2990,9 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 }
 
 - (void)setCurrentSessionAlpha:(CGFloat)alpha {
-    _tabBarBacking.visualEffectView.hidden = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
+    _tideyClassicTabBarVisualEffectHidden = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
+    _tabBarBacking.visualEffectView.hidden = TideyWarmInterfaceThemeIsActive() ||
+        _tideyClassicTabBarVisualEffectHidden;
 }
 
 #pragma mark - Division View
@@ -3027,7 +3062,9 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 - (void)updateTextColors {
     _windowNumberLabel.textColor = [self.delegate rootTerminalViewTabBarTextColorForWindowNumber];
-    _windowTitleLabel.textColor = [self.delegate rootTerminalViewTabBarTextColorForTitle];
+    _windowTitleLabel.textColor = TideyWarmInterfaceThemeIsActive()
+        ? TideyInterfaceThemeController.shared.currentTokens.sidebarPrimaryTextColor
+        : [self.delegate rootTerminalViewTabBarTextColorForTitle];
 }
 
 #pragma mark - Toolbelt
@@ -3713,7 +3750,6 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     [self layoutTideyEditorContents];
 }
 
-static const CGFloat kTideyBrowserToolbarHeight = 28;
 static const CGFloat kTideyBrowserZoomStep = 0.1;
 static const CGFloat kTideyBrowserZoomMinimum = 0.5;
 static const CGFloat kTideyBrowserZoomMaximum = 3.0;
@@ -3759,10 +3795,15 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     pane.browserContainerView.hidden = YES;
 
     // Toolbar background
-    NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, kTideyBrowserToolbarHeight)];
+    CGFloat toolbarHeight = TideyBrowserToolbarHeight();
+    BOOL warm = TideyWarmInterfaceThemeIsActive();
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, toolbarHeight)];
     toolbar.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     toolbar.wantsLayer = YES;
-    toolbar.layer.backgroundColor = [NSColor colorWithWhite:0.15 alpha:1].CGColor;
+    toolbar.layer.backgroundColor = (warm
+        ? tokens.rightPanelTabStripBackgroundColor
+        : [NSColor colorWithWhite:0.15 alpha:1]).CGColor;
     pane.browserToolbarView = toolbar;
 
     // Back button
@@ -3770,8 +3811,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                 target:self
                                                 action:@selector(tideyBrowserGoBack:)];
     pane.browserBackButton.bordered = NO;
-    pane.browserBackButton.frame = NSMakeRect(4, 0, 28, kTideyBrowserToolbarHeight);
-    pane.browserBackButton.contentTintColor = [NSColor secondaryLabelColor];
+    pane.browserBackButton.frame = NSMakeRect(4, 0, 28, toolbarHeight);
+    pane.browserBackButton.contentTintColor = warm ? tokens.rightPanelTertiaryTextColor : [NSColor secondaryLabelColor];
     [toolbar addSubview:pane.browserBackButton];
 
     // Forward button
@@ -3779,8 +3820,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                    target:self
                                                    action:@selector(tideyBrowserGoForward:)];
     pane.browserForwardButton.bordered = NO;
-    pane.browserForwardButton.frame = NSMakeRect(32, 0, 28, kTideyBrowserToolbarHeight);
-    pane.browserForwardButton.contentTintColor = [NSColor secondaryLabelColor];
+    pane.browserForwardButton.frame = NSMakeRect(32, 0, 28, toolbarHeight);
+    pane.browserForwardButton.contentTintColor = warm ? tokens.rightPanelTertiaryTextColor : [NSColor secondaryLabelColor];
     [toolbar addSubview:pane.browserForwardButton];
 
     // Reload button
@@ -3788,25 +3829,31 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                   target:self
                                                   action:@selector(tideyBrowserReload:)];
     pane.browserReloadButton.bordered = NO;
-    pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, kTideyBrowserToolbarHeight);
-    pane.browserReloadButton.contentTintColor = [NSColor secondaryLabelColor];
+    pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, toolbarHeight);
+    pane.browserReloadButton.contentTintColor = warm ? tokens.rightPanelTertiaryTextColor : [NSColor secondaryLabelColor];
     [toolbar addSubview:pane.browserReloadButton];
 
     // URL field
-    pane.browserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 3, 100, 22)];
+    pane.browserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 3, 100, warm ? 32 : 22)];
     pane.browserURLField.autoresizingMask = NSViewWidthSizable;
     pane.browserURLField.usesSingleLineMode = YES;
     pane.browserURLField.cell.wraps = NO;
     pane.browserURLField.placeholderString = @"Enter URL";
-    pane.browserURLField.font = [NSFont systemFontOfSize:12];
-    pane.browserURLField.textColor = [NSColor labelColor];
-    pane.browserURLField.backgroundColor = [NSColor colorWithWhite:0.22 alpha:1];
+    pane.browserURLField.font = warm
+        ? [NSFont monospacedSystemFontOfSize:12.5 weight:NSFontWeightRegular]
+        : [NSFont systemFontOfSize:12];
+    pane.browserURLField.textColor = warm ? tokens.rightPanelPrimaryTextColor : [NSColor labelColor];
+    pane.browserURLField.backgroundColor = warm
+        ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05]
+        : [NSColor colorWithWhite:0.22 alpha:1];
     pane.browserURLField.drawsBackground = YES;
-    pane.browserURLField.bordered = YES;
-    pane.browserURLField.bezeled = YES;
+    pane.browserURLField.bordered = !warm;
+    pane.browserURLField.bezeled = !warm;
     pane.browserURLField.bezelStyle = NSTextFieldSquareBezel;
     pane.browserURLField.wantsLayer = YES;
-    pane.browserURLField.layer.cornerRadius = 6;
+    pane.browserURLField.layer.cornerRadius = warm ? 8 : 6;
+    pane.browserURLField.layer.borderWidth = warm ? 1 : 0;
+    pane.browserURLField.layer.borderColor = tokens.hairlineColor.CGColor;
     pane.browserURLField.layer.masksToBounds = YES;
     pane.browserURLField.cell.scrollable = YES;
     pane.browserURLField.cell.lineBreakMode = NSLineBreakByTruncatingTail;
@@ -3973,17 +4020,22 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     const CGFloat contentHeight = NSHeight(contentBounds);
     const CGFloat contentWidth = NSWidth(contentBounds);
+    const CGFloat toolbarHeight = TideyBrowserToolbarHeight();
+    const BOOL warm = TideyWarmInterfaceThemeIsActive();
     pane.browserContainerView.frame = contentBounds;
 
     // Toolbar at top of container
     NSView *toolbar = pane.browserToolbarView;
-    toolbar.frame = NSMakeRect(0, contentHeight - kTideyBrowserToolbarHeight, contentWidth, kTideyBrowserToolbarHeight);
+    toolbar.frame = NSMakeRect(0, contentHeight - toolbarHeight, contentWidth, toolbarHeight);
+    pane.browserBackButton.frame = NSMakeRect(4, 0, 28, toolbarHeight);
+    pane.browserForwardButton.frame = NSMakeRect(32, 0, 28, toolbarHeight);
+    pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, toolbarHeight);
 
     // URL field fills remaining width after buttons
     const CGFloat urlFieldX = 92;
     const CGFloat urlFieldRight = 28;
-    const CGFloat urlFieldHeight = 22;
-    const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0);
+    const CGFloat urlFieldHeight = warm ? 32 : 22;
+    const CGFloat urlFieldY = floor((toolbarHeight - urlFieldHeight) / 2.0);
     pane.browserURLField.frame = NSMakeRect(urlFieldX,
                                             urlFieldY,
                                             MAX(50, contentWidth - urlFieldX - urlFieldRight),
@@ -3991,11 +4043,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
     // Loading indicator at right of toolbar
     const CGFloat indicatorSize = 16;
-    const CGFloat indicatorY = floor((kTideyBrowserToolbarHeight - indicatorSize) / 2.0);
+    const CGFloat indicatorY = floor((toolbarHeight - indicatorSize) / 2.0);
     pane.browserLoadingIndicator.frame = NSMakeRect(contentWidth - 24, indicatorY, indicatorSize, indicatorSize);
 
     // WebView below toolbar
-    pane.browserWebView.frame = NSMakeRect(0, 0, contentWidth, MAX(0, contentHeight - kTideyBrowserToolbarHeight));
+    pane.browserWebView.frame = NSMakeRect(0, 0, contentWidth, MAX(0, contentHeight - toolbarHeight));
 }
 
 #pragma mark - Browser Actions
@@ -4568,6 +4620,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    BOOL warm = TideyWarmInterfaceThemeIsActive();
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat chromeButtonSize = 22;
     const CGFloat chromeButtonPadding = 8;
@@ -4587,11 +4641,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     self.tideyEditorNewTerminalButton.layer.backgroundColor = NSColor.clearColor.CGColor;
     self.tideyEditorNewWebButton.layer.backgroundColor = NSColor.clearColor.CGColor;
     self.tideyEditorSplitToggleButton.layer.backgroundColor = NSColor.clearColor.CGColor;
-    self.tideyEditorNewTerminalButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
-    self.tideyEditorNewWebButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
+    NSColor *chromeTint = warm ? tokens.rightPanelSecondaryTextColor : [NSColor colorWithWhite:0.72 alpha:1.0];
+    self.tideyEditorNewTerminalButton.contentTintColor = chromeTint;
+    self.tideyEditorNewWebButton.contentTintColor = chromeTint;
     self.tideyEditorSplitToggleButton.contentTintColor = _splitVisible
-        ? [NSColor colorWithSRGBRed:1.0 green:0.694 blue:0.106 alpha:1.0]
-        : [NSColor colorWithWhite:0.72 alpha:1.0];
+        ? (warm ? tokens.sidebarUnreadColor : [NSColor colorWithSRGBRed:1.0 green:0.694 blue:0.106 alpha:1.0])
+        : chromeTint;
     self.tideyEditorChromeGradientMaskView.frame = NSMakeRect(MAX(0, NSWidth(bounds) - chromeMaskWidth),
                                                               NSHeight(bounds) - tabStripHeight,
                                                               chromeMaskWidth,
@@ -4615,19 +4670,17 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     _primaryPane.tabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, primaryWidth, tabStripHeight);
     _primaryPane.tabStripView.layer.backgroundColor = ((_activePane == _primaryPane)
-                                                       ? [NSColor colorWithSRGBRed:0.118 green:0.126 blue:0.155 alpha:1].CGColor
-                                                       : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
+                                                       ? tokens.rightPanelActiveTabStripBackgroundColor.CGColor
+                                                       : tokens.rightPanelInactiveTabStripBackgroundColor.CGColor);
     _primaryPane.editorWebView.frame = NSMakeRect(0, 0, primaryWidth, contentHeight);
     if (_secondaryPane.containerView) {
         _secondaryPane.containerView.hidden = !shouldShowSplitShell;
         _secondaryPane.containerView.frame = NSMakeRect(secondaryOriginX, 0, secondaryWidth, NSHeight(bounds));
-        _secondaryPane.containerView.layer.backgroundColor = ((_activePane == _secondaryPane)
-                                                              ? [NSColor colorWithSRGBRed:0.10 green:0.11 blue:0.14 alpha:1].CGColor
-                                                              : [NSColor colorWithSRGBRed:0.095 green:0.102 blue:0.13 alpha:1].CGColor);
+        _secondaryPane.containerView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
         _secondaryPane.tabStripView.frame = NSMakeRect(0, NSHeight(_secondaryPane.containerView.bounds) - tabStripHeight, secondaryWidth, tabStripHeight);
         _secondaryPane.tabStripView.layer.backgroundColor = ((_activePane == _secondaryPane)
-                                                             ? [NSColor colorWithSRGBRed:0.118 green:0.126 blue:0.155 alpha:1].CGColor
-                                                             : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
+                                                             ? tokens.rightPanelActiveTabStripBackgroundColor.CGColor
+                                                             : tokens.rightPanelInactiveTabStripBackgroundColor.CGColor);
         _secondaryPane.editorWebView.frame = NSMakeRect(0, 0, secondaryWidth, contentHeight);
     }
     CGColorRef maskBackgroundColor = shouldShowSplitShell
@@ -4645,7 +4698,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [self.tideyEditorChromeGradientMaskView.layer addSublayer:gradientLayer];
     }
     gradientLayer.frame = self.tideyEditorChromeGradientMaskView.bounds;
-    CGColorRef solidColor = maskBackgroundColor ?: [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor;
+    CGColorRef solidColor = maskBackgroundColor ?: tokens.rightPanelInactiveTabStripBackgroundColor.CGColor;
     gradientLayer.colors = @[ (__bridge id)NSColor.clearColor.CGColor,
                               (__bridge id)solidColor,
                               (__bridge id)solidColor ];
@@ -5012,6 +5065,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
     BOOL activePane = (pane == self.activePane);
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    BOOL warm = TideyWarmInterfaceThemeIsActive();
     tabStripView.layer.backgroundColor = (activePane
         ? tokens.rightPanelActiveTabStripBackgroundColor
         : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
@@ -5023,10 +5077,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     const CGFloat addButtonSize = 22;
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *tabAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
+        NSFontAttributeName: [NSFont systemFontOfSize:warm ? 13 : 11 weight:NSFontWeightMedium]
     };
     NSDictionary<NSAttributedStringKey, id> *groupLabelAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold]
+        NSFontAttributeName: [NSFont systemFontOfSize:warm ? 12 : 9 weight:NSFontWeightSemibold]
     };
     NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:pane.tabs
                                                                                         editorExpanded:pane.editorGroupExpanded
@@ -5072,7 +5126,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
         CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
-        CGFloat groupButtonHeight = 20;
+        CGFloat groupButtonHeight = warm ? 24 : 20;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
         NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
                                                                            groupButtonY,
@@ -5092,6 +5146,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         NSColor *collapsedBackgroundColor = tokens.rightPanelGroupCollapsedFillColor;
         NSColor *expandedTextColor = tokens.rightPanelGroupExpandedTextColor;
         NSColor *collapsedTextColor = tokens.rightPanelGroupCollapsedTextColor;
+        if (warm && group.kind == TideyRightPanelTabKindEditor) {
+            expandedBackgroundColor = [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.06];
+            collapsedBackgroundColor = [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.035];
+            expandedTextColor = tokens.rightPanelSecondaryTextColor;
+            collapsedTextColor = tokens.rightPanelTertiaryTextColor;
+        }
         groupButton.layer.backgroundColor = (group.expanded ? expandedBackgroundColor : collapsedBackgroundColor).CGColor;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
@@ -5115,10 +5175,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             effectiveWidthIndex++;
             NSInteger originalIndex = [pane.tabs indexOfObjectIdenticalTo:tab];
 
+            CGFloat tabVerticalInset = warm ? 4 : 0;
+            CGFloat tabContentHeight = MAX(22, tabHeight - tabVerticalInset * 2);
             TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
-                                                                                                        0,
+                                                                                                        tabVerticalInset,
                                                                                                         tabWidth,
-                                                                                                        tabHeight)];
+                                                                                                        tabContentHeight)];
             tabView.tideyOwner = (id<TideyEditorTabItemViewOwner>)self;
             tabView.tideyPane = pane;
             tabView.tideyTabIndex = originalIndex;
@@ -5130,7 +5192,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             tabView.tideyHovered = NO;
             [tabView tideyUpdateAppearance];
 
-            NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+            NSFont *baseFont = [NSFont systemFontOfSize:warm ? 13 : 11
+                                                  weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
             TideyFadingPassthroughLabel *titleLabel = [TideyFadingPassthroughLabel labelWithString:title];
             titleLabel.usesSingleLineMode = YES;
             titleLabel.maximumNumberOfLines = 1;
@@ -5139,28 +5202,42 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             titleLabel.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
             titleLabel.textColor = selected ? tokens.rightPanelPrimaryTextColor : tokens.rightPanelSecondaryTextColor;
             NSSize titleLabelSize = titleLabel.fittingSize;
-            CGFloat titleLabelHeight = MIN(MAX(14.0, ceil(titleLabelSize.height)), MAX(14.0, tabHeight - 4));
-            CGFloat titleLabelY = floor((tabHeight - titleLabelHeight) / 2.0);
+            CGFloat titleLabelHeight = MIN(MAX(14.0, ceil(titleLabelSize.height)), MAX(14.0, tabContentHeight - 4));
+            CGFloat titleLabelY = floor((tabContentHeight - titleLabelHeight) / 2.0);
             BOOL showCloseButton = [[self class] tideyRightPanelShouldShowCloseButtonForWidth:tabWidth
                                                                                      selected:selected];
-            CGFloat titleTrailingInset = showCloseButton ? 34 : 18;
-            titleLabel.frame = NSMakeRect(10,
+            CGFloat titleLeadingInset = warm ? 14 : 10;
+            CGFloat titleTrailingInset = showCloseButton ? (warm ? 45 : 34) : (warm ? 24 : 18);
+            CGFloat titleWidth = warm
+                ? tabWidth - titleLeadingInset - titleTrailingInset
+                : tabWidth - titleTrailingInset;
+            titleLabel.frame = NSMakeRect(titleLeadingInset,
                                           titleLabelY,
-                                          MAX(0, tabWidth - titleTrailingInset),
+                                          MAX(0, titleWidth),
                                           titleLabelHeight);
             titleLabel.tideyFullTextWidth = titleLabelSize.width;
             titleLabel.accessibilityValue = title;
             [tabView addSubview:titleLabel];
 
             if (showCloseButton) {
-                NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22,
-                                                                                   2,
-                                                                                   20,
-                                                                                   tabHeight - 2)];
+                CGFloat closeSize = warm ? 17 : 20;
+                CGFloat closeTrailingInset = warm ? 12 : 2;
+                NSRect closeFrame = warm
+                    ? NSMakeRect(tabWidth - closeTrailingInset - closeSize,
+                                 floor((tabContentHeight - closeSize) / 2.0),
+                                 closeSize,
+                                 closeSize)
+                    : NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2);
+                NSButton *closeButton = [[NSButton alloc] initWithFrame:closeFrame];
                 closeButton.bordered = NO;
                 closeButton.buttonType = NSButtonTypeMomentaryChange;
                 closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
                 closeButton.contentTintColor = selected ? tokens.rightPanelPrimaryTextColor : tokens.rightPanelSecondaryTextColor;
+                closeButton.wantsLayer = warm;
+                closeButton.layer.cornerRadius = warm ? 5 : 0;
+                closeButton.layer.backgroundColor = warm
+                    ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.07].CGColor
+                    : NSColor.clearColor.CGColor;
                 closeButton.title = @"✕";
                 closeButton.tag = originalIndex;
                 closeButton.target = self;
@@ -6205,10 +6282,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
     NSView *containerView = [[NSView alloc] initWithFrame:NSZeroRect];
     containerView.wantsLayer = YES;
-    containerView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
-                                                              green:0.11
-                                                               blue:0.14
-                                                              alpha:1].CGColor;
+    containerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelBackgroundColor.CGColor;
     [_tideyEditorPanelView addSubview:containerView positioned:NSWindowBelow relativeTo:_tideyEditorTabStripView];
     _secondaryPane.containerView = containerView;
 
@@ -6744,14 +6818,93 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
 - (void)tideyApplyInterfaceThemeTokens {
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    BOOL warm = TideyWarmInterfaceThemeIsActive();
+    if (@available(macOS 11.0, *)) {
+        _tideySidebarTableView.style = [[self class] tideySidebarTableStyleForWarmTheme:warm];
+    }
+    self.color = warm ? tokens.terminalSurroundColor : _tideyClassicRootColor;
     _tideySidebarView.layer.backgroundColor = tokens.sidebarBackgroundColor.CGColor;
     _tideyEditorPanelView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
     _tideyEditorTabStripView.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
     _tideyEditorFileTreeContainerView.layer.backgroundColor = tokens.rightPanelFileTreeBackgroundColor.CGColor;
+    _tideyEditorPanelLabel.textColor = tokens.rightPanelPrimaryTextColor;
+    _windowTitleLabel.textColor = warm
+        ? tokens.sidebarPrimaryTextColor
+        : [self.delegate rootTerminalViewTabBarTextColorForTitle];
+    _windowTitleLabel.font = warm
+        ? [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold]
+        : [NSFont titleBarFontOfSize:[NSFont systemFontSize]];
+    _windowNumberLabel.textColor = warm
+        ? tokens.sidebarSecondaryTextColor
+        : [self.delegate rootTerminalViewTabBarTextColorForWindowNumber];
     self.tideyEditorSplitDividerView.layer.backgroundColor = tokens.rightPanelSplitDividerColor.CGColor;
+    self.tabBarControl.wantsLayer = YES;
+    self.tabBarControl.layer.backgroundColor = warm
+        ? tokens.rightPanelTabStripBackgroundColor.CGColor
+        : [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
+    _tabBarBacking.wantsLayer = YES;
+    _tabBarBacking.layer.backgroundColor = warm
+        ? [NSColor colorWithSRGBRed:0x1A / 255.0
+                              green:0x19 / 255.0
+                               blue:0x18 / 255.0
+                              alpha:1].CGColor
+        : NSColor.clearColor.CGColor;
+    _tabBarBacking.visualEffectView.hidden = warm || _tideyClassicTabBarVisualEffectHidden;
+    [self tideyLayoutBrandMark];
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        pane.containerView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
+        pane.tabStripView.layer.backgroundColor = (pane == self.activePane
+            ? tokens.rightPanelActiveTabStripBackgroundColor
+            : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
+        if (!pane.browserToolbarView) {
+            continue;
+        }
+        pane.browserToolbarView.layer.backgroundColor = (warm
+            ? tokens.rightPanelTabStripBackgroundColor
+            : [NSColor colorWithWhite:0.15 alpha:1]).CGColor;
+        NSColor *toolbarTint = warm ? tokens.rightPanelTertiaryTextColor : NSColor.secondaryLabelColor;
+        pane.browserBackButton.contentTintColor = toolbarTint;
+        pane.browserForwardButton.contentTintColor = toolbarTint;
+        pane.browserReloadButton.contentTintColor = toolbarTint;
+        pane.browserURLField.font = warm
+            ? [NSFont monospacedSystemFontOfSize:12.5 weight:NSFontWeightRegular]
+            : [NSFont systemFontOfSize:12];
+        pane.browserURLField.textColor = warm ? tokens.rightPanelPrimaryTextColor : NSColor.labelColor;
+        pane.browserURLField.backgroundColor = warm
+            ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05]
+            : [NSColor colorWithWhite:0.22 alpha:1];
+        pane.browserURLField.bordered = !warm;
+        pane.browserURLField.bezeled = !warm;
+        pane.browserURLField.layer.cornerRadius = warm ? 8 : 6;
+        pane.browserURLField.layer.borderWidth = warm ? 1 : 0;
+        pane.browserURLField.layer.borderColor = tokens.hairlineColor.CGColor;
+        [self tideyLayoutBrowserContainerForPane:pane];
+    }
+    [self layoutTideyEditorContents];
     [self reloadTideySidebar];
     [self reloadTideyRightPanelTabs];
     [self setNeedsDisplay:YES];
+}
+
+- (void)tideyLayoutBrandMark {
+    BOOL usesTopTabBar = [iTermPreferences intForKey:kPreferenceKeyTabPosition] == PSMTab_TopTab;
+    BOOL visible = TideyWarmInterfaceThemeIsActive() &&
+        !_tabBarControlOnLoan &&
+        usesTopTabBar &&
+        _tideyBrandMarkView.image != nil;
+    _tideyBrandMarkView.hidden = !visible;
+    if (!visible) {
+        return;
+    }
+
+    const CGFloat side = 26;
+    const NSRect standardButtonsFrame = [self frameForStandardWindowButtons];
+    const CGFloat tabBarHeight = _tabBarControl.height;
+    _tideyBrandMarkView.frame = [self retinaRoundRect:NSMakeRect(NSMaxX(standardButtonsFrame) + 12,
+                                                                 NSHeight(self.bounds) - tabBarHeight +
+                                                                     floor((tabBarHeight - side) / 2.0),
+                                                                 side,
+                                                                 side)];
 }
 
 - (void)tideyStatusStoreDidChange:(NSNotification *)notification {
@@ -7076,7 +7229,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     self.tabBarControl.frame = NSMakeRect(0, 0, NSWidth(_tabBarBacking.bounds), originalHeight);
     // Fill the 1-2pt gap at the top where PSMMinimalTabStyle doesn't draw.
     self.tabBarControl.wantsLayer = YES;
-    self.tabBarControl.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
+    self.tabBarControl.layer.backgroundColor = TideyWarmInterfaceThemeIsActive()
+        ? TideyInterfaceThemeController.shared.currentTokens.rightPanelTabStripBackgroundColor.CGColor
+        : [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
 }
 
 - (void)layoutSubviewsWithVisibleBottomTabBarForWindow:(NSWindow *)thisWindow {
@@ -7205,6 +7360,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     self.window.movableByWindowBackground = !hideWindowTitleLabel;
     _windowNumberLabel.hidden = ![self.delegate rootTerminalViewWindowNumberLabelShouldBeVisible];
     _standardWindowButtonsView.frame = [self frameForStandardWindowButtons];
+    [self tideyLayoutBrandMark];
     [self updateTitleAndBorderViews];
 }
 
@@ -7890,6 +8046,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView
                          presentation:(TideySidebarRowPresentation *)presentation {
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
     NSView *badgeView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarBadgeViewIdentifier);
     NSTextField *badgeLabel = (NSTextField *)[badgeView viewWithTag:1006];
     badgeView.hidden = (presentation.unreadCount <= 0);
@@ -7899,6 +8056,16 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     }
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
     pinView.hidden = !presentation.pinned;
+    pinView.contentTintColor = warm ? tokens.sidebarSecondaryTextColor : [NSColor colorWithWhite:0.90 alpha:1];
+    cellView.textField.font = warm
+        ? [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
+        : [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
+    cellView.textField.textColor = tokens.sidebarPrimaryTextColor;
+    NSView *closeView = TideyFindCloseView(cellView);
+    NSTextField *closeSymbol = (NSTextField *)closeView.subviews.firstObject;
+    if ([closeSymbol isKindOfClass:NSTextField.class]) {
+        closeSymbol.textColor = tokens.sidebarCloseColor;
+    }
     CGFloat width = NSWidth(cellView.bounds);
     BOOL hasBody = presentation.hasBody;
     BOOL hasStatus = presentation.hasStatus;
@@ -7939,7 +8106,10 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         bodyField.stringValue = presentation.notificationBody ?: @"";
         bodyField.textColor = presentation.selected
                                   ? tokens.sidebarSelectedSecondaryTextColor
-                                  : NSColor.secondaryLabelColor;
+                                  : (warm ? tokens.sidebarSecondaryTextColor : NSColor.secondaryLabelColor);
+        bodyField.font = warm
+            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
+            : [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         bodyField.hidden = NO;
         bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
 
@@ -7948,8 +8118,10 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         subtitleField.stringValue = presentation.subtitle;
         subtitleField.textColor = presentation.selected
                                       ? tokens.sidebarSelectedSecondaryTextColor
-                                      : NSColor.secondaryLabelColor;
-        subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+                                      : (warm ? tokens.sidebarSecondaryTextColor : NSColor.secondaryLabelColor);
+        subtitleField.font = warm
+            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
+            : [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         CGFloat cwdY = hasStatus ? 16 : 2;
         subtitleField.frame = NSMakeRect(8, cwdY, MAX(0, width - 16), 14);
     } else {
@@ -7962,10 +8134,14 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
-        subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
+        subtitleField.font = warm
+            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
+            : [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
         if (presentation.latestUnreadTitle) {
             subtitleField.stringValue = presentation.latestUnreadTitle;
-            subtitleField.textColor = presentation.selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
+            subtitleField.textColor = warm
+                ? tokens.sidebarUnreadColor
+                : (presentation.selected ? [NSColor whiteColor] : [NSColor controlAccentColor]);
         } else {
             subtitleField.stringValue = presentation.subtitle;
             subtitleField.textColor = presentation.selected
@@ -7994,7 +8170,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
     // Configure status field at the bottom of the cell.
     if (hasStatus) {
-        // Apply color from the first entry that has one, or fall back to secondaryLabelColor.
+        // Classic preserves the producer-provided color. Warm normalizes the
+        // shell states into the frozen semantic palette so Idle is visibly
+        // distinct from Running regardless of the legacy colorHex value.
         NSColor *statusColor = nil;
         for (TideyStatusEntry *entry in presentation.statusEntries) {
             if (entry.colorHex.length > 0) {
@@ -8002,16 +8180,36 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                 if (statusColor) break;
             }
         }
-        NSColor *effectiveColor;
-        if (presentation.selected) {
+        NSColor *effectiveColor = nil;
+        if (warm) {
+            BOOL hasRunning = NO;
+            BOOL hasIdle = NO;
+            for (TideyStatusEntry *entry in presentation.statusEntries) {
+                if ([entry.value isEqualToString:@"Needs input"]) {
+                    effectiveColor = tokens.sidebarUnreadColor;
+                    break;
+                }
+                hasRunning = hasRunning || [entry.value isEqualToString:@"Running"];
+                hasIdle = hasIdle || [entry.value isEqualToString:@"Idle"];
+            }
+            if (!effectiveColor && hasRunning) {
+                effectiveColor = tokens.sidebarRunningColor;
+            } else if (!effectiveColor && hasIdle) {
+                effectiveColor = tokens.sidebarIdleColor;
+            }
+            effectiveColor = effectiveColor ?: tokens.sidebarSecondaryTextColor;
+        } else if (presentation.selected) {
             effectiveColor = tokens.sidebarSelectedSecondaryTextColor;
         } else {
             effectiveColor = statusColor ?: [NSColor secondaryLabelColor];
         }
 
         NSMutableAttributedString *statusAttr = [[NSMutableAttributedString alloc] init];
+        NSFont *statusFont = warm
+            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
+            : [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         NSDictionary *textAttrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightRegular],
+            NSFontAttributeName: statusFont,
             NSForegroundColorAttributeName: effectiveColor,
         };
         for (TideyStatusEntry *entry in presentation.statusEntries) {
@@ -8030,7 +8228,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                     NSImageSymbolConfiguration *symbolConfig =
                         [NSImageSymbolConfiguration configurationWithHierarchicalColor:effectiveColor];
                     symbolImage = [symbolImage imageWithSymbolConfiguration:symbolConfig];
-                    NSFont *textFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+                    NSFont *textFont = statusFont;
                     CGFloat iconSize = 9.0;
                     // Center the icon vertically relative to the text cap height.
                     CGFloat yOffset = (textFont.capHeight - iconSize) / 2.0;
@@ -8051,6 +8249,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         CGFloat statusY = hasBody ? 2 : 6;
         statusField.frame = NSMakeRect(8, statusY, MAX(0, width - 16), 12);
         statusField.textColor = effectiveColor;
+        statusField.font = statusFont;
     } else {
         statusField.hidden = YES;
         statusField.stringValue = @"";

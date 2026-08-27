@@ -4,9 +4,11 @@
 #import "TideyNotificationStore.h"
 #import "TideySidebarRowPresentation.h"
 #import "TideySidebarViews.h"
+#import "iTerm2SharedARC-Swift.h"
 
 @interface iTermRootTerminalView (TideySidebarPresentationCharacterizationTests)
 - (NSTableCellView *)newTideySidebarCellView;
++ (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row;
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row;
@@ -187,12 +189,16 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
 }
 
 @interface TideySidebarPresentationCharacterizationTests : XCTestCase
+@property(nonatomic, retain) id priorInterfaceThemeValue;
 @end
 
 @implementation TideySidebarPresentationCharacterizationTests
 
 - (void)setUp {
     [super setUp];
+    self.priorInterfaceThemeValue = [[NSUserDefaults standardUserDefaults]
+        objectForKey:TideyInterfaceThemeController.defaultsKey];
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
     [[TideyNotificationStore sharedStore] clearAllNotifications];
     [self clearCharacterizationStatuses];
 }
@@ -200,6 +206,13 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
 - (void)tearDown {
     [[TideyNotificationStore sharedStore] clearAllNotifications];
     [self clearCharacterizationStatuses];
+    if (self.priorInterfaceThemeValue) {
+        [[NSUserDefaults standardUserDefaults] setObject:self.priorInterfaceThemeValue
+                                                  forKey:TideyInterfaceThemeController.defaultsKey];
+    } else {
+        [[NSUserDefaults standardUserDefaults] removeObjectForKey:TideyInterfaceThemeController.defaultsKey];
+    }
+    self.priorInterfaceThemeValue = nil;
     [super tearDown];
 }
 
@@ -265,6 +278,60 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
             XCTAssertTrue(titleField.translatesAutoresizingMaskIntoConstraints);
             XCTAssertTrue(subtitleField.translatesAutoresizingMaskIntoConstraints);
         }
+    }
+}
+
+- (void)testWarmRowsUseFrozenTypographyAndSemanticRunningIdleColors {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Running workspace", @"Idle workspace" ],
+                                     @[ @"~/running", @"~/idle" ],
+                                     @[ @NO, @NO ]);
+    TideyCharacterizationSidebarTableView *tableView =
+        TideyInstallPresentationTable(view, 304, 120, -1);
+    NSString *runningWorkspaceID = view.testWorkspaceIDs[0];
+    NSString *idleWorkspaceID = view.testWorkspaceIDs[1];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:runningWorkspaceID
+                                                       key:@"shell"
+                                                     value:@"Running"
+                                                      icon:@"bolt.fill"
+                                                  colorHex:@"#007AFF"];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:idleWorkspaceID
+                                                       key:@"shell"
+                                                     value:@"Idle"
+                                                      icon:@"pause.circle.fill"
+                                                  colorHex:@"#007AFF"];
+
+    NSTableCellView *runningCell = TideyConfiguredPresentationCell(view, tableView, 0, 304, 60);
+    NSTableCellView *idleCell = TideyConfiguredPresentationCell(view, tableView, 1, 304, 60);
+    NSTextField *runningSubtitle = TideyPresentationTextField(runningCell, 1002);
+    NSTextField *runningStatus = TideyPresentationTextField(runningCell, 1008);
+    NSTextField *idleStatus = TideyPresentationTextField(idleCell, 1008);
+    NSAppearance *appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+
+    TideyAssertFont(runningCell.textField.font,
+                    [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]);
+    TideyAssertFont(runningSubtitle.font,
+                    [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]);
+    TideyAssertFont(runningStatus.font,
+                    [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]);
+    TideyAssertColor(runningCell.textField.textColor,
+                     TideyInterfaceThemeController.shared.currentTokens.sidebarPrimaryTextColor,
+                     appearance);
+    TideyAssertColor(runningStatus.textColor,
+                     TideyInterfaceThemeController.shared.currentTokens.sidebarRunningColor,
+                     appearance);
+    TideyAssertColor(idleStatus.textColor,
+                     TideyInterfaceThemeController.shared.currentTokens.sidebarIdleColor,
+                     appearance);
+}
+
+- (void)testWarmSidebarUsesPlainTableChromeAndClassicRestoresSourceListChrome {
+    if (@available(macOS 11.0, *)) {
+        XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:YES],
+                       NSTableViewStylePlain);
+        XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:NO],
+                       NSTableViewStyleSourceList);
     }
 }
 
