@@ -601,6 +601,12 @@
 
 ## Testing
 
+- AppKit enum 不可用布林 truthiness 判斷有效狀態
+  - `NSTableViewSelectionHighlightStyleRegular` 的值是 `0`；`if (!style)` 會把正常選取誤判成沒有選取，導致 plain table 的自訂選取背景完全不畫
+  - 判斷關閉狀態要明確比較 `NSTableViewSelectionHighlightStyleNone`，並用 bitmap render 覆蓋實際 style 值，不只測 token 或 model
+- UI token／單元測試通過不等於完整畫面驗收
+  - 至少用一個真實 Development app 視窗同時呈現選取 workspace、最小側欄寬度、terminal 與右側 Browser／Editor；確認實際階層、裁切、間距與選取狀態
+  - 真實畫面先由產品負責人驗收，再交 frozen code review；code review 不能代替視覺驗收，也不能只靠 mockup 宣稱實作完成
 - 不要在 test host 直接初始化 `iTermRootTerminalView`
   - app bundle image/resource 常常缺，會在 init 途中炸掉
 - 把 feature 抽成 standalone helper，或只測窄 seam
