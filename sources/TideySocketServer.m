@@ -5,6 +5,7 @@
 #import "TideyNotificationStore.h"
 #import "TideySocketCommandDecoder.h"
 #import "TideySocketConnection.h"
+#import "NSFileManager+iTerm.h"
 #import "iTermController.h"
 #import "iTermSocket.h"
 #import "iTermSocketAddress.h"
@@ -208,7 +209,20 @@ typedef NSDictionary * _Nullable (^TideySocketTerminalHistoryPageHandler)(
 }
 
 + (NSString *)socketDirectory {
-    return [[NSHomeDirectory() stringByAppendingPathComponent:@"Library/Application Support"] stringByAppendingPathComponent:@"Tidey"];
+    return [self tideySocketDirectoryForBundleIdentifier:NSBundle.mainBundle.bundleIdentifier
+                                            homeDirectory:NSHomeDirectory()
+                       isolatedApplicationSupportDirectory:[[NSFileManager defaultManager] applicationSupportDirectory]];
+}
+
++ (NSString *)tideySocketDirectoryForBundleIdentifier:(NSString *)bundleIdentifier
+                                        homeDirectory:(NSString *)homeDirectory
+                   isolatedApplicationSupportDirectory:(NSString *)isolatedApplicationSupportDirectory {
+    if ([TideyApplicationEnvironmentPolicy
+            allowsProductionIntegrationsWithBundleIdentifier:bundleIdentifier]) {
+        return [[homeDirectory stringByAppendingPathComponent:@"Library/Application Support"]
+            stringByAppendingPathComponent:@"Tidey"];
+    }
+    return isolatedApplicationSupportDirectory;
 }
 
 + (NSString *)socketPath {

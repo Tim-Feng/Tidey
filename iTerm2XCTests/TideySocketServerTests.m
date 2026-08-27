@@ -54,6 +54,9 @@ typedef NSDictionary * _Nullable (^TideySocketTerminalHistoryPageHandler)(
                                                          handler:(TideySocketTerminalHistoryPageHandler)handler;
 + (NSArray<NSDictionary *> *)tideyWorkspaceSummaries:(NSArray<NSDictionary *> *)workspaceSummaries
                  filteredToWindowForListWorkspacesSource:(NSDictionary *)source;
++ (NSString *)tideySocketDirectoryForBundleIdentifier:(NSString *)bundleIdentifier
+                                        homeDirectory:(NSString *)homeDirectory
+                   isolatedApplicationSupportDirectory:(NSString *)isolatedApplicationSupportDirectory;
 - (void)acceptFileDescriptor:(int)fd;
 - (void)cleanupStaleSockets:(NSString *)directory;
 - (NSUInteger)tideyTestingConnectionCount;
@@ -1094,6 +1097,27 @@ static BOOL sTideyNativeSessionPreviousSummaryWasDeallocatedBeforeDiff;
 
     XCTAssertFalse([[NSFileManager defaultManager] fileExistsAtPath:socketPath]);
     [[NSFileManager defaultManager] removeItemAtPath:directory error:nil];
+}
+
+- (void)testDevelopmentSocketDirectoryUsesIsolatedApplicationSupport {
+    NSString *homeDirectory = @"/Users/tidey-test";
+    NSString *isolatedDirectory = @"/Users/tidey-test/Library/Application Support/tidey-dev-sandbox";
+
+    XCTAssertEqualObjects(
+        [TideySocketServer tideySocketDirectoryForBundleIdentifier:@"com.tidey.app"
+                                                      homeDirectory:homeDirectory
+                                 isolatedApplicationSupportDirectory:isolatedDirectory],
+        @"/Users/tidey-test/Library/Application Support/Tidey");
+    XCTAssertEqualObjects(
+        [TideySocketServer tideySocketDirectoryForBundleIdentifier:@"com.tidey.app.dev"
+                                                      homeDirectory:homeDirectory
+                                 isolatedApplicationSupportDirectory:isolatedDirectory],
+        isolatedDirectory);
+    XCTAssertEqualObjects(
+        [TideySocketServer tideySocketDirectoryForBundleIdentifier:@"com.tidey.app.preview"
+                                                      homeDirectory:homeDirectory
+                                 isolatedApplicationSupportDirectory:isolatedDirectory],
+        isolatedDirectory);
 }
 
 - (void)testCleanupStaleSocketsKeepsLiveSocketFile {
