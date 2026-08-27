@@ -206,6 +206,7 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
         let installer = TideyRemoteBridgeInstaller(
             fileManager: .default,
             commandRunner: runner,
+            productionIntegrationAllowed: { true },
             resourcesProvider: { throw TideyRemoteBridgeInstallerError.missingBundledResources },
             pathsProvider: { fixture.paths },
             readinessChecker: TideyRemoteBridgeStatusReadinessChecker(httpClient: httpClient),
@@ -220,6 +221,38 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
         XCTAssertTrue(result.bridgeReady)
         XCTAssertEqual(httpClient.lastAuthorizationHeader, "Bearer existing-token")
         XCTAssertTrue(runner.calls.isEmpty)
+    }
+
+    func testDevelopmentSandboxRefusesProductionBridgeBeforeResolvingDependencies() {
+        let runner = FakeCommandRunner { _, _ in
+            XCTFail("Development must not invoke launchctl")
+            return TideyRemoteBridgeCommandResult(exitCode: 1, output: "")
+        }
+        let readinessChecker = FakeReadinessChecker()
+        let installer = TideyRemoteBridgeInstaller(
+            fileManager: .default,
+            commandRunner: runner,
+            productionIntegrationAllowed: { false },
+            resourcesProvider: {
+                XCTFail("Development must not resolve bundled Bridge resources")
+                throw TideyRemoteBridgeInstallerError.missingBundledResources
+            },
+            pathsProvider: {
+                XCTFail("Development must not resolve production Bridge paths")
+                fatalError("Development resolved production Bridge paths")
+            },
+            readinessChecker: readinessChecker,
+            sleep: { _ in },
+            launchAgentTeardownTimeout: 0,
+            launchAgentPollInterval: 0
+        )
+
+        let result = installer.performInstallForTesting(force: false)
+
+        XCTAssertEqual(result.state, "unavailable")
+        XCTAssertFalse(result.bridgeReady)
+        XCTAssertTrue(runner.calls.isEmpty)
+        XCTAssertEqual(readinessChecker.checkCount, 0)
     }
 
     func testPerformInstallWaitsForBootoutAndRetriesBootstrapEIO() throws {
@@ -394,6 +427,7 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
         TideyRemoteBridgeInstaller(
             fileManager: .default,
             commandRunner: runner,
+            productionIntegrationAllowed: { true },
             resourcesProvider: { fixture.resources },
             pathsProvider: { fixture.paths },
             readinessChecker: TideyRemoteBridgeStatusReadinessChecker(httpClient: httpClient),
@@ -431,6 +465,15 @@ final class TideyRemoteBridgeInstallerTests: XCTestCase {
         try FileManager.default.copyItem(at: fixture.resources.bridgeBinaryURL, to: fixture.paths.bridgeBinaryURL)
         try launchAgentTemplate().write(to: fixture.paths.bridgePlistURL, atomically: true, encoding: .utf8)
         try launchAgentTemplate().write(to: fixture.paths.cloudflaredPlistURL, atomically: true, encoding: .utf8)
+    }
+}
+
+private final class FakeReadinessChecker: TideyRemoteBridgeReadinessChecking {
+    private(set) var checkCount = 0
+
+    func check(paths: TideyRemoteBridgeInstallPaths) -> TideyRemoteBridgeReadinessResult {
+        checkCount += 1
+        return .networkFailure("unexpected readiness check")
     }
 }
 

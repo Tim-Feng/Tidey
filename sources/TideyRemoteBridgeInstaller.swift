@@ -364,6 +364,7 @@ public final class TideyRemoteBridgeInstaller: NSObject {
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge-installer", qos: .utility)
     private let fileManager: FileManager
     private let commandRunner: TideyRemoteBridgeCommandRunning
+    private let productionIntegrationAllowed: () -> Bool
     private let resourcesProvider: () throws -> TideyRemoteBridgeBundledResources
     private let pathsProvider: () -> TideyRemoteBridgeInstallPaths
     private let readinessChecker: TideyRemoteBridgeReadinessChecking
@@ -374,6 +375,9 @@ public final class TideyRemoteBridgeInstaller: NSObject {
     override convenience init() {
         self.init(fileManager: .default,
                   commandRunner: TideyRemoteBridgeProcessRunner(),
+                  productionIntegrationAllowed: {
+                      TideyApplicationEnvironmentPolicy.currentAllowsProductionIntegrations
+                  },
                   resourcesProvider: TideyRemoteBridgeBundledResources.inMainBundle,
                   pathsProvider: { TideyRemoteBridgeInstallPaths.currentUser() },
                   readinessChecker: TideyRemoteBridgeStatusReadinessChecker(),
@@ -384,6 +388,7 @@ public final class TideyRemoteBridgeInstaller: NSObject {
 
     init(fileManager: FileManager,
          commandRunner: TideyRemoteBridgeCommandRunning,
+         productionIntegrationAllowed: @escaping () -> Bool,
          resourcesProvider: @escaping () throws -> TideyRemoteBridgeBundledResources = TideyRemoteBridgeBundledResources.inMainBundle,
          pathsProvider: @escaping () -> TideyRemoteBridgeInstallPaths = { TideyRemoteBridgeInstallPaths.currentUser() },
          readinessChecker: TideyRemoteBridgeReadinessChecking = TideyRemoteBridgeStatusReadinessChecker(),
@@ -392,6 +397,7 @@ public final class TideyRemoteBridgeInstaller: NSObject {
          launchAgentPollInterval: TimeInterval = 0.1) {
         self.fileManager = fileManager
         self.commandRunner = commandRunner
+        self.productionIntegrationAllowed = productionIntegrationAllowed
         self.resourcesProvider = resourcesProvider
         self.pathsProvider = pathsProvider
         self.readinessChecker = readinessChecker
@@ -433,6 +439,15 @@ public final class TideyRemoteBridgeInstaller: NSObject {
     }
 
     private func performInstall(force: Bool) -> TideyRemoteBridgeInstallResult {
+        guard productionIntegrationAllowed() else {
+            return TideyRemoteBridgeInstallResult(
+                state: "unavailable",
+                userMessage: "Tidey Remote is unavailable in Tidey Dev.",
+                detailMessage: "Use the production Tidey app to manage Remote Bridge.",
+                bridgeReady: false,
+                cloudflaredAvailable: false
+            )
+        }
         do {
             let paths = pathsProvider()
             let resources: TideyRemoteBridgeBundledResources
