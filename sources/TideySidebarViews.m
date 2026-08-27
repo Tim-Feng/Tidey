@@ -136,7 +136,7 @@ NSView *TideyFindCloseView(NSView *container) {
 @implementation TideySidebarRowView
 
 - (void)drawSelectionInRect:(NSRect)dirtyRect {
-    if (!self.selectionHighlightStyle || !self.isSelected) {
+    if (self.selectionHighlightStyle == NSTableViewSelectionHighlightStyleNone || !self.isSelected) {
         return;
     }
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;

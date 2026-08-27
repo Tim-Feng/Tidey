@@ -507,4 +507,39 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertTrue(rowView.translatesAutoresizingMaskIntoConstraints);
 }
 
+- (void)testRegularStyleSelectedSidebarRowDrawsWarmSelectionCard {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    TideySidebarRowView *rowView = [[[TideySidebarRowView alloc]
+        initWithFrame:NSMakeRect(0, 0, 200, 60)] autorelease];
+    rowView.selectionHighlightStyle = NSTableViewSelectionHighlightStyleRegular;
+    rowView.selected = YES;
+
+    NSBitmapImageRep *bitmap = [[[NSBitmapImageRep alloc]
+        initWithBitmapDataPlanes:NULL
+                      pixelsWide:200
+                      pixelsHigh:60
+                   bitsPerSample:8
+                 samplesPerPixel:4
+                        hasAlpha:YES
+                        isPlanar:NO
+                  colorSpaceName:NSCalibratedRGBColorSpace
+                     bytesPerRow:0
+                    bitsPerPixel:0] autorelease];
+    NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
+    [NSGraphicsContext saveGraphicsState];
+    [NSGraphicsContext setCurrentContext:context];
+    [rowView drawSelectionInRect:rowView.bounds];
+    [context flushGraphics];
+    [NSGraphicsContext restoreGraphicsState];
+
+    NSColor *centerColor = [[bitmap colorAtX:100 y:30]
+        colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    NSColor *expectedColor = [TideyInterfaceThemeController.shared.currentTokens.sidebarSelectionColor
+        colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    XCTAssertEqualWithAccuracy(centerColor.redComponent, expectedColor.redComponent, 0.003);
+    XCTAssertEqualWithAccuracy(centerColor.greenComponent, expectedColor.greenComponent, 0.003);
+    XCTAssertEqualWithAccuracy(centerColor.blueComponent, expectedColor.blueComponent, 0.003);
+    XCTAssertEqualWithAccuracy(centerColor.alphaComponent, expectedColor.alphaComponent, 0.001);
+}
+
 @end
