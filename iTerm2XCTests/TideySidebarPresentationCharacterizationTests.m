@@ -2,11 +2,13 @@
 
 #import "iTermRootTerminalView.h"
 #import "TideyNotificationStore.h"
+#import "TideySidebarRowPresentation.h"
 #import "TideySidebarViews.h"
 
 @interface iTermRootTerminalView (TideySidebarPresentationCharacterizationTests)
 - (NSTableCellView *)newTideySidebarCellView;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
+- (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row;
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row;
 @end
 
@@ -304,6 +306,44 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertTrue(bodyField.hidden);
     XCTAssertFalse(badgeView.hidden);
     TideyAssertRect(badgeView.frame, NSMakeRect(1, 34, 6, 6));
+}
+
+- (void)testRowPresentationCapturesWorkspaceStateAndTransientControls {
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Selected" ], @[ @"~/selected" ], @[ @YES ]);
+    view.testSelectedWorkspaceIndex = 0;
+    [view setValue:@YES forKey:@"tideyShowingShortcutHints"];
+    NSString *workspaceID = view.testWorkspaceIDs[0];
+    [[TideyNotificationStore sharedStore] addNotificationForWorkspaceID:workspaceID
+                                                                  title:@"Needs input"
+                                                               subtitle:nil
+                                                                   body:@"Please review the generated output"];
+    TideyStatusStore *statusStore = [TideyStatusStore sharedStore];
+    [statusStore setStatusForWorkspaceID:workspaceID
+                                     key:@"shell"
+                                   value:@"Running"
+                                    icon:nil
+                                colorHex:@"#00FF00"];
+    [statusStore setStatusForWorkspaceID:workspaceID
+                                     key:@"review"
+                                   value:@"Review"
+                                    icon:nil
+                                colorHex:nil];
+    TideyInstallPresentationTable(view, 200, 82, 0);
+
+    TideySidebarRowPresentation *presentation = [view tideySidebarRowPresentationAtIndex:0];
+
+    XCTAssertEqualObjects(presentation.workspaceIdentifier, workspaceID);
+    XCTAssertEqualObjects(presentation.title, @"Selected");
+    XCTAssertEqualObjects(presentation.subtitle, @"~/selected");
+    XCTAssertEqual(presentation.unreadCount, 1);
+    XCTAssertTrue(presentation.pinned);
+    XCTAssertTrue(presentation.selected);
+    XCTAssertEqualObjects(presentation.latestUnreadTitle, @"Needs input");
+    XCTAssertEqualObjects(presentation.notificationBody, @"Please review the generated output");
+    XCTAssertEqual(presentation.statusEntries.count, 2);
+    XCTAssertTrue(presentation.showsCloseButton);
+    XCTAssertEqualObjects(presentation.shortcutHint, @"⌘1");
 }
 
 - (void)testBodyAndMultipleStatusesPreserveExpandedSelectedPresentation {

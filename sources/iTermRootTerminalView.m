@@ -31,6 +31,7 @@
 #import "TideyEditorDocumentStore.h"
 #import "TideyEditorExternalChangeWatcher.h"
 #import "TideyRightPanelPane.h"
+#import "TideySidebarRowPresentation.h"
 #import "TideySidebarViews.h"
 #import "iTerm2SharedARC-Swift.h"
 #import "iTermFakeWindowTitleLabel.h"
@@ -515,7 +516,10 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (TideyNotificationItem *)tideySidebarLatestUnreadNotificationAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index;
 - (NSTableCellView *)newTideySidebarCellView;
+- (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
+- (void)configureTideySidebarCellView:(NSTableCellView *)cellView
+                         presentation:(TideySidebarRowPresentation *)presentation;
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
 - (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
 - (NSMenu *)tideySidebarMenuForRow:(NSInteger)row;
@@ -7832,35 +7836,60 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     return cellView;
 }
 
+- (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row {
+    NSString *workspaceIdentifier = [self tideySidebarWorkspaceIdentifierAtIndex:row] ?: @"";
+    TideyNotificationItem *latestUnreadNotification =
+        [self tideySidebarLatestUnreadNotificationAtIndex:row];
+    TideyNotificationItem *latestNotification = nil;
+    if (workspaceIdentifier.length > 0) {
+        latestNotification =
+            [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceIdentifier];
+    }
+    NSArray<TideyStatusEntry *> *statusEntries = @[];
+    if (workspaceIdentifier.length > 0) {
+        statusEntries =
+            [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceIdentifier] ?: @[];
+    }
+    BOOL showsCloseButton =
+        ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
+         [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
+    NSString *shortcutHint = nil;
+    if (_tideyShowingShortcutHints && row < 9) {
+        shortcutHint = [NSString stringWithFormat:@"\u2318%ld", (long)(row + 1)];
+    }
+    return [[TideySidebarRowPresentation alloc]
+        initWithWorkspaceIdentifier:workspaceIdentifier
+                              title:[self tideySidebarWorkspaceTitleAtIndex:row] ?: @""
+                           subtitle:[self tideySidebarWorkspaceSubtitleAtIndex:row] ?: @""
+                        unreadCount:[self tideySidebarWorkspaceUnreadCountAtIndex:row]
+                             pinned:[self tideySidebarWorkspacePinnedAtIndex:row]
+                           selected:(row == self.tideySidebarSelectedWorkspaceIndex)
+                  latestUnreadTitle:(latestUnreadNotification ? (latestUnreadNotification.title ?: @"") : nil)
+                   notificationBody:(latestNotification.body.length > 0 ? latestNotification.body : nil)
+                      statusEntries:statusEntries
+                   showsCloseButton:showsCloseButton
+                       shortcutHint:shortcutHint];
+}
+
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row {
-    BOOL selected = (row == self.tideySidebarSelectedWorkspaceIndex);
-    NSInteger unreadCount = [self tideySidebarWorkspaceUnreadCountAtIndex:row];
+    [self configureTideySidebarCellView:cellView
+                           presentation:[self tideySidebarRowPresentationAtIndex:row]];
+}
+
+- (void)configureTideySidebarCellView:(NSTableCellView *)cellView
+                         presentation:(TideySidebarRowPresentation *)presentation {
     NSView *badgeView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarBadgeViewIdentifier);
     NSTextField *badgeLabel = (NSTextField *)[badgeView viewWithTag:1006];
-    badgeView.hidden = (unreadCount <= 0);
-    if (unreadCount > 0) {
+    badgeView.hidden = (presentation.unreadCount <= 0);
+    if (presentation.unreadCount > 0) {
         badgeView.layer.backgroundColor = [NSColor systemRedColor].CGColor;
         badgeLabel.stringValue = @"";
     }
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
-    pinView.hidden = ![self tideySidebarWorkspacePinnedAtIndex:row];
+    pinView.hidden = !presentation.pinned;
     CGFloat width = NSWidth(cellView.bounds);
-
-    // Determine notification state for body display.
-    NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:row];
-    TideyNotificationItem *latestNotification = [self tideySidebarLatestUnreadNotificationAtIndex:row];
-    TideyNotificationItem *anyNotification = nil;
-    if (workspaceID.length > 0) {
-        anyNotification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
-    }
-    BOOL hasBody = (anyNotification && anyNotification.body.length > 0);
-
-    // Determine status entries for this workspace.
-    NSArray<TideyStatusEntry *> *statusEntries = nil;
-    if (workspaceID.length > 0) {
-        statusEntries = [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceID];
-    }
-    BOOL hasStatus = (statusEntries.count > 0);
+    BOOL hasBody = presentation.hasBody;
+    BOOL hasStatus = presentation.hasStatus;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
@@ -7877,7 +7906,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         const CGFloat sOff = hasStatus ? 14 : 0;
 
         // --- Title row (top) ---
-        cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
+        cellView.textField.stringValue = presentation.title;
         CGFloat titleY = 51 + sOff;
         CGFloat titleX = 8;
         CGFloat titleMaxW = width - 56;
@@ -7891,25 +7920,23 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
-                          [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
-        closeView.hidden = !showClose;
-        closeView.alphaValue = showClose ? 1.0 : 0.0;
+        closeView.hidden = !presentation.showsCloseButton;
+        closeView.alphaValue = presentation.showsCloseButton ? 1.0 : 0.0;
 
         // --- Notification body (middle, up to 2 lines) ---
-        NSString *bodyText = anyNotification.body;
-        if (bodyText.length == 0) {
-            bodyText = anyNotification.title ?: @"";
-        }
-        bodyField.stringValue = bodyText;
-        bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
+        bodyField.stringValue = presentation.notificationBody ?: @"";
+        bodyField.textColor = presentation.selected
+                                  ? [NSColor colorWithWhite:1 alpha:0.8]
+                                  : [NSColor secondaryLabelColor];
         bodyField.hidden = NO;
         bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
 
         // --- Bottom: cwd above status ---
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
-        subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-        subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
+        subtitleField.stringValue = presentation.subtitle;
+        subtitleField.textColor = presentation.selected
+                                      ? [NSColor colorWithWhite:1 alpha:0.8]
+                                      : [NSColor secondaryLabelColor];
         subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         CGFloat cwdY = hasStatus ? 16 : 2;
         subtitleField.frame = NSMakeRect(8, cwdY, MAX(0, width - 16), 14);
@@ -7918,18 +7945,20 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         // Only indent for badge when there are unread notifications.
         CGFloat textMaxW = width - 56;
 
-        cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
+        cellView.textField.stringValue = presentation.title;
         CGFloat titleY = hasStatus ? 38 : 30;
         cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-        if (latestNotification) {
-            subtitleField.stringValue = latestNotification.title;
-            subtitleField.textColor = selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
+        if (presentation.latestUnreadTitle) {
+            subtitleField.stringValue = presentation.latestUnreadTitle;
+            subtitleField.textColor = presentation.selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
         } else {
-            subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-            subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor colorWithWhite:0.72 alpha:1];
+            subtitleField.stringValue = presentation.subtitle;
+            subtitleField.textColor = presentation.selected
+                                          ? [NSColor colorWithWhite:1 alpha:0.8]
+                                          : [NSColor colorWithWhite:0.72 alpha:1];
         }
         CGFloat subtitleY = hasStatus ? 22 : 12;
         subtitleField.frame = NSMakeRect(8, subtitleY, MAX(0, width - 16), 14);
@@ -7945,10 +7974,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                                      kTideySidebarBadgeSize);
 
         NSView *closeView = TideyFindCloseView(cellView);
-        BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
-                          [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
-        closeView.hidden = !showClose;
-        closeView.alphaValue = showClose ? 1.0 : 0.0;
+        closeView.hidden = !presentation.showsCloseButton;
+        closeView.alphaValue = presentation.showsCloseButton ? 1.0 : 0.0;
     }
 
     [cellView addSubview:badgeView positioned:NSWindowAbove relativeTo:nil];
@@ -7957,14 +7984,14 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     if (hasStatus) {
         // Apply color from the first entry that has one, or fall back to secondaryLabelColor.
         NSColor *statusColor = nil;
-        for (TideyStatusEntry *entry in statusEntries) {
+        for (TideyStatusEntry *entry in presentation.statusEntries) {
             if (entry.colorHex.length > 0) {
                 statusColor = [self tideyColorFromHexString:entry.colorHex];
                 if (statusColor) break;
             }
         }
         NSColor *effectiveColor;
-        if (selected) {
+        if (presentation.selected) {
             effectiveColor = [NSColor colorWithWhite:1 alpha:0.8];
         } else {
             effectiveColor = statusColor ?: [NSColor secondaryLabelColor];
@@ -7975,7 +8002,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
             NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightRegular],
             NSForegroundColorAttributeName: effectiveColor,
         };
-        for (TideyStatusEntry *entry in statusEntries) {
+        for (TideyStatusEntry *entry in presentation.statusEntries) {
             if (statusAttr.length > 0) {
                 [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  "
                                                                                   attributes:textAttrs]];
@@ -8021,8 +8048,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSView *hintView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarHintViewIdentifier);
     if (hintView) {
         NSTextField *hintLabel = (NSTextField *)[hintView viewWithTag:1009];
-        if (_tideyShowingShortcutHints && row < 9) {
-            hintLabel.stringValue = [NSString stringWithFormat:@"\u2318%ld", (long)(row + 1)];
+        if (presentation.shortcutHint) {
+            hintLabel.stringValue = presentation.shortcutHint;
             CGFloat hintX = MAX(0, width - 40);
             CGFloat hintY = hasBody ? 46 : 32;
             hintView.frame = NSMakeRect(hintX, hintY, 28, 18);
