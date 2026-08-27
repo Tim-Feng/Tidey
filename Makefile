@@ -108,7 +108,7 @@ sync-production-wrappers: | Deployment
 	tools/sync_wrappers.sh --source-app "$(BUILD_DIR)/Deployment/Tidey.app" --target-app "$(APPS)/Tidey.app"
 
 sync-production-wrappers-dev: | Development
-	tools/sync_wrappers.sh --source-app "$(BUILD_DIR)/Development/Tidey.app" --target-app "$(APPS)/Tidey.app"
+	tools/sync_wrappers.sh --source-app "$(BUILD_DIR)/Development/Tidey Dev.app" --target-app "$(APPS)/Tidey.app"
 
 install-bridge:
 	RemoteBridge/tools/deploy-bridge.sh
@@ -133,11 +133,11 @@ Nightly: force
 	chmod -R go+rX $(BUILD_DIR)/Nightly
 
 run: Development
-	$(BUILD_DIR)/Development/Tidey.app/Contents/MacOS/Tidey -suite iterm2-dev
+	tools/run-development-sandbox.sh "$(BUILD_DIR)/Development/Tidey Dev.app"
 
 devzip: Development
 	cd $(BUILD_DIR)/Development && \
-	zip -r iTerm2-$(NAME).zip Tidey.app
+	zip -r iTerm2-$(NAME).zip "Tidey Dev.app"
 
 zip: Deployment
 	cd $(BUILD_DIR)/Deployment && \
