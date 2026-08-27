@@ -89,6 +89,7 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (void)remotePageDidBecomeVisible;
 - (void)remotePageDidBecomeHidden;
+- (void)setBridgeSetupUnavailableInDevelopment;
 
 @end
 
@@ -267,10 +268,18 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 
 - (void)viewDidLoad {
     [super viewDidLoad];
+    if (![TideyApplicationEnvironmentPolicy currentAllowsProductionIntegrations]) {
+        [self setBridgeSetupUnavailableInDevelopment];
+        return;
+    }
     [self ensureBridgeAndRefresh:NO];
 }
 
 - (void)remotePageDidBecomeVisible {
+    if (![TideyApplicationEnvironmentPolicy currentAllowsProductionIntegrations]) {
+        [self setBridgeSetupUnavailableInDevelopment];
+        return;
+    }
     if (self.bridgeReady) {
         [self startDevicesRefreshTimer];
         [self refreshPairedDevices];
@@ -382,6 +391,10 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)ensureBridgeAndRefresh:(BOOL)forceReinstall {
+    if (![TideyApplicationEnvironmentPolicy currentAllowsProductionIntegrations]) {
+        [self setBridgeSetupUnavailableInDevelopment];
+        return;
+    }
     if (self.bridgeInstallInProgress) {
         return;
     }
@@ -414,6 +427,30 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     } else {
         [[TideyRemoteBridgeInstaller shared] ensureInstalledWithCompletion:completion];
     }
+}
+
+- (void)setBridgeSetupUnavailableInDevelopment {
+    [self stopDevicesRefreshTimer];
+    [self.countdownTimer invalidate];
+    self.countdownTimer = nil;
+    self.expiresAt = nil;
+    self.bridgeInstallInProgress = NO;
+    self.bridgeReady = NO;
+    self.refreshButton.enabled = NO;
+    self.reinstallBridgeButton.enabled = NO;
+    self.reinstallBridgeButton.hidden = YES;
+    self.uploadsRevealButton.enabled = NO;
+    self.uploadsCleanButton.enabled = NO;
+    self.bridgeSetupLabel.textColor = [self tertiaryTextColor];
+    self.bridgeSetupLabel.stringValue = @"Tidey Remote is unavailable in Tidey Dev.";
+    self.bridgeSetupLabel.toolTip = @"Use the production Tidey app to manage Remote Bridge.";
+    self.statusLabel.stringValue = @"Unavailable";
+    self.statusLabel.toolTip = nil;
+    self.qrImageView.image = nil;
+    self.devicesStatusLabel.hidden = NO;
+    self.devicesScrollView.hidden = YES;
+    self.devicesStatusLabel.stringValue = @"Remote devices are managed by production Tidey.";
+    self.uploadsStatusLabel.stringValue = @"Uploads are unavailable in Tidey Dev";
 }
 
 - (void)setBridgeSetupInstalling {

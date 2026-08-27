@@ -4216,10 +4216,14 @@ didReceiveNotificationResponse:(UNNotificationResponse *)response
 #pragma mark - Tidey Shell Integration Auto-Install
 
 - (void)tideyCheckShellIntegrationInstallation {
-    if ([[NSApplication sharedApplication] isRunningUnitTests]) {
+    BOOL isRunningUnitTests = [[NSApplication sharedApplication] isRunningUnitTests];
+    if (![TideyApplicationEnvironmentPolicy
+            shouldOfferShellIntegrationPromptWithBundleIdentifier:NSBundle.mainBundle.bundleIdentifier
+                                                isRunningUnitTests:isRunningUnitTests]) {
         // The install prompt runs modal on the main thread. Under XCTest nobody can
         // dismiss it, so any test pumping the run loop when the delayed check fires
-        // stalls until the runner kills the host (CI runs 29197275492/29211477438).
+        // stalls until the runner kills the host. Development builds also must not
+        // offer to modify the user's production shell configuration.
         return;
     }
     NSUserDefaults *defaults = [NSUserDefaults standardUserDefaults];

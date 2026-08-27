@@ -20,4 +20,10 @@ final class TideyApplicationEnvironmentPolicy: NSObject {
     static var currentIsDevelopment: Bool {
         isDevelopment(bundleIdentifier: Bundle.main.bundleIdentifier)
     }
+
+    @objc(shouldOfferShellIntegrationPromptWithBundleIdentifier:isRunningUnitTests:)
+    static func shouldOfferShellIntegrationPrompt(bundleIdentifier: String?,
+                                                  isRunningUnitTests: Bool) -> Bool {
+        allowsProductionIntegrations(bundleIdentifier: bundleIdentifier) && !isRunningUnitTests
+    }
 }
