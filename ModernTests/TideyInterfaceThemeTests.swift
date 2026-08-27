@@ -117,6 +117,17 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(notifications, 2)
     }
 
+    func testThemePickerExposesOnlySupportedThemesInStableOrder() {
+        XCTAssertEqual(TideyInterfaceThemeController.supportedThemeIdentifiers,
+                       ["classic", "warm"])
+        XCTAssertEqual(TideyInterfaceThemeController.displayName(forIdentifier: "classic"),
+                       "Classic")
+        XCTAssertEqual(TideyInterfaceThemeController.displayName(forIdentifier: "warm"),
+                       "Warm")
+        XCTAssertEqual(TideyInterfaceThemeController.displayName(forIdentifier: "tech"),
+                       "Classic")
+    }
+
     private func assertColor(_ color: NSColor,
                              red: CGFloat,
                              green: CGFloat,

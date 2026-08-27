@@ -9,6 +9,7 @@ import AppKit
 final class TideyInterfaceThemeController: NSObject {
     static let didChangeNotification = Notification.Name("TideyInterfaceThemeDidChangeNotification")
     static let defaultsKey = "TideyInterfaceTheme"
+    static let supportedThemeIdentifiers = ["classic", "warm"]
     static let shared = TideyInterfaceThemeController(userDefaults: .standard)
 
     private let userDefaults: UserDefaults
@@ -41,6 +42,10 @@ final class TideyInterfaceThemeController: NSObject {
 
     static func normalizedThemeIdentifier(_ storedValue: String?) -> String {
         storedValue == "warm" ? "warm" : "classic"
+    }
+
+    static func displayName(forIdentifier identifier: String) -> String {
+        normalizedThemeIdentifier(identifier) == "warm" ? "Warm" : "Classic"
     }
 
     func reapplyCurrentTheme() {

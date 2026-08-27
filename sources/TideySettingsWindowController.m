@@ -19,9 +19,12 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @implementation TideySettingsTabButton
 
 - (void)drawRect:(NSRect)dirtyRect {
+    BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     if (self.isActiveTab) {
-        // Accent dim background: rgba(88,178,220,0.12)
-        NSColor *accentDim = [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:0.12];
+        NSColor *accentDim = warm
+            ? tokens.settingsCardBackgroundColor
+            : [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:0.12];
         NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:6 yRadius:6];
         [accentDim setFill];
         [path fill];
@@ -31,9 +34,13 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
     style.alignment = NSTextAlignmentCenter;
     NSColor *textColor;
     if (self.isActiveTab) {
-        textColor = [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:1.0]; // accent #58B2DC
+        textColor = warm
+            ? tokens.sidebarRunningColor
+            : [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:1.0];
     } else {
-        textColor = [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]; // secondary
+        textColor = warm
+            ? tokens.settingsSecondaryTextColor
+            : [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0];
     }
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightMedium],
@@ -299,34 +306,58 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (NSColor *)windowBackgroundColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.settingsPanelBackgroundColor;
+    }
     return [NSColor colorWithSRGBRed:0x1e/255.0 green:0x1e/255.0 blue:0x1e/255.0 alpha:1.0];
 }
 
 - (NSColor *)cardBackgroundColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.settingsCardBackgroundColor;
+    }
     return [NSColor colorWithSRGBRed:0x2a/255.0 green:0x2a/255.0 blue:0x2c/255.0 alpha:1.0];
 }
 
 - (NSColor *)cardBorderColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.settingsCardBorderColor;
+    }
     return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06];
 }
 
 - (NSColor *)dividerColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.settingsDividerColor;
+    }
     return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.07];
 }
 
 - (NSColor *)primaryTextColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.settingsPrimaryTextColor;
+    }
     return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.92];
 }
 
 - (NSColor *)secondaryTextColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.settingsSecondaryTextColor;
+    }
     return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.55];
 }
 
 - (NSColor *)tertiaryTextColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.rightPanelTertiaryTextColor;
+    }
     return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.28];
 }
 
 - (NSColor *)accentColor {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return TideyInterfaceThemeController.shared.currentTokens.sidebarRunningColor;
+    }
     return [NSColor colorWithSRGBRed:0x0a/255.0 green:0x84/255.0 blue:0xff/255.0 alpha:1.0];
 }
 
@@ -1045,9 +1076,44 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         _remoteViewController = [[TideyRemoteSettingsViewController alloc] init];
 
         [self buildUI];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyInterfaceThemeDidChange:)
+                                                     name:TideyInterfaceThemeController.didChangeNotification
+                                                   object:TideyInterfaceThemeController.shared];
+        [self applyCurrentInterfaceTheme];
         [self selectPage:TideySettingsPageAppearance];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyInterfaceThemeController.didChangeNotification
+                                                  object:TideyInterfaceThemeController.shared];
+}
+
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self applyCurrentInterfaceTheme];
+
+    // The theme picker lives on Appearance, so Remote is not visible while the
+    // user changes this value. Recreate its lazy view controller to ensure the
+    // next visit is painted entirely from the new token set without starting
+    // or restarting any production integration.
+    if (self.currentViewController != self.remoteViewController) {
+        [self.remoteViewController remotePageDidBecomeHidden];
+        self.remoteViewController = [[TideyRemoteSettingsViewController alloc] init];
+    }
+}
+
+- (void)applyCurrentInterfaceTheme {
+    BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
+    self.window.backgroundColor = warm
+        ? TideyInterfaceThemeController.shared.currentTokens.settingsPanelBackgroundColor
+        : [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0];
+    [self.appearanceTabButton setNeedsDisplay:YES];
+    [self.shortcutsTabButton setNeedsDisplay:YES];
+    [self.remoteTabButton setNeedsDisplay:YES];
 }
 
 - (void)showWindowSelectingAppearance {

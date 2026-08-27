@@ -70,6 +70,10 @@ static NSColor *TideySettingsSecondaryTextColor(void) {
 @property(nonatomic, strong) NSFont *selectedFont;
 @property(nonatomic, strong) NSTextField *browserHomepageField;
 @property(nonatomic, strong) NSTextField *browserStatusLabel;
+@property(nonatomic, strong) NSPopUpButton *interfaceThemePicker;
+@property(nonatomic, strong) NSMutableArray<NSTextField *> *primaryThemeLabels;
+@property(nonatomic, strong) NSMutableArray<NSTextField *> *secondaryThemeLabels;
+@property(nonatomic, strong) NSMutableArray<NSTextField *> *tertiaryThemeLabels;
 
 @end
 
@@ -106,9 +110,17 @@ static const CGFloat kAnsiLabelHeight = 14;
     self.adapter = [[TideyTerminalAppearanceProfileAdapter alloc] init];
     self.coreColorWells = [NSMutableDictionary dictionary];
     self.ansiColorWells = [NSMutableArray array];
+    self.primaryThemeLabels = [NSMutableArray array];
+    self.secondaryThemeLabels = [NSMutableArray array];
+    self.tertiaryThemeLabels = [NSMutableArray array];
 
     CGFloat contentWidth = 560 - kContentPadding * 2;
     CGFloat y = 0; // top-down in flipped view
+
+    // ===== INTERFACE section =====
+    y += [self addSectionHeader:@"INTERFACE" toView:documentView atY:y width:contentWidth];
+    y += [self buildInterfaceThemeCardInView:documentView atY:y width:contentWidth];
+    y += kSectionGap;
 
     // ===== FONT section =====
     y += [self addSectionHeader:@"FONT" toView:documentView atY:y width:contentWidth];
@@ -138,6 +150,21 @@ static const CGFloat kAnsiLabelHeight = 14;
     [self reloadValuesFromProfile];
 }
 
+- (void)viewDidLoad {
+    [super viewDidLoad];
+    [[NSNotificationCenter defaultCenter] addObserver:self
+                                             selector:@selector(tideyInterfaceThemeDidChange:)
+                                                 name:TideyInterfaceThemeController.didChangeNotification
+                                               object:TideyInterfaceThemeController.shared];
+    [self applyCurrentInterfaceTheme];
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyInterfaceThemeController.didChangeNotification
+                                                  object:TideyInterfaceThemeController.shared];
+}
+
 #pragma mark - Section Header
 
 - (CGFloat)addSectionHeader:(NSString *)title toView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
@@ -146,7 +173,46 @@ static const CGFloat kAnsiLabelHeight = 14;
     label.textColor = TideySettingsSecondaryTextColor();
     label.frame = NSMakeRect(kContentPadding + 2, y, width, kSectionHeaderHeight);
     [parent addSubview:label];
+    [self.secondaryThemeLabels addObject:label];
     return kSectionHeaderHeight + kSectionHeaderToCardGap;
+}
+
+#pragma mark - Interface Theme Card
+
+- (CGFloat)buildInterfaceThemeCardInView:(NSView *)parent atY:(CGFloat)y width:(CGFloat)width {
+    CGFloat cardHeight = 70;
+    TideySettingsCardView *card = [[TideySettingsCardView alloc] initWithFrame:NSMakeRect(kContentPadding, y, width, cardHeight)];
+    [parent addSubview:card];
+
+    NSTextField *label = [NSTextField labelWithString:@"Interface theme"];
+    label.font = [NSFont systemFontOfSize:13 weight:NSFontWeightMedium];
+    label.textColor = TideySettingsPrimaryTextColor();
+    label.frame = NSMakeRect(kCardInternalPaddingH, 10, 180, 20);
+    [card addSubview:label];
+    [self.primaryThemeLabels addObject:label];
+
+    self.interfaceThemePicker = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 142,
+                                                                                7,
+                                                                                142,
+                                                                                26)
+                                                       pullsDown:NO];
+    for (NSString *identifier in TideyInterfaceThemeController.supportedThemeIdentifiers) {
+        [self.interfaceThemePicker addItemWithTitle:[TideyInterfaceThemeController displayNameForIdentifier:identifier]];
+        self.interfaceThemePicker.lastItem.representedObject = identifier;
+    }
+    self.interfaceThemePicker.target = self;
+    self.interfaceThemePicker.action = @selector(interfaceThemePickerDidChange:);
+    [card addSubview:self.interfaceThemePicker];
+
+    NSTextField *note = [NSTextField labelWithString:@"Changes Tidey’s interface chrome only. Terminal colors stay with the active profile."];
+    note.font = [NSFont systemFontOfSize:11];
+    note.textColor = TideySettingsSecondaryTextColor();
+    note.frame = NSMakeRect(kCardInternalPaddingH, 42, width - kCardInternalPaddingH * 2, 16);
+    note.lineBreakMode = NSLineBreakByTruncatingTail;
+    [card addSubview:note];
+    [self.secondaryThemeLabels addObject:note];
+
+    return cardHeight;
 }
 
 #pragma mark - Font Card
@@ -163,6 +229,7 @@ static const CGFloat kAnsiLabelHeight = 14;
         label.textColor = TideySettingsPrimaryTextColor();
         label.frame = NSMakeRect(kCardInternalPaddingH, 10, 150, 20);
         [card addSubview:label];
+        [self.primaryThemeLabels addObject:label];
 
         NSButton *changeButton = [[NSButton alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 70, 8, 70, 24)];
         changeButton.title = @"Change\u2026";
@@ -178,6 +245,7 @@ static const CGFloat kAnsiLabelHeight = 14;
         self.fontPreviewLabel.alignment = NSTextAlignmentRight;
         self.fontPreviewLabel.frame = NSMakeRect(150, 10, width - kCardInternalPaddingH - 70 - 150 - 8, 20);
         [card addSubview:self.fontPreviewLabel];
+        [self.secondaryThemeLabels addObject:self.fontPreviewLabel];
     }
 
     // Divider
@@ -194,6 +262,7 @@ static const CGFloat kAnsiLabelHeight = 14;
         label.textColor = TideySettingsPrimaryTextColor();
         label.frame = NSMakeRect(kCardInternalPaddingH, row2Y + 10, 60, 20);
         [card addSubview:label];
+        [self.primaryThemeLabels addObject:label];
 
         self.fontSizeStepper = [[NSStepper alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 20, row2Y + 8, 20, 24)];
         self.fontSizeStepper.minValue = 6;
@@ -241,6 +310,7 @@ static const CGFloat kAnsiLabelHeight = 14;
         label.textColor = TideySettingsPrimaryTextColor();
         label.frame = NSMakeRect(kCardInternalPaddingH, rowY + 10, 200, 20);
         [card addSubview:label];
+        [self.primaryThemeLabels addObject:label];
 
         TideyColorSwatchView *well = [[TideyColorSwatchView alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 24, rowY + 8, 24, 24)];
         well.target = self;
@@ -286,6 +356,7 @@ static const CGFloat kAnsiLabelHeight = 14;
         numLabel.alignment = NSTextAlignmentCenter;
         numLabel.frame = NSMakeRect(cellX - 2, cellY + kAnsiWellSize + 2, kAnsiWellSize + 4, kAnsiLabelHeight);
         [card addSubview:numLabel];
+        [self.tertiaryThemeLabels addObject:numLabel];
     }
 
     return gridHeight;
@@ -311,6 +382,7 @@ static const CGFloat kAnsiLabelHeight = 14;
     homepageLabel.textColor = TideySettingsPrimaryTextColor();
     homepageLabel.frame = NSMakeRect(kCardInternalPaddingH, rowCenterY - labelHeight / 2.0, 80, labelHeight);
     [card addSubview:homepageLabel];
+    [self.primaryThemeLabels addObject:homepageLabel];
 
     CGFloat fieldX = kCardInternalPaddingH + 80 + 8;
     CGFloat saveButtonX = width - kCardInternalPaddingH - saveButtonWidth;
@@ -340,6 +412,7 @@ static const CGFloat kAnsiLabelHeight = 14;
     self.browserStatusLabel.frame = NSMakeRect(kCardInternalPaddingH, cardHeight - 18, width - kCardInternalPaddingH * 2, 14);
     self.browserStatusLabel.lineBreakMode = NSLineBreakByTruncatingTail;
     [card addSubview:self.browserStatusLabel];
+    [self.secondaryThemeLabels addObject:self.browserStatusLabel];
 
     return cardHeight;
 }
@@ -357,6 +430,49 @@ static const CGFloat kAnsiLabelHeight = 14;
     }
     self.browserHomepageField.stringValue = [iTermRootTerminalView tideyBrowserHomepageURLString] ?: @"";
     self.browserStatusLabel.stringValue = @"";
+    [self selectCurrentInterfaceTheme];
+}
+
+#pragma mark - Interface Theme Actions
+
+- (void)interfaceThemePickerDidChange:(NSPopUpButton *)sender {
+    NSString *identifier = [sender.selectedItem.representedObject isKindOfClass:NSString.class]
+        ? sender.selectedItem.representedObject
+        : @"classic";
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = identifier;
+}
+
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self applyCurrentInterfaceTheme];
+}
+
+- (void)selectCurrentInterfaceTheme {
+    NSString *identifier = TideyInterfaceThemeController.shared.currentThemeIdentifier;
+    NSUInteger index = [TideyInterfaceThemeController.supportedThemeIdentifiers indexOfObject:identifier];
+    [self.interfaceThemePicker selectItemAtIndex:index == NSNotFound ? 0 : (NSInteger)index];
+}
+
+- (void)applyCurrentInterfaceTheme {
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    [self selectCurrentInterfaceTheme];
+    for (NSTextField *label in self.primaryThemeLabels) {
+        label.textColor = tokens.settingsPrimaryTextColor;
+    }
+    for (NSTextField *label in self.secondaryThemeLabels) {
+        label.textColor = tokens.settingsSecondaryTextColor;
+    }
+    for (NSTextField *label in self.tertiaryThemeLabels) {
+        label.textColor = tokens.rightPanelTertiaryTextColor;
+    }
+    [self setNeedsDisplayRecursively:self.view];
+}
+
+- (void)setNeedsDisplayRecursively:(NSView *)view {
+    [view setNeedsDisplay:YES];
+    for (NSView *subview in view.subviews) {
+        [self setNeedsDisplayRecursively:subview];
+    }
 }
 
 - (void)updateFontControls {
