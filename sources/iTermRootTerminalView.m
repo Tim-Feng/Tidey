@@ -522,7 +522,6 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
 - (void)tideyInterfaceThemeDidChange:(NSNotification *)notification;
 - (void)tideyApplyInterfaceThemeTokens;
-- (void)tideyLayoutBrandMark;
 - (NSInteger)tideySidebarWorkspaceIndexForIdentifier:(NSString *)workspaceIdentifier;
 - (TideyNotificationItem *)tideySidebarLatestUnreadNotificationAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index;
@@ -1138,7 +1137,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSNumber *_windowNumber;
     NSTextField *_windowNumberLabel;
     iTermFakeWindowTitleLabel *_windowTitleLabel;
-    NSImageView *_tideyBrandMarkView;
     NSColor *_tideyClassicRootColor;
     iTermTabBarBacking *_tabBarBacking NS_AVAILABLE_MAC(10_14);
     BOOL _tideyClassicTabBarVisualEffectHidden;
@@ -2120,14 +2118,6 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _windowTitleLabel.hidden = YES;
         _windowTitleLabel.autoresizingMask = (NSViewMinYMargin | NSViewWidthSizable);
         [self addSubview:_windowTitleLabel];
-
-        _tideyBrandMarkView = [[NSImageView alloc] initWithFrame:NSZeroRect];
-        _tideyBrandMarkView.image = [NSImage imageNamed:@"TideyBrandMark-26"];
-        _tideyBrandMarkView.imageScaling = NSImageScaleProportionallyUpOrDown;
-        _tideyBrandMarkView.autoresizingMask = (NSViewMaxXMargin | NSViewMinYMargin);
-        _tideyBrandMarkView.hidden = YES;
-        _tideyBrandMarkView.accessibilityLabel = @"Tidey";
-        [self addSubview:_tideyBrandMarkView];
         
         NSColor *borderColor = [NSColor colorWithWhite:0.5 alpha:0.75];
         {
@@ -6850,7 +6840,6 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                               alpha:1].CGColor
         : NSColor.clearColor.CGColor;
     _tabBarBacking.visualEffectView.hidden = warm || _tideyClassicTabBarVisualEffectHidden;
-    [self tideyLayoutBrandMark];
     for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
         pane.containerView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
         pane.tabStripView.layer.backgroundColor = (pane == self.activePane
@@ -6884,27 +6873,6 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self reloadTideySidebar];
     [self reloadTideyRightPanelTabs];
     [self setNeedsDisplay:YES];
-}
-
-- (void)tideyLayoutBrandMark {
-    BOOL usesTopTabBar = [iTermPreferences intForKey:kPreferenceKeyTabPosition] == PSMTab_TopTab;
-    BOOL visible = TideyWarmInterfaceThemeIsActive() &&
-        !_tabBarControlOnLoan &&
-        usesTopTabBar &&
-        _tideyBrandMarkView.image != nil;
-    _tideyBrandMarkView.hidden = !visible;
-    if (!visible) {
-        return;
-    }
-
-    const CGFloat side = 26;
-    const NSRect standardButtonsFrame = [self frameForStandardWindowButtons];
-    const CGFloat tabBarHeight = _tabBarControl.height;
-    _tideyBrandMarkView.frame = [self retinaRoundRect:NSMakeRect(NSMaxX(standardButtonsFrame) + 12,
-                                                                 NSHeight(self.bounds) - tabBarHeight +
-                                                                     floor((tabBarHeight - side) / 2.0),
-                                                                 side,
-                                                                 side)];
 }
 
 - (void)tideyStatusStoreDidChange:(NSNotification *)notification {
@@ -7360,7 +7328,6 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     self.window.movableByWindowBackground = !hideWindowTitleLabel;
     _windowNumberLabel.hidden = ![self.delegate rootTerminalViewWindowNumberLabelShouldBeVisible];
     _standardWindowButtonsView.frame = [self frameForStandardWindowButtons];
-    [self tideyLayoutBrandMark];
     [self updateTitleAndBorderViews];
 }
 

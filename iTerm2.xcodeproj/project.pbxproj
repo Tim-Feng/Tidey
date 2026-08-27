@@ -7,8 +7,6 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
-		B4A8D0F52F58000100D1A001 /* TideyBrandMark-26.png in Resources */ = {isa = PBXBuildFile; fileRef = B4A8D0F42F58000100D1A001 /* TideyBrandMark-26.png */; };
-		B4A8D0F52F58000100D1A002 /* TideyBrandMark-26@2x.png in Resources */ = {isa = PBXBuildFile; fileRef = B4A8D0F42F58000100D1A002 /* TideyBrandMark-26@2x.png */; };
 		06E0C88E1DF9695400AA061B /* iTermServiceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */; };
 		084F626684E68821BAEC7D9B /* iTermNonTextPasteHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED49EE365D629DAE80503BFD /* iTermNonTextPasteHelper.swift */; };
 		0E917DB125F460B221026B56 /* iTermCharacterSourceTestHelper.h in Sources */ = {isa = PBXBuildFile; fileRef = 2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */; };
@@ -5548,8 +5546,6 @@
 /* End PBXCopyFilesBuildPhase section */
 
 /* Begin PBXFileReference section */
-		B4A8D0F42F58000100D1A001 /* TideyBrandMark-26.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = images/TideyBrandMark-26.png; sourceTree = "<group>"; };
-		B4A8D0F42F58000100D1A002 /* TideyBrandMark-26@2x.png */ = {isa = PBXFileReference; lastKnownFileType = image.png; path = "images/TideyBrandMark-26@2x.png"; sourceTree = "<group>"; };
 		00213A5956211FBDEDEAEF96 /* AppIcon.icns */ = {isa = PBXFileReference; lastKnownFileType = image.icns; name = AppIcon.icns; path = images/AppIcon.icns; sourceTree = "<group>"; };
 		02CF16386D8605E6BC44ED81 /* CharacterAtomIterator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = CharacterAtomIterator.swift; sourceTree = "<group>"; };
 		0464AB2F006CD2EC7F000001 /* AppKit.framework */ = {isa = PBXFileReference; lastKnownFileType = wrapper.framework; name = AppKit.framework; path = /System/Library/Frameworks/AppKit.framework; sourceTree = "<absolute>"; };
@@ -10219,8 +10215,6 @@
 		1D093C131217412B0029F9AD /* Images */ = {
 			isa = PBXGroup;
 			children = (
-				B4A8D0F42F58000100D1A001 /* TideyBrandMark-26.png */,
-				B4A8D0F42F58000100D1A002 /* TideyBrandMark-26@2x.png */,
 				A6976AED2F47EFD3002875A1 /* SerpApi.png */,
 				A6A479B62E6E58C000DCF16F /* AppIcon.png */,
 				00213A5956211FBDEDEAEF96 /* AppIcon.icns */,
@@ -17912,8 +17906,6 @@
 			isa = PBXResourcesBuildPhase;
 			buildActionMask = 2147483647;
 			files = (
-				B4A8D0F52F58000100D1A001 /* TideyBrandMark-26.png in Resources */,
-				B4A8D0F52F58000100D1A002 /* TideyBrandMark-26@2x.png in Resources */,
 				F0BA00000000000000000001 /* tidey-browser-automation.js in Resources */,
 				A56FADEEAA55EFB0B846D102 /* monaco-editor in Resources */,
 				A6109B612B969B4100D8E4E9 /* graphic_neovim.png in Resources */,
