@@ -5,7 +5,9 @@ NS_ASSUME_NONNULL_BEGIN
 extern const CGFloat kTideySidebarBadgeSize;
 extern const CGFloat kTideySidebarBadgeLeadingInset;
 extern const CGFloat kTideySidebarCloseButtonTopInset;
+extern const CGFloat kTideySidebarWarmCloseButtonTopInset;
 extern const CGFloat kTideySidebarCloseButtonTrailingInset;
+extern const CGFloat kTideySidebarWarmCloseButtonTrailingInset;
 extern const CGFloat kTideySidebarCloseButtonSize;
 
 extern NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier;

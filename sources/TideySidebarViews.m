@@ -5,7 +5,9 @@
 const CGFloat kTideySidebarBadgeSize = 6;
 const CGFloat kTideySidebarBadgeLeadingInset = 1;
 const CGFloat kTideySidebarCloseButtonTopInset = 10;
+const CGFloat kTideySidebarWarmCloseButtonTopInset = 12;
 const CGFloat kTideySidebarCloseButtonTrailingInset = 4;
+const CGFloat kTideySidebarWarmCloseButtonTrailingInset = 0;
 const CGFloat kTideySidebarCloseButtonSize = 16;
 
 NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
@@ -181,13 +183,21 @@ NSView *TideyFindCloseView(NSView *container) {
     if (!closeView) {
         return;
     }
+    // Warm tucks the close control into the selection card's upper-right
+    // corner; Classic keeps the historical insets.
+    const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
+        isEqualToString:@"warm"];
+    const CGFloat trailingInset = warm ? kTideySidebarWarmCloseButtonTrailingInset
+                                       : kTideySidebarCloseButtonTrailingInset;
+    const CGFloat topInset = warm ? kTideySidebarWarmCloseButtonTopInset
+                                  : kTideySidebarCloseButtonTopInset;
     const CGFloat closeX = MAX(0,
                                NSWidth(self.bounds) -
-                                   kTideySidebarCloseButtonTrailingInset -
+                                   trailingInset -
                                    kTideySidebarCloseButtonSize);
     const CGFloat closeY = MAX(0,
                                NSHeight(self.bounds) -
-                                   kTideySidebarCloseButtonTopInset -
+                                   topInset -
                                    kTideySidebarCloseButtonSize);
     closeView.frame = NSMakeRect(closeX,
                                  closeY,

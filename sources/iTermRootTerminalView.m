@@ -8132,7 +8132,10 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         CGFloat textMaxW = width - titleTrailingReserve;
 
         cellView.textField.stringValue = presentation.title;
-        CGFloat titleY = hasStatus ? 38 : 30;
+        // Warm anchors the hierarchy to the top of the card (title/subtitle/
+        // status slots stay put whether or not a status entry exists) instead
+        // of re-centering into a two-line card.
+        CGFloat titleY = (warm || hasStatus) ? 38 : 30;
         cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
@@ -8148,7 +8151,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                                           ? tokens.sidebarSelectedSecondaryTextColor
                                           : tokens.sidebarSecondaryTextColor;
         }
-        CGFloat subtitleY = hasStatus ? 22 : 12;
+        CGFloat subtitleY = (warm || hasStatus) ? 22 : 12;
         subtitleField.frame = NSMakeRect(8, subtitleY, MAX(0, width - 16), 14);
 
         bodyField.hidden = YES;

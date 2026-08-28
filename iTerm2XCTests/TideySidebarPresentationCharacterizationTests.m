@@ -475,7 +475,9 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     NSTableCellView *cellView = TideyConfiguredPresentationCell(view, tableView, 0, 160, 60);
     NSTextField *titleField = cellView.textField;
 
-    TideyAssertRect(titleField.frame, NSMakeRect(8, 30, 104, 14));
+    // Warm anchors the title to the top slot (y=38) per the accepted
+    // workspace-card hierarchy; width/height/clipping stay production.
+    TideyAssertRect(titleField.frame, NSMakeRect(8, 38, 104, 14));
     XCTAssertEqual(titleField.lineBreakMode, NSLineBreakByWordWrapping);
     XCTAssertFalse(titleField.usesSingleLineMode);
     XCTAssertTrue(titleField.cell.wraps);
@@ -506,13 +508,22 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
 
     TideyAssertRect(warm[@"row"].rectValue, classic[@"row"].rectValue);
     TideyAssertRect(warm[@"cell"].rectValue, classic[@"cell"].rectValue);
-    TideyAssertRect(warm[@"title"].rectValue, classic[@"title"].rectValue);
     TideyAssertRect(warm[@"visibleRow"].rectValue, classic[@"visibleRow"].rectValue);
     TideyAssertRect(warm[@"visibleCell"].rectValue, classic[@"visibleCell"].rectValue);
-    TideyAssertRect(warm[@"visibleTitle"].rectValue, classic[@"visibleTitle"].rectValue);
     TideyAssertRect(warm[@"windowRow"].rectValue, classic[@"windowRow"].rectValue);
     TideyAssertRect(warm[@"windowCell"].rectValue, classic[@"windowCell"].rectValue);
-    TideyAssertRect(warm[@"windowTitle"].rectValue, classic[@"windowTitle"].rectValue);
+    // Table/row/cell geometry and hit-testing stay production-identical. The
+    // title differs only by the accepted Warm card anchor: 8pt higher in the
+    // cell (y 30 -> 38), which reads as -8 in flipped table coordinates and
+    // +8 in unflipped window coordinates. Everything else about the title
+    // frame (x, width, height) must match classic exactly.
+    const CGFloat warmTitleAnchorDelta = 8;
+    TideyAssertRect(warm[@"title"].rectValue,
+                    NSOffsetRect(classic[@"title"].rectValue, 0, -warmTitleAnchorDelta));
+    TideyAssertRect(warm[@"visibleTitle"].rectValue,
+                    NSOffsetRect(classic[@"visibleTitle"].rectValue, 0, -warmTitleAnchorDelta));
+    TideyAssertRect(warm[@"windowTitle"].rectValue,
+                    NSOffsetRect(classic[@"windowTitle"].rectValue, 0, warmTitleAnchorDelta));
     XCTAssertEqualObjects(warm[@"rowAtCenter"], classic[@"rowAtCenter"]);
     XCTAssertEqualObjects(warm[@"rowAboveFirst"], classic[@"rowAboveFirst"]);
     XCTAssertEqualObjects(warm[@"rowsAtCenter"], classic[@"rowsAtCenter"]);
@@ -734,6 +745,77 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertEqualWithAccuracy(centerColor.greenComponent, expectedColor.greenComponent, 0.003);
     XCTAssertEqualWithAccuracy(centerColor.blueComponent, expectedColor.blueComponent, 0.003);
     XCTAssertEqualWithAccuracy(centerColor.alphaComponent, expectedColor.alphaComponent, 0.001);
+}
+
+- (void)testWarmWorkspaceCardAnchorsHierarchyAndCornersCloseControl {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Hovered workspace", @"Status workspace" ],
+                                     @[ @"~/hovered", @"~/status" ],
+                                     @[ @NO, @NO ]);
+    TideyCharacterizationSidebarTableView *tableView =
+        TideyInstallPresentationTable(view, 200, 120, 0);
+    NSString *statusWorkspaceID = view.testWorkspaceIDs[1];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:statusWorkspaceID
+                                                       key:@"shell"
+                                                     value:@"Running"
+                                                      icon:nil
+                                                  colorHex:nil];
+
+    // Row 0: hovered, no status entries. Warm anchors the hierarchy to the top
+    // of the card instead of re-centering into the rejected two-line layout,
+    // and the close control tucks into the card's upper-right corner.
+    NSTableCellView *hoveredCell = TideyConfiguredPresentationCell(view, tableView, 0, 200, 60);
+    NSTextField *hoveredTitle = hoveredCell.textField;
+    NSTextField *hoveredSubtitle = TideyPresentationTextField(hoveredCell, 1002);
+    NSTextField *hoveredStatus = TideyPresentationTextField(hoveredCell, 1008);
+    NSView *hoveredClose = TideyFindCloseView(hoveredCell);
+    XCTAssertEqualWithAccuracy(hoveredTitle.frame.origin.y, 38, 0.001);
+    XCTAssertEqualWithAccuracy(hoveredSubtitle.frame.origin.y, 22, 0.001);
+    XCTAssertTrue(hoveredStatus.hidden);
+    XCTAssertFalse(hoveredClose.hidden);
+    XCTAssertTrue(NSEqualRects(hoveredClose.frame,
+                               NSMakeRect(200 - kTideySidebarWarmCloseButtonTrailingInset -
+                                              kTideySidebarCloseButtonSize,
+                                          60 - kTideySidebarWarmCloseButtonTopInset -
+                                              kTideySidebarCloseButtonSize,
+                                          kTideySidebarCloseButtonSize,
+                                          kTideySidebarCloseButtonSize)),
+                  @"close frame %@", NSStringFromRect(hoveredClose.frame));
+
+    // Row 1: authoritative status entry present. The same anchored hierarchy
+    // holds and the status renders in the bottom slot with production font.
+    NSTableCellView *statusCell = TideyConfiguredPresentationCell(view, tableView, 1, 200, 60);
+    NSTextField *statusTitle = statusCell.textField;
+    NSTextField *statusSubtitle = TideyPresentationTextField(statusCell, 1002);
+    NSTextField *statusStatus = TideyPresentationTextField(statusCell, 1008);
+    XCTAssertEqualWithAccuracy(statusTitle.frame.origin.y, 38, 0.001);
+    XCTAssertEqualWithAccuracy(statusSubtitle.frame.origin.y, 22, 0.001);
+    XCTAssertFalse(statusStatus.hidden);
+    XCTAssertEqualWithAccuracy(statusStatus.frame.origin.y, 6, 0.001);
+    XCTAssertTrue([statusStatus.attributedStringValue.string containsString:@"Running"]);
+
+    // Classic keeps its existing centering and close geometry untouched.
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+    TideySidebarPresentationTestRootView *classicView =
+        TideyNewPresentationRootView(@[ @"Classic workspace" ], @[ @"~/classic" ], @[ @NO ]);
+    TideyCharacterizationSidebarTableView *classicTable =
+        TideyInstallPresentationTable(classicView, 200, 60, 0);
+    NSTableCellView *classicCell =
+        TideyConfiguredPresentationCell(classicView, classicTable, 0, 200, 60);
+    NSView *classicClose = TideyFindCloseView(classicCell);
+    XCTAssertEqualWithAccuracy(classicCell.textField.frame.origin.y, 30, 0.001);
+    XCTAssertEqualWithAccuracy(TideyPresentationTextField(classicCell, 1002).frame.origin.y,
+                               12,
+                               0.001);
+    XCTAssertTrue(NSEqualRects(classicClose.frame,
+                               NSMakeRect(200 - kTideySidebarCloseButtonTrailingInset -
+                                              kTideySidebarCloseButtonSize,
+                                          60 - kTideySidebarCloseButtonTopInset -
+                                              kTideySidebarCloseButtonSize,
+                                          kTideySidebarCloseButtonSize,
+                                          kTideySidebarCloseButtonSize)),
+                  @"classic close frame %@", NSStringFromRect(classicClose.frame));
 }
 
 @end
