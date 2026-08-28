@@ -97,6 +97,10 @@
     return self.testSelectedWorkspaceIndex;
 }
 
+- (NSInteger)numberOfRowsInTableView:(NSTableView *)tableView {
+    return self.testWorkspaceIDs.count;
+}
+
 @end
 
 
