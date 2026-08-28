@@ -5478,19 +5478,9 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
 
 - (void)loadColorsFromProfile:(Profile *)aDict {
     const BOOL dark = [NSApp effectiveAppearance].it_isDark;
-    NSDictionary<NSNumber *, NSString *> *keyMap = [self colorTableForProfile:aDict darkMode:dark];
+    NSMutableDictionary<NSNumber *, id> *colorTable = [self resolvedColorTableForProfile:aDict
+                                                                                  darkMode:dark];
 
-    NSMutableDictionary<NSNumber *, id> *colorTable =
-    [[[keyMap mapValuesWithBlock:^id(NSNumber *colorKey, NSString *profileKey) {
-        if ([profileKey isKindOfClass:[NSString class]]) {
-            return [iTermProfilePreferences colorForKey:profileKey
-                                                   dark:dark
-                                                profile:aDict] ?: [NSNull null];
-        } else {
-            return [NSNull null];
-        }
-    }] mutableCopy] autorelease];
-    [self load16ANSIColorsFromProfile:aDict darkMode:dark into:colorTable];
     const BOOL didUseSelectedTextColor = [iTermProfilePreferences boolForKey:iTermAmendedColorKey(KEY_USE_SELECTED_TEXT_COLOR, self.profile, dark) inProfile:self.profile];
     const BOOL willUseSelectedTextColor = [iTermProfilePreferences boolForKey:iTermAmendedColorKey(KEY_USE_SELECTED_TEXT_COLOR, aDict, dark) inProfile:aDict];
 
@@ -5520,6 +5510,24 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                                                                             inProfile:aDict], iTermAmendedColorKey(KEY_MINIMUM_CONTRAST, aDict, dark));
     [self setMinimumContrast:[iTermProfilePreferences floatForKey:iTermAmendedColorKey(KEY_MINIMUM_CONTRAST, aDict, dark)
                                                         inProfile:aDict]];
+}
+
+- (NSMutableDictionary<NSNumber *, id> *)resolvedColorTableForProfile:(Profile *)profile
+                                                              darkMode:(BOOL)dark {
+    NSDictionary<NSNumber *, NSString *> *keyMap = [self colorTableForProfile:profile darkMode:dark];
+
+    NSMutableDictionary<NSNumber *, id> *colorTable =
+    [[[keyMap mapValuesWithBlock:^id(NSNumber *colorKey, NSString *profileKey) {
+        if ([profileKey isKindOfClass:[NSString class]]) {
+            return [iTermProfilePreferences colorForKey:profileKey
+                                                   dark:dark
+                                                profile:profile] ?: [NSNull null];
+        } else {
+            return [NSNull null];
+        }
+    }] mutableCopy] autorelease];
+    [self load16ANSIColorsFromProfile:profile darkMode:dark into:colorTable];
+    return colorTable;
 }
 
 - (NSColor *)effectiveUnprocessedBackgroundColor {
