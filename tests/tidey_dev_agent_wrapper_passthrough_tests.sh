@@ -73,8 +73,8 @@ for vendor in claude codex; do
         fail "$vendor read production tmux state in the Development sandbox"
 done
 
-grep -qx 'hooks=' "$TMP_ROOT/codex.real.log" ||
-    fail "Codex Development passthrough enabled Tidey hooks"
+grep -qx 'hooks=1' "$TMP_ROOT/codex.real.log" ||
+    fail "Codex Development passthrough did not enable isolated status hooks"
 grep -qx 'codex_home=' "$TMP_ROOT/codex.real.log" ||
     fail "Codex Development passthrough replaced CODEX_HOME"
 [[ ! -e "$TMP_ROOT/home/Library/Application Support/Tidey Remote Bridge" ]] ||

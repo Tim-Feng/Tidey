@@ -1157,10 +1157,12 @@ main() {
     local profile_flag=""
 
     real_codex="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
-    # Tidey Dev is a UI sandbox. Its agent commands must stay outside the
-    # production registry, hooks, Browser MCP, and tmux identity lifecycle.
+    # Tidey Dev is a UI sandbox. Keep its agent commands outside the
+    # production registry, Browser MCP, and tmux identity lifecycle while
+    # allowing already-configured Codex hooks to report status to the
+    # inherited Dev socket and workspace only.
     if [[ "${TIDEY_DEV_SANDBOX:-}" == "1" ]]; then
-        exec "$real_codex" "$@"
+        exec env TIDEY_CODEX_HOOKS_ENABLED=1 "$real_codex" "$@"
     fi
     tidey_hydrate_tmux_runtime_environment
     if is_app_server_runtime_command "$@" &&
