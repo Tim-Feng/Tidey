@@ -155,8 +155,8 @@ typedef NSModalResponse (^WarningBlockType)(NSAlert *alert, NSString *identifier
 
         TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
 
-        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x100F0E];
-        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground] hex:0xDDD5C2];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x151413];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground] hex:0xEAE4D4];
         [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4] hex:0x7E9CB8];
         XCTAssertEqualObjects(profile, originalProfile);
 

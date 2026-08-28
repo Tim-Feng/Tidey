@@ -93,7 +93,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.rightPanelBackgroundColor, hex: 0x151413)
         assertColor(tokens.rightPanelTabStripBackgroundColor, hex: 0x191817)
         assertColor(tokens.rightPanelTabSelectionColor, hex: 0x232120)
-        assertColor(tokens.terminalSurroundColor, hex: 0x100F0E)
+        assertColor(tokens.terminalSurroundColor, hex: 0x151413)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
         XCTAssertTrue(tokens.usesRaisedRightPanelTabs)
         XCTAssertEqual(tokens.sidebarSelectionCornerRadius, 8)
@@ -103,12 +103,12 @@ final class TideyInterfaceThemeTests: XCTestCase {
     func testWarmTerminalPaletteMatchesFrozenDesignValues() {
         let palette = TideyTerminalPalettePolicy.warmColorTable
         let expected: [(Int32, Int)] = [
-            (kColorMapBackground, 0x100F0E),
-            (kColorMapForeground, 0xDDD5C2),
+            (kColorMapBackground, 0x151413),
+            (kColorMapForeground, 0xEAE4D4),
             (kColorMapBold, 0xF3EEDF),
-            (kColorMapCursor, 0xDDD5C2),
-            (kColorMapCursorText, 0x100F0E),
-            (kColorMapSelection, 0x3A362F),
+            (kColorMapCursor, 0x7FB4A3),
+            (kColorMapCursorText, 0x151413),
+            (kColorMapSelection, 0x2F2C28),
             (kColorMapSelectedText, 0xF3EEDF),
             (kColorMapLink, 0x7E9CB8),
         ] + [
@@ -159,8 +159,8 @@ final class TideyInterfaceThemeTests: XCTestCase {
             warmEnabled: true)
 
         XCTAssertEqual(result.count, factory.count)
-        assertColor(result[NSNumber(value: kColorMapBackground)]!, hex: 0x100F0E)
-        assertColor(result[NSNumber(value: kColorMapForeground)]!, hex: 0xDDD5C2)
+        assertColor(result[NSNumber(value: kColorMapBackground)]!, hex: 0x151413)
+        assertColor(result[NSNumber(value: kColorMapForeground)]!, hex: 0xEAE4D4)
         assertColor(result[NSNumber(value: kColorMap8bitBase + 4)]!, hex: 0x7E9CB8)
         assertColorTablesEqual(factory, original)
     }

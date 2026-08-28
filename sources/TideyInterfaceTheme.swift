@@ -239,9 +239,9 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                    green: 0x9F / 255.0,
                                                    blue: 0x8D / 255.0,
                                                    alpha: 1),
-        terminalSurroundColor: NSColor(srgbRed: 0x10 / 255.0,
-                                       green: 0x0F / 255.0,
-                                       blue: 0x0E / 255.0,
+        terminalSurroundColor: NSColor(srgbRed: 0x15 / 255.0,
+                                       green: 0x14 / 255.0,
+                                       blue: 0x13 / 255.0,
                                        alpha: 1),
         settingsPanelBackgroundColor: NSColor(srgbRed: 0x15 / 255.0,
                                               green: 0x14 / 255.0,
@@ -416,12 +416,12 @@ final class TideyTerminalPalettePolicy: NSObject {
 
     static let warmColorTable: [NSNumber: NSColor] = {
         let namedColors: [(Int32, Int)] = [
-            (kColorMapBackground, 0x100F0E),
-            (kColorMapForeground, 0xDDD5C2),
+            (kColorMapBackground, 0x151413),
+            (kColorMapForeground, 0xEAE4D4),
             (kColorMapBold, 0xF3EEDF),
-            (kColorMapCursor, 0xDDD5C2),
-            (kColorMapCursorText, 0x100F0E),
-            (kColorMapSelection, 0x3A362F),
+            (kColorMapCursor, 0x7FB4A3),
+            (kColorMapCursorText, 0x151413),
+            (kColorMapSelection, 0x2F2C28),
             (kColorMapSelectedText, 0xF3EEDF),
             (kColorMapLink, 0x7E9CB8),
         ]
