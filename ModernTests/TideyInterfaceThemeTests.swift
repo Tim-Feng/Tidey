@@ -130,6 +130,12 @@ final class TideyInterfaceThemeTests: XCTestCase {
         }
     }
 
+    func testTerminalTabUnderlineUsesWarmSeaglassAndClassicSystemFallback() {
+        XCTAssertNil(TideyTerminalPalettePolicy.terminalTabUnderlineColor(warmEnabled: false))
+        assertColor(TideyTerminalPalettePolicy.terminalTabUnderlineColor(warmEnabled: true)!,
+                    hex: 0x7AA89F)
+    }
+
     func testTerminalPalettePolicyLeavesClassicColorTableAndInputsUnchanged() {
         let factory = terminalColorTable(seed: 0x101010)
         let original = factory

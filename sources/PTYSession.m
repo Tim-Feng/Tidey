@@ -1293,6 +1293,10 @@ typedef NS_ENUM(NSUInteger, PTYSessionTurdType) {
                                                  selector:@selector(broadcastDomainsDidChange:)
                                                      name:iTermBroadcastDomainsDidChangeNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyInterfaceThemeDidChange:)
+                                                     name:TideyInterfaceThemeController.didChangeNotification
+                                                   object:TideyInterfaceThemeController.shared];
         [[[NSWorkspace sharedWorkspace] notificationCenter] addObserver:self
                                                                selector:@selector(activeSpaceDidChange:)
                                                                    name:NSWorkspaceActiveSpaceDidChangeNotification
@@ -5480,6 +5484,29 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
     const BOOL dark = [NSApp effectiveAppearance].it_isDark;
     NSMutableDictionary<NSNumber *, id> *colorTable = [self resolvedColorTableForProfile:aDict
                                                                                   darkMode:dark];
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        NSMutableDictionary *factoryProfile = [NSMutableDictionary dictionary];
+        [ITAddressBookMgr setDefaultsInBookmark:factoryProfile];
+        NSDictionary<NSNumber *, id> *factoryColorTable =
+            [self resolvedColorTableForProfile:factoryProfile darkMode:dark];
+        NSMutableDictionary<NSNumber *, NSColor *> *currentColors = [NSMutableDictionary dictionary];
+        NSMutableDictionary<NSNumber *, NSColor *> *factoryColors = [NSMutableDictionary dictionary];
+        [colorTable enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, id value, BOOL *stop) {
+            if ([value isKindOfClass:[NSColor class]]) {
+                currentColors[key] = value;
+            }
+        }];
+        [factoryColorTable enumerateKeysAndObjectsUsingBlock:^(NSNumber *key, id value, BOOL *stop) {
+            if ([value isKindOfClass:[NSColor class]]) {
+                factoryColors[key] = value;
+            }
+        }];
+        NSDictionary<NSNumber *, NSColor *> *renderColors =
+            [TideyTerminalPalettePolicy colorTableByApplyingWarmPaletteTo:currentColors
+                                                        factoryColorTable:factoryColors
+                                                              warmEnabled:YES];
+        [colorTable addEntriesFromDictionary:renderColors];
+    }
 
     const BOOL didUseSelectedTextColor = [iTermProfilePreferences boolForKey:iTermAmendedColorKey(KEY_USE_SELECTED_TEXT_COLOR, self.profile, dark) inProfile:self.profile];
     const BOOL willUseSelectedTextColor = [iTermProfilePreferences boolForKey:iTermAmendedColorKey(KEY_USE_SELECTED_TEXT_COLOR, aDict, dark) inProfile:aDict];
@@ -5510,6 +5537,17 @@ webViewConfiguration:(WKWebViewConfiguration *)webViewConfiguration
                                                                             inProfile:aDict], iTermAmendedColorKey(KEY_MINIMUM_CONTRAST, aDict, dark));
     [self setMinimumContrast:[iTermProfilePreferences floatForKey:iTermAmendedColorKey(KEY_MINIMUM_CONTRAST, aDict, dark)
                                                         inProfile:aDict]];
+}
+
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    if (!self.profile) {
+        return;
+    }
+    [self loadColorsFromProfile:self.profile];
+    [self updateAppearanceForMinimalTheme];
+    [_textview requestDelegateRedraw];
+    [_view setNeedsDisplay:YES];
 }
 
 - (NSMutableDictionary<NSNumber *, id> *)resolvedColorTableForProfile:(Profile *)profile

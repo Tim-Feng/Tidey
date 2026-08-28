@@ -13519,6 +13519,10 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
         return @([iTermAdvancedSettingsModel drawBottomLineForHorizontalTabBar]);
     } else if ([option isEqualToString:PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence]) {
         return @([iTermAdvancedSettingsModel minimalSelectedTabUnderlineProminence]);
+    } else if ([option isEqualToString:PSMTabBarControlOptionSelectedUnderlineColor]) {
+        const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
+            isEqualToString:@"warm"];
+        return [TideyTerminalPalettePolicy terminalTabUnderlineColorWithWarmEnabled:warm];
     } else if ([option isEqualToString:PSMTabBarControlOptionFontSizeOverride]) {
         if (![iTermAdvancedSettingsModel useCustomTabBarFontSize]) {
             return nil;

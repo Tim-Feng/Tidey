@@ -412,6 +412,8 @@ final class TideyInterfaceThemeTokens: NSObject {
 
 @objcMembers
 final class TideyTerminalPalettePolicy: NSObject {
+    static let warmTabUnderlineColor = color(hex: 0x7AA89F)
+
     static let warmColorTable: [NSNumber: NSColor] = {
         let namedColors: [(Int32, Int)] = [
             (kColorMapBackground, 0x100F0E),
@@ -450,6 +452,11 @@ final class TideyTerminalPalettePolicy: NSObject {
         var result = colorTable
         warmColorTable.forEach { result[$0.key] = $0.value }
         return result
+    }
+
+    @objc(terminalTabUnderlineColorWithWarmEnabled:)
+    static func terminalTabUnderlineColor(warmEnabled: Bool) -> NSColor? {
+        warmEnabled ? warmTabUnderlineColor : nil
     }
 
     private static func matchesFactoryPalette(_ colorTable: [NSNumber: NSColor],

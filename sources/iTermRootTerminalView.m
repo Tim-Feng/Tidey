@@ -6910,6 +6910,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self reloadTideySidebar];
     [self reloadTideyRightPanelTabs];
     [self layoutSubviews];
+    [self.tabBarControl setNeedsDisplay:YES];
     [self setNeedsDisplay:YES];
 }
 
