@@ -77,6 +77,10 @@ final class TideyInterfaceThemeTokens: NSObject {
         rightPanelActiveTabStripBackgroundColor: NSColor(srgbRed: 0.118, green: 0.126, blue: 0.155, alpha: 1),
         rightPanelInactiveTabStripBackgroundColor: NSColor(srgbRed: 0.102, green: 0.108, blue: 0.135, alpha: 1),
         rightPanelFileTreeBackgroundColor: NSColor(srgbRed: 0.12, green: 0.13, blue: 0.17, alpha: 1),
+        fileTreeTextColor: NSColor(white: 0.92, alpha: 1),
+        fileTreeIconColor: NSColor(white: 0.78, alpha: 1),
+        fileTreeSelectionColor: .clear,
+        paneBoundaryColor: .clear,
         rightPanelSplitDividerColor: NSColor(white: 0.24, alpha: 1),
         rightPanelTabHoverColor: NSColor(white: 1, alpha: 0.06),
         rightPanelTabSelectionColor: .clear,
@@ -121,11 +125,16 @@ final class TideyInterfaceThemeTokens: NSObject {
         sidebarSelectionCornerRadius: 8,
         rightPanelTabCornerRadius: 0)
 
+    // Tim's Warm constraint: every chrome base surface (workspace column, tab
+    // strips, canvas surround, file tree) shares this single fill; adjacent
+    // regions are separated by paneBoundaryColor lines, never by shade steps.
+    private static let warmBaseSurfaceColor = NSColor(srgbRed: 0x15 / 255.0,
+                                                      green: 0x14 / 255.0,
+                                                      blue: 0x13 / 255.0,
+                                                      alpha: 1)
+
     static let warm = TideyInterfaceThemeTokens(
-        sidebarBackgroundColor: NSColor(srgbRed: 0x17 / 255.0,
-                                        green: 0x16 / 255.0,
-                                        blue: 0x15 / 255.0,
-                                        alpha: 1),
+        sidebarBackgroundColor: warmBaseSurfaceColor,
         sidebarSelectionColor: NSColor(srgbRed: 0x2F / 255.0,
                                        green: 0x2C / 255.0,
                                        blue: 0x28 / 255.0,
@@ -170,26 +179,27 @@ final class TideyInterfaceThemeTokens: NSObject {
                                    green: 0x6A / 255.0,
                                    blue: 0x60 / 255.0,
                                    alpha: 1),
-        rightPanelBackgroundColor: NSColor(srgbRed: 0x15 / 255.0,
-                                            green: 0x14 / 255.0,
-                                            blue: 0x13 / 255.0,
-                                            alpha: 1),
-        rightPanelTabStripBackgroundColor: NSColor(srgbRed: 0x19 / 255.0,
-                                                    green: 0x18 / 255.0,
-                                                    blue: 0x17 / 255.0,
-                                                    alpha: 1),
-        rightPanelActiveTabStripBackgroundColor: NSColor(srgbRed: 0x19 / 255.0,
-                                                         green: 0x18 / 255.0,
-                                                         blue: 0x17 / 255.0,
-                                                         alpha: 1),
-        rightPanelInactiveTabStripBackgroundColor: NSColor(srgbRed: 0x15 / 255.0,
-                                                           green: 0x14 / 255.0,
-                                                           blue: 0x13 / 255.0,
-                                                           alpha: 1),
-        rightPanelFileTreeBackgroundColor: NSColor(srgbRed: 0x15 / 255.0,
-                                                   green: 0x14 / 255.0,
-                                                   blue: 0x13 / 255.0,
-                                                   alpha: 1),
+        rightPanelBackgroundColor: warmBaseSurfaceColor,
+        rightPanelTabStripBackgroundColor: warmBaseSurfaceColor,
+        rightPanelActiveTabStripBackgroundColor: warmBaseSurfaceColor,
+        rightPanelInactiveTabStripBackgroundColor: warmBaseSurfaceColor,
+        rightPanelFileTreeBackgroundColor: warmBaseSurfaceColor,
+        fileTreeTextColor: NSColor(srgbRed: 0xEA / 255.0,
+                                   green: 0xE4 / 255.0,
+                                   blue: 0xD4 / 255.0,
+                                   alpha: 1),
+        fileTreeIconColor: NSColor(srgbRed: 0xA8 / 255.0,
+                                   green: 0x9F / 255.0,
+                                   blue: 0x8D / 255.0,
+                                   alpha: 1),
+        fileTreeSelectionColor: NSColor(srgbRed: 0x2F / 255.0,
+                                        green: 0x2C / 255.0,
+                                        blue: 0x28 / 255.0,
+                                        alpha: 1),
+        paneBoundaryColor: NSColor(srgbRed: 240 / 255.0,
+                                   green: 230 / 255.0,
+                                   blue: 210 / 255.0,
+                                   alpha: 0.12),
         rightPanelSplitDividerColor: NSColor(srgbRed: 240 / 255.0,
                                              green: 230 / 255.0,
                                              blue: 210 / 255.0,
@@ -239,10 +249,7 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                    green: 0x9F / 255.0,
                                                    blue: 0x8D / 255.0,
                                                    alpha: 1),
-        terminalSurroundColor: NSColor(srgbRed: 0x15 / 255.0,
-                                       green: 0x14 / 255.0,
-                                       blue: 0x13 / 255.0,
-                                       alpha: 1),
+        terminalSurroundColor: warmBaseSurfaceColor,
         settingsPanelBackgroundColor: NSColor(srgbRed: 0x15 / 255.0,
                                               green: 0x14 / 255.0,
                                               blue: 0x13 / 255.0,
@@ -294,6 +301,10 @@ final class TideyInterfaceThemeTokens: NSObject {
     let rightPanelActiveTabStripBackgroundColor: NSColor
     let rightPanelInactiveTabStripBackgroundColor: NSColor
     let rightPanelFileTreeBackgroundColor: NSColor
+    let fileTreeTextColor: NSColor
+    let fileTreeIconColor: NSColor
+    let fileTreeSelectionColor: NSColor
+    let paneBoundaryColor: NSColor
     let rightPanelSplitDividerColor: NSColor
     let rightPanelTabHoverColor: NSColor
     let rightPanelTabSelectionColor: NSColor
@@ -339,6 +350,10 @@ final class TideyInterfaceThemeTokens: NSObject {
                  rightPanelActiveTabStripBackgroundColor: NSColor,
                  rightPanelInactiveTabStripBackgroundColor: NSColor,
                  rightPanelFileTreeBackgroundColor: NSColor,
+                 fileTreeTextColor: NSColor,
+                 fileTreeIconColor: NSColor,
+                 fileTreeSelectionColor: NSColor,
+                 paneBoundaryColor: NSColor,
                  rightPanelSplitDividerColor: NSColor,
                  rightPanelTabHoverColor: NSColor,
                  rightPanelTabSelectionColor: NSColor,
@@ -381,6 +396,10 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.rightPanelActiveTabStripBackgroundColor = rightPanelActiveTabStripBackgroundColor
         self.rightPanelInactiveTabStripBackgroundColor = rightPanelInactiveTabStripBackgroundColor
         self.rightPanelFileTreeBackgroundColor = rightPanelFileTreeBackgroundColor
+        self.fileTreeTextColor = fileTreeTextColor
+        self.fileTreeIconColor = fileTreeIconColor
+        self.fileTreeSelectionColor = fileTreeSelectionColor
+        self.paneBoundaryColor = paneBoundaryColor
         self.rightPanelSplitDividerColor = rightPanelSplitDividerColor
         self.rightPanelTabHoverColor = rightPanelTabHoverColor
         self.rightPanelTabSelectionColor = rightPanelTabSelectionColor

@@ -38,6 +38,10 @@ final class TideyInterfaceThemeTests: XCTestCase {
                     blue: 38.0 / 255.0)
         assertColor(tokens.sidebarSelectedPrimaryTextColor, white: 1.0)
         assertColor(tokens.sidebarSelectedIdleColor, white: 1.0, alpha: 0.8)
+        XCTAssertEqual(tokens.paneBoundaryColor, .clear)
+        assertColor(tokens.fileTreeTextColor, white: 0.92)
+        assertColor(tokens.fileTreeIconColor, white: 0.78)
+        XCTAssertEqual(tokens.fileTreeSelectionColor, .clear)
         XCTAssertFalse(tokens.usesRaisedSidebarSelection)
         XCTAssertFalse(tokens.usesRaisedRightPanelTabs)
     }
@@ -75,7 +79,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
     func testWarmTokensMatchFrozenDesignValues() {
         let tokens = TideyInterfaceThemeTokens.warm
 
-        assertColor(tokens.sidebarBackgroundColor, hex: 0x171615)
+        assertColor(tokens.sidebarBackgroundColor, hex: 0x151413)
         assertColor(tokens.sidebarSelectionColor, hex: 0x2F2C28)
         assertColor(tokens.sidebarSelectionBorderColor,
                     red: 240.0 / 255.0,
@@ -91,13 +95,39 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.sidebarRunningColor, hex: 0x7FB4A3)
         assertColor(tokens.sidebarUnreadColor, hex: 0xD19A66)
         assertColor(tokens.rightPanelBackgroundColor, hex: 0x151413)
-        assertColor(tokens.rightPanelTabStripBackgroundColor, hex: 0x191817)
+        assertColor(tokens.rightPanelTabStripBackgroundColor, hex: 0x151413)
         assertColor(tokens.rightPanelTabSelectionColor, hex: 0x232120)
         assertColor(tokens.terminalSurroundColor, hex: 0x151413)
+        assertColor(tokens.paneBoundaryColor,
+                    red: 240.0 / 255.0,
+                    green: 230.0 / 255.0,
+                    blue: 210.0 / 255.0,
+                    alpha: 0.12)
+        assertColor(tokens.fileTreeTextColor, hex: 0xEAE4D4)
+        assertColor(tokens.fileTreeIconColor, hex: 0xA89F8D)
+        assertColor(tokens.fileTreeSelectionColor, hex: 0x2F2C28)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
         XCTAssertTrue(tokens.usesRaisedRightPanelTabs)
         XCTAssertEqual(tokens.sidebarSelectionCornerRadius, 8)
         XCTAssertEqual(tokens.rightPanelTabCornerRadius, 8)
+    }
+
+    func testWarmBaseSurfacesShareOneColorAndBoundariesComeFromSeparators() {
+        let tokens = TideyInterfaceThemeTokens.warm
+        let base = tokens.rightPanelBackgroundColor
+        // Tim's constraint: no base-surface color difference between the workspace
+        // column, tab strips, canvas surroundings, and file tree. Structure comes
+        // from separator lines, not background shades.
+        XCTAssertEqual(tokens.sidebarBackgroundColor, base)
+        XCTAssertEqual(tokens.rightPanelTabStripBackgroundColor, base)
+        XCTAssertEqual(tokens.rightPanelActiveTabStripBackgroundColor, base)
+        XCTAssertEqual(tokens.rightPanelInactiveTabStripBackgroundColor, base)
+        XCTAssertEqual(tokens.rightPanelFileTreeBackgroundColor, base)
+        XCTAssertEqual(tokens.terminalSurroundColor, base)
+        assertColor(TideyTerminalPalettePolicy.warmColorTable[NSNumber(value: kColorMapBackground)]!,
+                    hex: 0x151413)
+        XCTAssertGreaterThan(tokens.paneBoundaryColor.alphaComponent, 0)
+        XCTAssertEqual(TideyInterfaceThemeTokens.classic.paneBoundaryColor, .clear)
     }
 
     func testWarmTerminalPaletteMatchesFrozenDesignValues() {
