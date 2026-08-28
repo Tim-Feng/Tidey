@@ -1367,7 +1367,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 + (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyleForWarmTheme:(BOOL)warm {
-    return warm ? NSTableViewSelectionHighlightStyleRegular
+    return warm ? NSTableViewSelectionHighlightStyleNone
                 : NSTableViewSelectionHighlightStyleSourceList;
 }
 

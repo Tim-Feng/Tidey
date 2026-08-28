@@ -495,7 +495,7 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
                      appearance);
     XCTAssertNil([iTermRootTerminalView tideySidebarTableBackgroundOverrideColorForWarmTheme:NO]);
     XCTAssertEqual([iTermRootTerminalView tideySidebarSelectionHighlightStyleForWarmTheme:YES],
-                   NSTableViewSelectionHighlightStyleRegular);
+                   NSTableViewSelectionHighlightStyleNone);
     XCTAssertEqual([iTermRootTerminalView tideySidebarSelectionHighlightStyleForWarmTheme:NO],
                    NSTableViewSelectionHighlightStyleSourceList);
 }
@@ -701,11 +701,11 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertTrue(rowView.translatesAutoresizingMaskIntoConstraints);
 }
 
-- (void)testRegularHighlightDrawsWarmSelectionCard {
+- (void)testWarmRowDrawsSelectionCardWithNativeHighlightDisabled {
     TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
     TideySidebarRowView *rowView = [[[TideySidebarRowView alloc]
         initWithFrame:NSMakeRect(0, 0, 200, 60)] autorelease];
-    rowView.selectionHighlightStyle = NSTableViewSelectionHighlightStyleRegular;
+    rowView.selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone;
     rowView.selected = YES;
 
     NSBitmapImageRep *bitmap = [[[NSBitmapImageRep alloc]
@@ -722,7 +722,7 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     NSGraphicsContext *context = [NSGraphicsContext graphicsContextWithBitmapImageRep:bitmap];
     [NSGraphicsContext saveGraphicsState];
     [NSGraphicsContext setCurrentContext:context];
-    [rowView drawSelectionInRect:rowView.bounds];
+    [rowView drawBackgroundInRect:rowView.bounds];
     [context flushGraphics];
     [NSGraphicsContext restoreGraphicsState];
 

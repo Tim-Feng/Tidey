@@ -135,8 +135,8 @@ NSView *TideyFindCloseView(NSView *container) {
 
 @implementation TideySidebarRowView
 
-- (void)drawSelectionInRect:(NSRect)dirtyRect {
-    if (self.selectionHighlightStyle == NSTableViewSelectionHighlightStyleNone || !self.isSelected) {
+- (void)tideyDrawWarmSelection {
+    if (!self.isSelected) {
         return;
     }
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
@@ -150,6 +150,20 @@ NSView *TideyFindCloseView(NSView *container) {
         path.lineWidth = 1;
         [path stroke];
     }
+}
+
+- (void)drawBackgroundInRect:(NSRect)dirtyRect {
+    [super drawBackgroundInRect:dirtyRect];
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        [self tideyDrawWarmSelection];
+    }
+}
+
+- (void)drawSelectionInRect:(NSRect)dirtyRect {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return;
+    }
+    [super drawSelectionInRect:dirtyRect];
 }
 
 - (BOOL)isEmphasized {
