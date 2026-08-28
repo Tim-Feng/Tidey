@@ -664,3 +664,6 @@
   - `.icon` 和 `.icns` 不要混
 - 改 `DefaultBookmark.plist` 後，如果 app 還在吃舊預設，要先清掉已寫入的 user defaults / cached profile
   - 不然 plist 改了，執行中的預設 profile 不一定會立刻跟著變
+- hosted iTerm2Tests 的 linkage 快取跟著 scheme 走，不只跟著 app host 走
+  - 一個只 build 過 `iTerm2` scheme 的 DerivedData，即使 `Tidey Dev.app` host 存在，跑 `iTerm2Tests` 仍可能以第三方 undefined symbols（CoreParse `_OBJC_CLASS_$_CP*`、railroad `_railroad_*`）在 test bundle 連結時失敗——這是 infra red
+  - 解法：改用曾成功跑過 `iTerm2Tests` 的 DerivedData（例如 Xcode 預設樹），或在該樹完整重建 `iTerm2Tests` scheme；不要在產品 assertion 上除錯連結錯誤
