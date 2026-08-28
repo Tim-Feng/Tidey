@@ -700,6 +700,19 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertTrue(rowView.translatesAutoresizingMaskIntoConstraints);
 }
 
+- (void)testFileTreeRowOnlyForcesEmphasisInWarmTheme {
+    TideyFileTreeRowView *rowView = [[[TideyFileTreeRowView alloc]
+        initWithFrame:NSMakeRect(0, 0, 200, 22)] autorelease];
+    NSTableRowView *nativeRowView = [[[NSTableRowView alloc]
+        initWithFrame:NSMakeRect(0, 0, 200, 22)] autorelease];
+
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+    XCTAssertEqual(rowView.isEmphasized, nativeRowView.isEmphasized);
+
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    XCTAssertTrue(rowView.isEmphasized);
+}
+
 - (void)testWarmRowDrawsSelectionCardWithNativeHighlightDisabled {
     TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
     TideySidebarRowView *rowView = [[[TideySidebarRowView alloc]

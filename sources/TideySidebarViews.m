@@ -200,7 +200,10 @@ NSView *TideyFindCloseView(NSView *container) {
 }
 
 - (BOOL)isEmphasized {
-    return YES;
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return YES;
+    }
+    return [super isEmphasized];
 }
 
 @end
