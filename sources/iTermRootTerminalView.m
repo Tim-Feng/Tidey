@@ -72,6 +72,11 @@ static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 200;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
 static const CGFloat kTideyMinimumSidebarWidth = 160;
+static const CGFloat kTideySidebarWarmRowHeight = 72;
+static const CGFloat kTideySidebarWarmStatusRowHeight = 90;
+static const CGFloat kTideySidebarWarmBodyRowHeight = 106;
+static const CGFloat kTideySidebarWarmBodyStatusRowHeight = 124;
+static const CGFloat kTideySidebarWarmTextInset = 12;
 static const CGFloat kTideyMinimumTerminalWidth = 200;
 static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
@@ -7845,10 +7850,20 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     if (workspaceID.length > 0) {
         notification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
     }
-    if (notification && notification.body.length > 0) {
+    BOOL hasBody = (notification && notification.body.length > 0);
+    BOOL hasStatus = (workspaceID.length > 0 &&
+                      [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
+    BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
+    if (warm) {
+        if (!hasBody) {
+            return hasStatus ? kTideySidebarWarmStatusRowHeight
+                             : kTideySidebarWarmRowHeight;
+        }
+        return hasStatus ? kTideySidebarWarmBodyStatusRowHeight
+                         : kTideySidebarWarmBodyRowHeight;
+    }
+    if (hasBody) {
         baseHeight = 68;
-        BOOL hasStatus = (workspaceID.length > 0 &&
-                          [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
         if (hasStatus) {
             baseHeight += 14;
         }
@@ -8057,7 +8072,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
     pinView.hidden = !presentation.pinned;
     pinView.contentTintColor = warm ? tokens.sidebarSecondaryTextColor : [NSColor colorWithWhite:0.90 alpha:1];
-    cellView.textField.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
+    cellView.textField.font = [NSFont systemFontOfSize:(warm ? 13 : 12.5)
+                                               weight:NSFontWeightSemibold];
     cellView.textField.textColor = presentation.selected
         ? tokens.sidebarSelectedPrimaryTextColor
         : tokens.sidebarPrimaryTextColor;
@@ -8074,7 +8090,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     CGFloat width = NSWidth(cellView.bounds);
     BOOL hasBody = presentation.hasBody;
     BOOL hasStatus = presentation.hasStatus;
-    CGFloat titleTrailingReserve = 56;
+    CGFloat titleTrailingReserve = warm ? 48 : 56;
+    CGFloat textInset = warm ? kTideySidebarWarmTextInset : 8;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
@@ -8092,17 +8109,25 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
         // --- Title row (top) ---
         cellView.textField.stringValue = presentation.title;
-        CGFloat titleY = 51 + sOff;
-        CGFloat titleX = 8;
-        CGFloat titleMaxW = width - titleTrailingReserve;
-        cellView.textField.frame = NSMakeRect(titleX, titleY, MAX(0, titleMaxW), 14);
+        CGFloat titleY = warm ? NSHeight(cellView.bounds) - 34 : 51 + sOff;
+        CGFloat titleX = textInset;
+        CGFloat titleHeight = warm ? 16 : 14;
+        CGFloat titleMaxW = warm ? width - textInset * 2
+                                 : width - titleTrailingReserve;
+        cellView.textField.frame = NSMakeRect(titleX,
+                                              titleY,
+                                              MAX(0, titleMaxW),
+                                              titleHeight);
 
-        CGFloat badgeY = titleY + floor((14.0 - kTideySidebarBadgeSize) / 2.0);
+        CGFloat badgeY = titleY + floor((titleHeight - kTideySidebarBadgeSize) / 2.0);
         badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
                                      badgeY,
                                      kTideySidebarBadgeSize,
                                      kTideySidebarBadgeSize);
-        pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
+        pinView.frame = NSMakeRect(MAX(0, width - 42),
+                                   warm ? titleY + 2 : 51 + sOff,
+                                   12,
+                                   12);
 
         NSView *closeView = TideyFindCloseView(cellView);
         closeView.hidden = !presentation.showsCloseButton;
@@ -8113,9 +8138,15 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         bodyField.textColor = presentation.selected
                                   ? tokens.sidebarSelectedSecondaryTextColor
                                   : (warm ? tokens.sidebarSecondaryTextColor : NSColor.secondaryLabelColor);
-        bodyField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+        bodyField.font = [NSFont systemFontOfSize:(warm ? 11 : 10)
+                                          weight:NSFontWeightRegular];
         bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
+        bodyField.frame = warm
+            ? NSMakeRect(textInset,
+                         NSHeight(cellView.bounds) - 68,
+                         MAX(0, width - textInset * 2),
+                         28)
+            : NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
 
         // --- Bottom: cwd above status ---
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
@@ -8123,20 +8154,26 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         subtitleField.textColor = presentation.selected
                                       ? tokens.sidebarSelectedSecondaryTextColor
                                       : (warm ? tokens.sidebarSecondaryTextColor : NSColor.secondaryLabelColor);
-        subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-        CGFloat cwdY = hasStatus ? 16 : 2;
-        subtitleField.frame = NSMakeRect(8, cwdY, MAX(0, width - 16), 14);
+        subtitleField.font = [NSFont systemFontOfSize:(warm ? 11 : 10)
+                                              weight:NSFontWeightRegular];
+        CGFloat cwdY = warm ? NSHeight(cellView.bounds) - 88 : (hasStatus ? 16 : 2);
+        subtitleField.frame = NSMakeRect(textInset,
+                                         cwdY,
+                                         MAX(0, width - textInset * 2),
+                                         14);
     } else {
         // Normal layout (60pt row).
         // Only indent for badge when there are unread notifications.
-        CGFloat textMaxW = width - titleTrailingReserve;
+        CGFloat textMaxW = warm ? width - textInset * 2
+                                : width - titleTrailingReserve;
 
         cellView.textField.stringValue = presentation.title;
-        // Warm anchors the hierarchy to the top of the card (title/subtitle/
-        // status slots stay put whether or not a status entry exists) instead
-        // of re-centering into a two-line card.
-        CGFloat titleY = (warm || hasStatus) ? 38 : 30;
-        cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
+        CGFloat titleY = warm ? NSHeight(cellView.bounds) - 34 : (hasStatus ? 38 : 30);
+        CGFloat titleHeight = warm ? 16 : 14;
+        cellView.textField.frame = NSMakeRect(textInset,
+                                              titleY,
+                                              MAX(0, textMaxW),
+                                              titleHeight);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
         subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
@@ -8151,14 +8188,20 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                                           ? tokens.sidebarSelectedSecondaryTextColor
                                           : tokens.sidebarSecondaryTextColor;
         }
-        CGFloat subtitleY = (warm || hasStatus) ? 22 : 12;
-        subtitleField.frame = NSMakeRect(8, subtitleY, MAX(0, width - 16), 14);
+        CGFloat subtitleY = warm ? NSHeight(cellView.bounds) - 54 : (hasStatus ? 22 : 12);
+        subtitleField.frame = NSMakeRect(textInset,
+                                         subtitleY,
+                                         MAX(0, width - textInset * 2),
+                                         14);
 
         bodyField.hidden = YES;
         bodyField.stringValue = @"";
 
-        pinView.frame = NSMakeRect(MAX(0, width - 42), 34, 12, 12);
-        CGFloat badgeY = titleY + floor((14.0 - kTideySidebarBadgeSize) / 2.0);
+        pinView.frame = NSMakeRect(MAX(0, width - 42),
+                                   warm ? titleY + 2 : 34,
+                                   12,
+                                   12);
+        CGFloat badgeY = titleY + floor((titleHeight - kTideySidebarBadgeSize) / 2.0);
         badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
                                      badgeY,
                                      kTideySidebarBadgeSize,
@@ -8210,7 +8253,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         }
 
         NSMutableAttributedString *statusAttr = [[NSMutableAttributedString alloc] init];
-        NSFont *statusFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+        NSFont *statusFont = [NSFont systemFontOfSize:(warm ? 11 : 10)
+                                               weight:NSFontWeightRegular];
         NSDictionary *textAttrs = @{
             NSFontAttributeName: statusFont,
             NSForegroundColorAttributeName: effectiveColor,
@@ -8232,7 +8276,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                         [NSImageSymbolConfiguration configurationWithHierarchicalColor:effectiveColor];
                     symbolImage = [symbolImage imageWithSymbolConfiguration:symbolConfig];
                     NSFont *textFont = statusFont;
-                    CGFloat iconSize = 9.0;
+                    CGFloat iconSize = warm ? 10.0 : 9.0;
                     // Center the icon vertically relative to the text cap height.
                     CGFloat yOffset = (textFont.capHeight - iconSize) / 2.0;
                     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
@@ -8249,8 +8293,11 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
         // Status always at the bottom (below cwd).
-        CGFloat statusY = hasBody ? 2 : 6;
-        statusField.frame = NSMakeRect(8, statusY, MAX(0, width - 16), 12);
+        CGFloat statusY = warm ? 18 : (hasBody ? 2 : 6);
+        statusField.frame = NSMakeRect(textInset,
+                                       statusY,
+                                       MAX(0, width - textInset * 2),
+                                       warm ? 14 : 12);
         statusField.textColor = effectiveColor;
         statusField.font = statusFont;
     } else {
@@ -8265,7 +8312,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         if (presentation.shortcutHint) {
             hintLabel.stringValue = presentation.shortcutHint;
             CGFloat hintX = MAX(0, width - 40);
-            CGFloat hintY = hasBody ? 46 : 32;
+            CGFloat hintY = warm ? MAX(0, NSHeight(cellView.bounds) - 30)
+                                 : (hasBody ? 46 : 32);
             hintView.frame = NSMakeRect(hintX, hintY, 28, 18);
             hintView.hidden = NO;
             [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
