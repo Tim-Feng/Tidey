@@ -1354,7 +1354,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 + (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm {
-    return warm ? NSTableViewStylePlain : NSTableViewStyleSourceList;
+    (void)warm;
+    return NSTableViewStyleSourceList;
 }
 
 + (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm {

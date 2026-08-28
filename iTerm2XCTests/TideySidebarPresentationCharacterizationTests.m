@@ -211,6 +211,7 @@ static NSDictionary<NSString *, NSValue *> *TideyLaidOutSidebarGeometry(BOOL war
     NSInteger rowAboveFirst = [tableView rowAtPoint:NSMakePoint(NSMidX(rowRect), NSMinY(rowRect) - 1)];
     NSRange rowsAtCenter = [tableView rowsInRect:NSMakeRect(NSMinX(rowRect), NSMidY(rowRect), 1, 1)];
     NSRange rowsAboveFirst = [tableView rowsInRect:NSMakeRect(NSMinX(rowRect), NSMinY(rowRect) - 1, 1, 1)];
+    NSRange visibleRows = [tableView rowsInRect:tableView.visibleRect];
     return @{
         @"row": [NSValue valueWithRect:rowRect],
         @"cell": [NSValue valueWithRect:cellRect],
@@ -225,6 +226,7 @@ static NSDictionary<NSString *, NSValue *> *TideyLaidOutSidebarGeometry(BOOL war
         @"rowAboveFirst": @(rowAboveFirst),
         @"rowsAtCenter": [NSValue valueWithRange:rowsAtCenter],
         @"rowsAboveFirst": [NSValue valueWithRange:rowsAboveFirst],
+        @"visibleRows": [NSValue valueWithRange:visibleRows],
     };
 }
 
@@ -480,10 +482,10 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertFalse(titleField.cell.truncatesLastVisibleLine);
 }
 
-- (void)testWarmUsesCustomChromeWhileClassicPreservesProductionSourceListChrome {
+- (void)testWarmOverridesSourceListChromeWithoutChangingItsGeometryStyle {
     if (@available(macOS 11.0, *)) {
         XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:YES],
-                       NSTableViewStylePlain);
+                       NSTableViewStyleSourceList);
         XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:NO],
                        NSTableViewStyleSourceList);
     }
@@ -515,6 +517,7 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertEqualObjects(warm[@"rowAboveFirst"], classic[@"rowAboveFirst"]);
     XCTAssertEqualObjects(warm[@"rowsAtCenter"], classic[@"rowsAtCenter"]);
     XCTAssertEqualObjects(warm[@"rowsAboveFirst"], classic[@"rowsAboveFirst"]);
+    XCTAssertEqualObjects(warm[@"visibleRows"], classic[@"visibleRows"]);
 }
 
 - (void)testWarmAndClassicUseProductionMinimumWidth {
