@@ -8,6 +8,7 @@ const CGFloat kTideySidebarCloseButtonTopInset = 10;
 const CGFloat kTideySidebarCloseButtonTrailingInset = 4;
 const CGFloat kTideySidebarCloseButtonSize = 16;
 static const CGFloat kTideySidebarSourceListCellHorizontalInset = 16;
+static const CGFloat kTideySidebarSourceListTopInset = 10;
 
 NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
 NSUserInterfaceItemIdentifier const kTideySidebarBadgeViewIdentifier = @"TideySidebarBadgeView";
@@ -39,6 +40,34 @@ NSView *TideyFindCloseView(NSView *container) {
         }
     }
     return frame;
+}
+
+- (NSRect)rectOfRow:(NSInteger)row {
+    NSRect rect = [super rectOfRow:row];
+    if (@available(macOS 11.0, *)) {
+        if (self.style == NSTableViewStylePlain && !NSIsEmptyRect(rect)) {
+            rect.origin.y += kTideySidebarSourceListTopInset;
+        }
+    }
+    return rect;
+}
+
+- (NSInteger)rowAtPoint:(NSPoint)point {
+    if (@available(macOS 11.0, *)) {
+        if (self.style == NSTableViewStylePlain) {
+            point.y -= kTideySidebarSourceListTopInset;
+        }
+    }
+    return [super rowAtPoint:point];
+}
+
+- (NSRange)rowsInRect:(NSRect)rect {
+    if (@available(macOS 11.0, *)) {
+        if (self.style == NSTableViewStylePlain) {
+            rect.origin.y -= kTideySidebarSourceListTopInset;
+        }
+    }
+    return [super rowsInRect:rect];
 }
 
 - (void)updateTrackingAreas {

@@ -179,7 +179,17 @@ static NSDictionary<NSString *, NSValue *> *TideyLaidOutSidebarGeometry(BOOL war
         initWithFrame:NSMakeRect(0, 0, 200, 120)] autorelease];
     scrollView.drawsBackground = NO;
     scrollView.documentView = tableView;
+    NSWindow *window = [[[NSWindow alloc]
+        initWithContentRect:NSMakeRect(0, 0, 200, 120)
+                  styleMask:(NSWindowStyleMaskTitled | NSWindowStyleMaskFullSizeContentView)
+                    backing:NSBackingStoreBuffered
+                      defer:NO] autorelease];
+    window.titleVisibility = NSWindowTitleHidden;
+    window.titlebarAppearsTransparent = YES;
+    scrollView.frame = window.contentView.bounds;
+    [window.contentView addSubview:scrollView];
     [tableView reloadData];
+    [window.contentView layoutSubtreeIfNeeded];
     [scrollView layoutSubtreeIfNeeded];
     [tableView layoutSubtreeIfNeeded];
 
@@ -194,6 +204,13 @@ static NSDictionary<NSString *, NSValue *> *TideyLaidOutSidebarGeometry(BOOL war
     NSRect visibleRowRect = [rowView convertRect:rowView.bounds toView:scrollView];
     NSRect visibleCellRect = [cellView convertRect:cellView.bounds toView:scrollView];
     NSRect visibleTitleRect = [cellView convertRect:cellView.textField.frame toView:scrollView];
+    NSRect windowRowRect = [rowView convertRect:rowView.bounds toView:window.contentView];
+    NSRect windowCellRect = [cellView convertRect:cellView.bounds toView:window.contentView];
+    NSRect windowTitleRect = [cellView convertRect:cellView.textField.frame toView:window.contentView];
+    NSInteger rowAtCenter = [tableView rowAtPoint:NSMakePoint(NSMidX(rowRect), NSMidY(rowRect))];
+    NSInteger rowAboveFirst = [tableView rowAtPoint:NSMakePoint(NSMidX(rowRect), NSMinY(rowRect) - 1)];
+    NSRange rowsAtCenter = [tableView rowsInRect:NSMakeRect(NSMinX(rowRect), NSMidY(rowRect), 1, 1)];
+    NSRange rowsAboveFirst = [tableView rowsInRect:NSMakeRect(NSMinX(rowRect), NSMinY(rowRect) - 1, 1, 1)];
     return @{
         @"row": [NSValue valueWithRect:rowRect],
         @"cell": [NSValue valueWithRect:cellRect],
@@ -201,6 +218,13 @@ static NSDictionary<NSString *, NSValue *> *TideyLaidOutSidebarGeometry(BOOL war
         @"visibleRow": [NSValue valueWithRect:visibleRowRect],
         @"visibleCell": [NSValue valueWithRect:visibleCellRect],
         @"visibleTitle": [NSValue valueWithRect:visibleTitleRect],
+        @"windowRow": [NSValue valueWithRect:windowRowRect],
+        @"windowCell": [NSValue valueWithRect:windowCellRect],
+        @"windowTitle": [NSValue valueWithRect:windowTitleRect],
+        @"rowAtCenter": @(rowAtCenter),
+        @"rowAboveFirst": @(rowAboveFirst),
+        @"rowsAtCenter": [NSValue valueWithRange:rowsAtCenter],
+        @"rowsAboveFirst": [NSValue valueWithRange:rowsAboveFirst],
     };
 }
 
@@ -484,6 +508,13 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     TideyAssertRect(warm[@"visibleRow"].rectValue, classic[@"visibleRow"].rectValue);
     TideyAssertRect(warm[@"visibleCell"].rectValue, classic[@"visibleCell"].rectValue);
     TideyAssertRect(warm[@"visibleTitle"].rectValue, classic[@"visibleTitle"].rectValue);
+    TideyAssertRect(warm[@"windowRow"].rectValue, classic[@"windowRow"].rectValue);
+    TideyAssertRect(warm[@"windowCell"].rectValue, classic[@"windowCell"].rectValue);
+    TideyAssertRect(warm[@"windowTitle"].rectValue, classic[@"windowTitle"].rectValue);
+    XCTAssertEqualObjects(warm[@"rowAtCenter"], classic[@"rowAtCenter"]);
+    XCTAssertEqualObjects(warm[@"rowAboveFirst"], classic[@"rowAboveFirst"]);
+    XCTAssertEqualObjects(warm[@"rowsAtCenter"], classic[@"rowsAtCenter"]);
+    XCTAssertEqualObjects(warm[@"rowsAboveFirst"], classic[@"rowsAboveFirst"]);
 }
 
 - (void)testWarmAndClassicUseProductionMinimumWidth {
