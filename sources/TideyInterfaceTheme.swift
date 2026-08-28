@@ -64,10 +64,12 @@ final class TideyInterfaceThemeTokens: NSObject {
         sidebarSelectionColor: .selectedContentBackgroundColor,
         sidebarSelectionBorderColor: .clear,
         sidebarPrimaryTextColor: .white,
+        sidebarSelectedPrimaryTextColor: .white,
         sidebarSecondaryTextColor: NSColor(white: 0.72, alpha: 1),
         sidebarSelectedSecondaryTextColor: NSColor(white: 1, alpha: 0.8),
         sidebarUnreadColor: .systemRed,
         sidebarIdleColor: .secondaryLabelColor,
+        sidebarSelectedIdleColor: NSColor(white: 1, alpha: 0.8),
         sidebarRunningColor: .secondaryLabelColor,
         sidebarCloseColor: .tertiaryLabelColor,
         rightPanelBackgroundColor: NSColor(srgbRed: 0.10, green: 0.11, blue: 0.14, alpha: 1),
@@ -124,25 +126,29 @@ final class TideyInterfaceThemeTokens: NSObject {
                                         green: 0x16 / 255.0,
                                         blue: 0x15 / 255.0,
                                         alpha: 1),
-        sidebarSelectionColor: NSColor(srgbRed: 0x23 / 255.0,
-                                       green: 0x21 / 255.0,
-                                       blue: 0x20 / 255.0,
+        sidebarSelectionColor: NSColor(srgbRed: 0x2F / 255.0,
+                                       green: 0x2C / 255.0,
+                                       blue: 0x28 / 255.0,
                                        alpha: 1),
         sidebarSelectionBorderColor: NSColor(srgbRed: 240 / 255.0,
                                              green: 230 / 255.0,
                                              blue: 210 / 255.0,
-                                             alpha: 0.07),
+                                             alpha: 0.16),
         sidebarPrimaryTextColor: NSColor(srgbRed: 0xEA / 255.0,
                                          green: 0xE4 / 255.0,
                                          blue: 0xD4 / 255.0,
                                          alpha: 1),
+        sidebarSelectedPrimaryTextColor: NSColor(srgbRed: 0xF3 / 255.0,
+                                                 green: 0xEE / 255.0,
+                                                 blue: 0xDF / 255.0,
+                                                 alpha: 1),
         sidebarSecondaryTextColor: NSColor(srgbRed: 0xA8 / 255.0,
                                            green: 0x9F / 255.0,
                                            blue: 0x8D / 255.0,
                                            alpha: 1),
-        sidebarSelectedSecondaryTextColor: NSColor(srgbRed: 0xA8 / 255.0,
-                                                   green: 0x9F / 255.0,
-                                                   blue: 0x8D / 255.0,
+        sidebarSelectedSecondaryTextColor: NSColor(srgbRed: 0xC6 / 255.0,
+                                                   green: 0xBE / 255.0,
+                                                   blue: 0xAC / 255.0,
                                                    alpha: 1),
         sidebarUnreadColor: NSColor(srgbRed: 0xD1 / 255.0,
                                     green: 0x9A / 255.0,
@@ -152,6 +158,10 @@ final class TideyInterfaceThemeTokens: NSObject {
                                   green: 0x6A / 255.0,
                                   blue: 0x60 / 255.0,
                                   alpha: 1),
+        sidebarSelectedIdleColor: NSColor(srgbRed: 0x8A / 255.0,
+                                          green: 0x84 / 255.0,
+                                          blue: 0x78 / 255.0,
+                                          alpha: 1),
         sidebarRunningColor: NSColor(srgbRed: 0x7F / 255.0,
                                      green: 0xB4 / 255.0,
                                      blue: 0xA3 / 255.0,
@@ -263,17 +273,19 @@ final class TideyInterfaceThemeTokens: NSObject {
                                alpha: 0.07),
         usesRaisedSidebarSelection: true,
         usesRaisedRightPanelTabs: true,
-        sidebarSelectionCornerRadius: 9,
+        sidebarSelectionCornerRadius: 8,
         rightPanelTabCornerRadius: 8)
 
     let sidebarBackgroundColor: NSColor
     let sidebarSelectionColor: NSColor
     let sidebarSelectionBorderColor: NSColor
     let sidebarPrimaryTextColor: NSColor
+    let sidebarSelectedPrimaryTextColor: NSColor
     let sidebarSecondaryTextColor: NSColor
     let sidebarSelectedSecondaryTextColor: NSColor
     let sidebarUnreadColor: NSColor
     let sidebarIdleColor: NSColor
+    let sidebarSelectedIdleColor: NSColor
     let sidebarRunningColor: NSColor
     let sidebarCloseColor: NSColor
 
@@ -314,10 +326,12 @@ final class TideyInterfaceThemeTokens: NSObject {
                  sidebarSelectionColor: NSColor,
                  sidebarSelectionBorderColor: NSColor,
                  sidebarPrimaryTextColor: NSColor,
+                 sidebarSelectedPrimaryTextColor: NSColor,
                  sidebarSecondaryTextColor: NSColor,
                  sidebarSelectedSecondaryTextColor: NSColor,
                  sidebarUnreadColor: NSColor,
                  sidebarIdleColor: NSColor,
+                 sidebarSelectedIdleColor: NSColor,
                  sidebarRunningColor: NSColor,
                  sidebarCloseColor: NSColor,
                  rightPanelBackgroundColor: NSColor,
@@ -354,10 +368,12 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.sidebarSelectionColor = sidebarSelectionColor
         self.sidebarSelectionBorderColor = sidebarSelectionBorderColor
         self.sidebarPrimaryTextColor = sidebarPrimaryTextColor
+        self.sidebarSelectedPrimaryTextColor = sidebarSelectedPrimaryTextColor
         self.sidebarSecondaryTextColor = sidebarSecondaryTextColor
         self.sidebarSelectedSecondaryTextColor = sidebarSelectedSecondaryTextColor
         self.sidebarUnreadColor = sidebarUnreadColor
         self.sidebarIdleColor = sidebarIdleColor
+        self.sidebarSelectedIdleColor = sidebarSelectedIdleColor
         self.sidebarRunningColor = sidebarRunningColor
         self.sidebarCloseColor = sidebarCloseColor
         self.rightPanelBackgroundColor = rightPanelBackgroundColor

@@ -72,7 +72,6 @@ static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 200;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
 static const CGFloat kTideyMinimumSidebarWidth = 160;
-static const CGFloat kTideyWarmMinimumSidebarWidth = 240;
 static const CGFloat kTideyMinimumTerminalWidth = 200;
 static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
@@ -576,6 +575,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 + (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets;
 + (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm;
 + (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm;
++ (NSColor *)tideySidebarTableBackgroundOverrideColorForWarmTheme:(BOOL)warm;
++ (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyleForWarmTheme:(BOOL)warm;
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
@@ -1148,6 +1149,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSView *_tideySidebarView;
     NSScrollView *_tideySidebarScrollView;
     NSTableView *_tideySidebarTableView;
+    NSColor *_tideyClassicSidebarTableBackgroundColor;
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
     NSView *_tideyEditorTabStripView;
@@ -1356,7 +1358,16 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 + (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm {
-    return warm ? kTideyWarmMinimumSidebarWidth : kTideyMinimumSidebarWidth;
+    return kTideyMinimumSidebarWidth;
+}
+
++ (NSColor *)tideySidebarTableBackgroundOverrideColorForWarmTheme:(BOOL)warm {
+    return warm ? NSColor.clearColor : nil;
+}
+
++ (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyleForWarmTheme:(BOOL)warm {
+    return warm ? NSTableViewSelectionHighlightStyleRegular
+                : NSTableViewSelectionHighlightStyleSourceList;
 }
 
 + (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
@@ -1832,9 +1843,15 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         sidebarTableView.tideyCloseActionTarget = (id<TideySidebarCloseAction>)self;
         _tideySidebarTableView = sidebarTableView;
         if (@available(macOS 11.0, *)) {
+            _tideySidebarTableView.style = NSTableViewStyleSourceList;
+            _tideyClassicSidebarTableBackgroundColor = [_tideySidebarTableView.backgroundColor copy];
             _tideySidebarTableView.style = [[self class]
                 tideySidebarTableStyleForWarmTheme:TideyWarmInterfaceThemeIsActive()];
+        } else {
+            _tideyClassicSidebarTableBackgroundColor = [_tideySidebarTableView.backgroundColor copy];
         }
+        _tideySidebarTableView.selectionHighlightStyle = [[self class]
+            tideySidebarSelectionHighlightStyleForWarmTheme:TideyWarmInterfaceThemeIsActive()];
         _tideySidebarTableView.intercellSpacing = NSMakeSize(0, 0);
         _tideySidebarTableView.rowHeight = 60;
         [_tideySidebarTableView registerForDraggedTypes:@[ iTermRootTerminalViewTideySidebarWorkspacePasteboardType ]];
@@ -6820,6 +6837,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     if (@available(macOS 11.0, *)) {
         _tideySidebarTableView.style = [[self class] tideySidebarTableStyleForWarmTheme:warm];
     }
+    _tideySidebarTableView.selectionHighlightStyle = [[self class]
+        tideySidebarSelectionHighlightStyleForWarmTheme:warm];
+    NSColor *sidebarTableBackgroundOverride = [[self class]
+        tideySidebarTableBackgroundOverrideColorForWarmTheme:warm];
+    _tideySidebarTableView.backgroundColor = sidebarTableBackgroundOverride
+        ?: _tideyClassicSidebarTableBackgroundColor;
     self.color = warm ? tokens.terminalSurroundColor : _tideyClassicRootColor;
     _tideySidebarView.layer.backgroundColor = tokens.sidebarBackgroundColor.CGColor;
     _tideyEditorPanelView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
@@ -8033,15 +8056,15 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
     pinView.hidden = !presentation.pinned;
     pinView.contentTintColor = warm ? tokens.sidebarSecondaryTextColor : [NSColor colorWithWhite:0.90 alpha:1];
-    cellView.textField.font = warm
-        ? [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]
-        : [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
-    cellView.textField.textColor = tokens.sidebarPrimaryTextColor;
-    cellView.textField.lineBreakMode = warm ? NSLineBreakByTruncatingTail : NSLineBreakByClipping;
-    cellView.textField.usesSingleLineMode = warm;
-    cellView.textField.cell.wraps = !warm;
+    cellView.textField.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
+    cellView.textField.textColor = presentation.selected
+        ? tokens.sidebarSelectedPrimaryTextColor
+        : tokens.sidebarPrimaryTextColor;
+    cellView.textField.lineBreakMode = NSLineBreakByClipping;
+    cellView.textField.usesSingleLineMode = NO;
+    cellView.textField.cell.wraps = YES;
     cellView.textField.cell.scrollable = NO;
-    cellView.textField.cell.truncatesLastVisibleLine = warm;
+    cellView.textField.cell.truncatesLastVisibleLine = NO;
     NSView *closeView = TideyFindCloseView(cellView);
     NSTextField *closeSymbol = (NSTextField *)closeView.subviews.firstObject;
     if ([closeSymbol isKindOfClass:NSTextField.class]) {
@@ -8050,8 +8073,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     CGFloat width = NSWidth(cellView.bounds);
     BOOL hasBody = presentation.hasBody;
     BOOL hasStatus = presentation.hasStatus;
-    BOOL reservesPinOrHint = presentation.pinned || presentation.shortcutHint.length > 0;
-    CGFloat titleTrailingReserve = (warm && !reservesPinOrHint) ? 36 : 56;
+    CGFloat titleTrailingReserve = 56;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
@@ -8090,9 +8112,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         bodyField.textColor = presentation.selected
                                   ? tokens.sidebarSelectedSecondaryTextColor
                                   : (warm ? tokens.sidebarSecondaryTextColor : NSColor.secondaryLabelColor);
-        bodyField.font = warm
-            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
-            : [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+        bodyField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         bodyField.hidden = NO;
         bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
 
@@ -8102,9 +8122,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         subtitleField.textColor = presentation.selected
                                       ? tokens.sidebarSelectedSecondaryTextColor
                                       : (warm ? tokens.sidebarSecondaryTextColor : NSColor.secondaryLabelColor);
-        subtitleField.font = warm
-            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
-            : [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+        subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         CGFloat cwdY = hasStatus ? 16 : 2;
         subtitleField.frame = NSMakeRect(8, cwdY, MAX(0, width - 16), 14);
     } else {
@@ -8117,9 +8135,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
 
         NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
-        subtitleField.font = warm
-            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
-            : [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
+        subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
         if (presentation.latestUnreadTitle) {
             subtitleField.stringValue = presentation.latestUnreadTitle;
             subtitleField.textColor = warm
@@ -8178,7 +8194,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
             if (!effectiveColor && hasRunning) {
                 effectiveColor = tokens.sidebarRunningColor;
             } else if (!effectiveColor && hasIdle) {
-                effectiveColor = tokens.sidebarIdleColor;
+                effectiveColor = presentation.selected
+                    ? tokens.sidebarSelectedIdleColor
+                    : tokens.sidebarIdleColor;
             }
             effectiveColor = effectiveColor ?: tokens.sidebarSecondaryTextColor;
         } else if (presentation.selected) {
@@ -8188,9 +8206,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         }
 
         NSMutableAttributedString *statusAttr = [[NSMutableAttributedString alloc] init];
-        NSFont *statusFont = warm
-            ? [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]
-            : [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
+        NSFont *statusFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
         NSDictionary *textAttrs = @{
             NSFontAttributeName: statusFont,
             NSForegroundColorAttributeName: effectiveColor,

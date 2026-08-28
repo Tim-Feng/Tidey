@@ -10,6 +10,8 @@
 - (NSTableCellView *)newTideySidebarCellView;
 + (NSTableViewStyle)tideySidebarTableStyleForWarmTheme:(BOOL)warm;
 + (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm;
++ (NSColor *)tideySidebarTableBackgroundOverrideColorForWarmTheme:(BOOL)warm;
++ (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyleForWarmTheme:(BOOL)warm;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
 - (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row;
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row;
@@ -282,7 +284,7 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     }
 }
 
-- (void)testWarmRowsUseFrozenTypographyAndSemanticRunningIdleColors {
+- (void)testWarmRowsPreserveProductionTypographyGeometryAndSemanticStatusColors {
     TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
     TideySidebarPresentationTestRootView *view =
         TideyNewPresentationRootView(@[ @"Running workspace", @"Idle workspace" ],
@@ -311,11 +313,14 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     NSAppearance *appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
 
     TideyAssertFont(runningCell.textField.font,
-                    [NSFont systemFontOfSize:15 weight:NSFontWeightSemibold]);
+                    [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold]);
     TideyAssertFont(runningSubtitle.font,
-                    [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]);
+                    [NSFont systemFontOfSize:11 weight:NSFontWeightRegular]);
     TideyAssertFont(runningStatus.font,
-                    [NSFont monospacedSystemFontOfSize:11.5 weight:NSFontWeightRegular]);
+                    [NSFont systemFontOfSize:10 weight:NSFontWeightRegular]);
+    TideyAssertRect(runningCell.textField.frame, NSMakeRect(8, 38, 248, 14));
+    TideyAssertRect(runningSubtitle.frame, NSMakeRect(8, 22, 288, 14));
+    TideyAssertRect(runningStatus.frame, NSMakeRect(8, 6, 288, 12));
     TideyAssertColor(runningCell.textField.textColor,
                      TideyInterfaceThemeController.shared.currentTokens.sidebarPrimaryTextColor,
                      appearance);
@@ -327,7 +332,58 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
                      appearance);
 }
 
-- (void)testWarmLongTitleUsesAvailableMinimumWidthAndTailTruncation {
+- (void)testWarmSelectedRowUsesSharpFocusTextHierarchyWithoutChangingStatusSemantics {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Selected workspace", @"Normal workspace" ],
+                                     @[ @"~/selected", @"~/normal" ],
+                                     @[ @NO, @NO ]);
+    view.testSelectedWorkspaceIndex = 0;
+    TideyCharacterizationSidebarTableView *tableView =
+        TideyInstallPresentationTable(view, 200, 120, -1);
+    NSString *selectedWorkspaceID = view.testWorkspaceIDs[0];
+    NSString *normalWorkspaceID = view.testWorkspaceIDs[1];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:selectedWorkspaceID
+                                                       key:@"shell"
+                                                     value:@"Idle"
+                                                      icon:@"pause.circle.fill"
+                                                  colorHex:nil];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:normalWorkspaceID
+                                                       key:@"shell"
+                                                     value:@"Idle"
+                                                      icon:@"pause.circle.fill"
+                                                  colorHex:nil];
+
+    NSTableCellView *selectedCell = TideyConfiguredPresentationCell(view, tableView, 0, 200, 60);
+    NSTableCellView *normalCell = TideyConfiguredPresentationCell(view, tableView, 1, 200, 60);
+    NSTextField *selectedSubtitle = TideyPresentationTextField(selectedCell, 1002);
+    NSTextField *selectedStatus = TideyPresentationTextField(selectedCell, 1008);
+    NSTextField *normalSubtitle = TideyPresentationTextField(normalCell, 1002);
+    NSTextField *normalStatus = TideyPresentationTextField(normalCell, 1008);
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSAppearance *appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+
+    TideyAssertColor(selectedCell.textField.textColor,
+                     tokens.sidebarSelectedPrimaryTextColor,
+                     appearance);
+    TideyAssertColor(selectedSubtitle.textColor,
+                     tokens.sidebarSelectedSecondaryTextColor,
+                     appearance);
+    TideyAssertColor(selectedStatus.textColor,
+                     tokens.sidebarSelectedIdleColor,
+                     appearance);
+    TideyAssertColor(normalCell.textField.textColor,
+                     tokens.sidebarPrimaryTextColor,
+                     appearance);
+    TideyAssertColor(normalSubtitle.textColor,
+                     tokens.sidebarSecondaryTextColor,
+                     appearance);
+    TideyAssertColor(normalStatus.textColor,
+                     tokens.sidebarIdleColor,
+                     appearance);
+}
+
+- (void)testWarmLongTitlePreservesProductionFieldGeometryAndBehavior {
     TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
     TideySidebarPresentationTestRootView *view =
         TideyNewPresentationRootView(@[ @"Tidey UI Redesign Workspace" ],
@@ -338,25 +394,34 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     NSTableCellView *cellView = TideyConfiguredPresentationCell(view, tableView, 0, 160, 60);
     NSTextField *titleField = cellView.textField;
 
-    TideyAssertRect(titleField.frame, NSMakeRect(8, 30, 124, 14));
-    XCTAssertEqual(titleField.lineBreakMode, NSLineBreakByTruncatingTail);
-    XCTAssertTrue(titleField.usesSingleLineMode);
-    XCTAssertFalse(titleField.cell.wraps);
-    XCTAssertTrue(titleField.cell.truncatesLastVisibleLine);
+    TideyAssertRect(titleField.frame, NSMakeRect(8, 30, 104, 14));
+    XCTAssertEqual(titleField.lineBreakMode, NSLineBreakByWordWrapping);
+    XCTAssertFalse(titleField.usesSingleLineMode);
+    XCTAssertTrue(titleField.cell.wraps);
+    XCTAssertFalse(titleField.cell.truncatesLastVisibleLine);
 }
 
-- (void)testWarmSidebarUsesPlainTableChromeAndClassicRestoresSourceListChrome {
+- (void)testWarmUsesCustomChromeWhileClassicPreservesProductionSourceListChrome {
     if (@available(macOS 11.0, *)) {
         XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:YES],
                        NSTableViewStylePlain);
         XCTAssertEqual([iTermRootTerminalView tideySidebarTableStyleForWarmTheme:NO],
                        NSTableViewStyleSourceList);
     }
+    NSAppearance *appearance = [NSAppearance appearanceNamed:NSAppearanceNameDarkAqua];
+    TideyAssertColor([iTermRootTerminalView tideySidebarTableBackgroundOverrideColorForWarmTheme:YES],
+                     NSColor.clearColor,
+                     appearance);
+    XCTAssertNil([iTermRootTerminalView tideySidebarTableBackgroundOverrideColorForWarmTheme:NO]);
+    XCTAssertEqual([iTermRootTerminalView tideySidebarSelectionHighlightStyleForWarmTheme:YES],
+                   NSTableViewSelectionHighlightStyleRegular);
+    XCTAssertEqual([iTermRootTerminalView tideySidebarSelectionHighlightStyleForWarmTheme:NO],
+                   NSTableViewSelectionHighlightStyleSourceList);
 }
 
-- (void)testWarmSidebarHasReadableMinimumWidthWithoutChangingClassic {
+- (void)testWarmAndClassicUseProductionMinimumWidth {
     XCTAssertEqualWithAccuracy([iTermRootTerminalView tideySidebarMinimumWidthForWarmTheme:YES],
-                               240,
+                               160,
                                0.001);
     XCTAssertEqualWithAccuracy([iTermRootTerminalView tideySidebarMinimumWidthForWarmTheme:NO],
                                160,
@@ -535,7 +600,7 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
     XCTAssertTrue(rowView.translatesAutoresizingMaskIntoConstraints);
 }
 
-- (void)testRegularStyleSelectedSidebarRowDrawsWarmSelectionCard {
+- (void)testRegularHighlightDrawsWarmSelectionCard {
     TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
     TideySidebarRowView *rowView = [[[TideySidebarRowView alloc]
         initWithFrame:NSMakeRect(0, 0, 200, 60)] autorelease];

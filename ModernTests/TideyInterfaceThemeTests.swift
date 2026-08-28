@@ -36,6 +36,8 @@ final class TideyInterfaceThemeTests: XCTestCase {
                     red: 209.0 / 255.0,
                     green: 152.0 / 255.0,
                     blue: 38.0 / 255.0)
+        assertColor(tokens.sidebarSelectedPrimaryTextColor, white: 1.0)
+        assertColor(tokens.sidebarSelectedIdleColor, white: 1.0, alpha: 0.8)
         XCTAssertFalse(tokens.usesRaisedSidebarSelection)
         XCTAssertFalse(tokens.usesRaisedRightPanelTabs)
     }
@@ -74,10 +76,18 @@ final class TideyInterfaceThemeTests: XCTestCase {
         let tokens = TideyInterfaceThemeTokens.warm
 
         assertColor(tokens.sidebarBackgroundColor, hex: 0x171615)
-        assertColor(tokens.sidebarSelectionColor, hex: 0x232120)
+        assertColor(tokens.sidebarSelectionColor, hex: 0x2F2C28)
+        assertColor(tokens.sidebarSelectionBorderColor,
+                    red: 240.0 / 255.0,
+                    green: 230.0 / 255.0,
+                    blue: 210.0 / 255.0,
+                    alpha: 0.16)
         assertColor(tokens.sidebarPrimaryTextColor, hex: 0xEAE4D4)
+        assertColor(tokens.sidebarSelectedPrimaryTextColor, hex: 0xF3EEDF)
         assertColor(tokens.sidebarSecondaryTextColor, hex: 0xA89F8D)
+        assertColor(tokens.sidebarSelectedSecondaryTextColor, hex: 0xC6BEAC)
         assertColor(tokens.sidebarIdleColor, hex: 0x6F6A60)
+        assertColor(tokens.sidebarSelectedIdleColor, hex: 0x8A8478)
         assertColor(tokens.sidebarRunningColor, hex: 0x7FB4A3)
         assertColor(tokens.sidebarUnreadColor, hex: 0xD19A66)
         assertColor(tokens.rightPanelBackgroundColor, hex: 0x151413)
@@ -86,7 +96,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.terminalSurroundColor, hex: 0x100F0E)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
         XCTAssertTrue(tokens.usesRaisedRightPanelTabs)
-        XCTAssertEqual(tokens.sidebarSelectionCornerRadius, 9)
+        XCTAssertEqual(tokens.sidebarSelectionCornerRadius, 8)
         XCTAssertEqual(tokens.rightPanelTabCornerRadius, 8)
     }
 
