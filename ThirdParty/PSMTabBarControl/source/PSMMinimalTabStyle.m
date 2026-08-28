@@ -193,7 +193,9 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     if (bar.orientation != PSMTabBarHorizontalOrientation) {
         return;
     }
-    [[NSColor controlAccentColor] set];
+    NSColor *underlineColor = [bar.delegate tabView:bar
+                                      valueOfOption:PSMTabBarControlOptionSelectedUnderlineColor];
+    [(underlineColor ?: NSColor.controlAccentColor) set];
     NSRect lineRect = NSMakeRect(NSMinX(cell.frame), NSMinY(cell.frame), NSWidth(cell.frame), 2);
     NSRectFillUsingOperation(lineRect, NSCompositingOperationSourceOver);
 }

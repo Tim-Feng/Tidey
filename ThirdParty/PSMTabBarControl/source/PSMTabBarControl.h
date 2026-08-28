@@ -59,6 +59,7 @@ extern PSMTabBarControlOptionKey PSMTabBarControlOptionHighVisibility;  // NSNum
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionColoredDrawBottomLineForHorizontalTabBar;  // NSNumber boolean
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionFontSizeOverride;  // NSNumber double
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence;  // NSNumber double in 0-1
+extern PSMTabBarControlOptionKey PSMTabBarControlOptionSelectedUnderlineColor;  // NSColor, nil preserves the system accent color
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionDragEdgeHeight;  // NSNumber CGFloat
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionAttachedToTitleBar;  // NSNumber bool, 10.16+
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionHTMLTabTitles;  // NSNumber bool
@@ -279,4 +280,3 @@ typedef NS_ENUM(int, PSMTabPosition) {
 @end
 
 BOOL PSMShouldExtendTransparencyIntoMinimalTabBar(void);
-
