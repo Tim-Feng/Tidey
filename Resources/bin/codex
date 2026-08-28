@@ -460,6 +460,105 @@ print(f"hooks.state={{{items}}}")
 PY
 }
 
+tidey_dev_hook_state_override() {
+    local real_codex_home="$1"
+    local current_dispatch_script="$2"
+    local hooks_path="$real_codex_home/hooks.json"
+
+    python3 - "$hooks_path" "$current_dispatch_script" <<'PY'
+from pathlib import Path
+import hashlib
+import json
+import os
+import shlex
+import sys
+
+hooks_path = Path(sys.argv[1])
+current_dispatch_script = os.path.normpath(sys.argv[2])
+production_dispatch_script = "/Applications/Tidey.app/Contents/Resources/bin/codex-hook-dispatch"
+allowed_dispatch_scripts = {
+    current_dispatch_script,
+    production_dispatch_script,
+}
+
+event_key_by_name = {
+    "SessionStart": "session_start",
+    "UserPromptSubmit": "user_prompt_submit",
+    "Stop": "stop",
+}
+event_suffix_by_name = {
+    "SessionStart": "session-start",
+    "UserPromptSubmit": "user-prompt-submit",
+    "Stop": "stop",
+}
+
+def hook_hash(event_key: str, command: str, timeout: int) -> str:
+    identity = {
+        "event_name": event_key,
+        "hooks": [
+            {
+                "async": False,
+                "command": command,
+                "timeout": timeout,
+                "type": "command",
+            }
+        ],
+    }
+    payload = json.dumps(identity, sort_keys=True, separators=(",", ":")).encode()
+    return "sha256:" + hashlib.sha256(payload).hexdigest()
+
+try:
+    root = json.loads(hooks_path.read_text())
+except Exception:
+    raise SystemExit(1)
+
+hooks = root.get("hooks", {}) if isinstance(root, dict) else {}
+entries = []
+
+for event_name, event_key in event_key_by_name.items():
+    groups = hooks.get(event_name, [])
+    if not isinstance(groups, list):
+        raise SystemExit(1)
+    event_entries = []
+    expected_suffix = event_suffix_by_name[event_name]
+    for group_index, group in enumerate(groups):
+        if not isinstance(group, dict):
+            continue
+        handlers = group.get("hooks", [])
+        if not isinstance(handlers, list):
+            continue
+        for handler_index, handler in enumerate(handlers):
+            if not isinstance(handler, dict) or handler.get("type") != "command":
+                continue
+            command = handler.get("command")
+            if not isinstance(command, str):
+                continue
+            try:
+                command_parts = shlex.split(command)
+            except ValueError:
+                continue
+            if len(command_parts) != 2 or command_parts[1] != expected_suffix:
+                continue
+            dispatch_script = os.path.normpath(command_parts[0])
+            if dispatch_script not in allowed_dispatch_scripts:
+                continue
+            if not os.path.isfile(dispatch_script) or not os.access(dispatch_script, os.X_OK):
+                continue
+            timeout = int(handler.get("timeout", 0) or 0)
+            state_key = f"{hooks_path}:{event_key}:{group_index}:{handler_index}"
+            event_entries.append((state_key, hook_hash(event_key, command, timeout)))
+    if len(event_entries) != 1:
+        raise SystemExit(1)
+    entries.extend(event_entries)
+
+items = ",".join(
+    f"{json.dumps(key)}={{trusted_hash={json.dumps(trusted_hash)}}}"
+    for key, trusted_hash in entries
+)
+print(f"hooks.state={{{items}}}")
+PY
+}
+
 resolve_real_codex_home() {
     local candidate="${CODEX_HOME:-$HOME/.codex}"
     local basename=""
@@ -1159,10 +1258,24 @@ main() {
     real_codex="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
     # Tidey Dev is a UI sandbox. Keep its agent commands outside the
     # production registry, Browser MCP, and tmux identity lifecycle while
-    # allowing already-configured Codex hooks to report status to the
-    # inherited Dev socket and workspace only.
+    # trusting only the three already-configured Tidey hooks needed to report
+    # status to the inherited Dev socket and workspace.
     if [[ "${TIDEY_DEV_SANDBOX:-}" == "1" ]]; then
-        exec env TIDEY_CODEX_HOOKS_ENABLED=1 "$real_codex" "$@"
+        real_codex_home="${CODEX_HOME:-$HOME/.codex}"
+        dispatch_script="$HOOK_DIR/codex-hook-dispatch"
+        local dev_hook_state_override=""
+        dev_hook_state_override="$(tidey_dev_hook_state_override "$real_codex_home" "$dispatch_script")" || {
+            echo "Tidey Dev: trusted Codex status hooks are unavailable; refusing a stale Running status." >&2
+            if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
+                "$HOOK_DIR/tidey" codex-hook session-start || true
+            fi
+            exec "$real_codex" "$@"
+        }
+        exec env TIDEY_CODEX_HOOKS_ENABLED=1 \
+            "$real_codex" \
+            -c 'features.hooks=true' \
+            -c "$dev_hook_state_override" \
+            "$@"
     fi
     tidey_hydrate_tmux_runtime_environment
     if is_app_server_runtime_command "$@" &&

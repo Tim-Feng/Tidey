@@ -44,12 +44,44 @@ set -euo pipefail
     printf 'args='
     printf '<%s>' "$@"
     printf '\n'
+    for arg in "$@"; do
+        printf 'arg=%s\n' "$arg"
+    done
     printf 'hooks=%s\n' "${TIDEY_CODEX_HOOKS_ENABLED:-}"
     printf 'codex_home=%s\n' "${CODEX_HOME:-}"
 } > "${DEV_WRAPPER_REAL_LOG:?}"
 SH
 
 chmod +x "$MOCK_BIN/tmux" "$REAL_BIN/claude" "$REAL_BIN/codex"
+
+mkdir -p "$TMP_ROOT/home/.codex"
+python3 - "$TMP_ROOT/home/.codex/hooks.json" "$REPO/Resources/bin/codex-hook-dispatch" <<'PY'
+from pathlib import Path
+import json
+import sys
+
+hooks_path = Path(sys.argv[1])
+dispatch = sys.argv[2]
+
+def quoted(command: str) -> str:
+    return "'" + command.replace("'", "'\\''") + "'"
+
+hooks_path.write_text(json.dumps({
+    "hooks": {
+        "SessionStart": [
+            {"hooks": [{"type": "command", "command": "/tmp/untrusted-session-hook"}]},
+            {"hooks": [{"type": "command", "command": f"{quoted(dispatch)} session-start", "timeout": 10}]},
+        ],
+        "UserPromptSubmit": [
+            {"hooks": [{"type": "command", "command": f"{quoted(dispatch)} user-prompt-submit", "timeout": 10}]},
+        ],
+        "Stop": [
+            {"hooks": [{"type": "command", "command": "/tmp/untrusted-stop-hook"}]},
+            {"hooks": [{"type": "command", "command": f"{quoted(dispatch)} stop", "timeout": 10}]},
+        ],
+    }
+}, indent=2) + "\n")
+PY
 
 for vendor in claude codex; do
     real_log="$TMP_ROOT/$vendor.real.log"
@@ -67,14 +99,33 @@ for vendor in claude codex; do
         DEV_WRAPPER_REAL_LOG="$real_log" \
         "$REPO/Resources/bin/$vendor" --sentinel "two words"
 
-    grep -qx 'args=<--sentinel><two words>' "$real_log" ||
-        fail "$vendor did not pass arguments through unchanged"
+    if [[ "$vendor" == "claude" ]]; then
+        grep -qx 'args=<--sentinel><two words>' "$real_log" ||
+            fail "$vendor did not pass arguments through unchanged"
+    else
+        grep -q '^args=.*<--sentinel><two words>$' "$real_log" ||
+            fail "$vendor did not preserve user arguments after isolated hook configuration"
+    fi
     [[ ! -e "$TMUX_LOG" ]] ||
         fail "$vendor read production tmux state in the Development sandbox"
 done
 
 grep -qx 'hooks=1' "$TMP_ROOT/codex.real.log" ||
     fail "Codex Development passthrough did not enable isolated status hooks"
+grep -qx 'arg=features.hooks=true' "$TMP_ROOT/codex.real.log" ||
+    fail "Codex Development passthrough did not enable the Codex hooks feature"
+hook_state="$(sed -n 's/^arg=\(hooks\.state=.*\)$/\1/p' "$TMP_ROOT/codex.real.log")"
+[[ -n "$hook_state" ]] ||
+    fail "Codex Development passthrough did not inject trusted Tidey hook state"
+for event in session_start user_prompt_submit stop; do
+    [[ "$hook_state" == *":$event:"* ]] ||
+        fail "Codex Development hook state omitted $event"
+done
+hash_count="$(printf '%s\n' "$hook_state" | grep -oE 'trusted_hash="sha256:[0-9a-f]{64}"' | wc -l | tr -d ' ')"
+[[ "$hash_count" == "3" ]] ||
+    fail "Codex Development hook state did not trust exactly three Tidey hooks"
+[[ "$hook_state" != *untrusted* ]] ||
+    fail "Codex Development hook state trusted an unrelated user hook"
 grep -qx 'codex_home=' "$TMP_ROOT/codex.real.log" ||
     fail "Codex Development passthrough replaced CODEX_HOME"
 [[ ! -e "$TMP_ROOT/home/Library/Application Support/Tidey Remote Bridge" ]] ||
