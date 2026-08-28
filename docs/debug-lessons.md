@@ -460,11 +460,10 @@
 
 ## Theme System
 
-- `NSTableViewStyleSourceList` 的 selection 顏色無法自訂
-  - 沒有公開 API，`drawSelectionInRect:` 在 SourceList 模式下不會被呼叫
-  - 解法：`selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone` + 自己加 overlay subview
-  - overlay z-order：系統 selection → overlay → cell content（用 `NSWindowBelow relativeTo:cellView`）
-  - 不要改 `NSTableViewStylePlain`，會破壞 SourceList 的排版（padding、行高、字體）
+- `NSTableViewStyleSourceList` 的 selection 顏色無法可靠自訂
+  - macOS 15 的真實 Tidey Dev 視窗不會為 Source List 選取列呼叫 `drawSelectionInRect:`，仍由系統畫原生藍色；在 row 上疊自訂 selection view 的實驗也沒有蓋過實際系統層級
+  - 需要精確自訂焦點色時，Warm 使用 `NSTableViewStylePlain`＋`NSTableViewSelectionHighlightStyleRegular`，讓 `TideySidebarRowView` 畫選取卡；Classic 保留 Source List
+  - Plain／Source List 的切換必須另外凍結 row height、欄位 frame、字級、最小寬度、背景與 close hit area，並以真實 Development 視窗驗收；不能只靠 hosted bitmap 或假設 table style 不影響排版
 
 - `CALayer.backgroundColor` 改了但畫面不更新
   - notification handler 確認有被呼叫（用 NSLog 驗證），但 layer 改動沒反映到畫面

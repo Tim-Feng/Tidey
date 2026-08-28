@@ -42,7 +42,7 @@ NSTableViewStyle resolved = tableView.effectiveStyle;
 
 ### 常見坑
 
-- **Source list style 的 selection 由系統用 NSVisualEffectView 繪製**（macOS 11+）。系統會在 row view 內部插入一個 `NSVisualEffectView`（material 為 "Generic Match Appearance"）來畫 selection highlight，而不一定呼叫 row view 的 `drawSelection(in:)`。
+- **Source list style 的 selection 由系統用內部 view 繪製**（macOS 11+）。系統可能繞過 row view 的 `drawSelection(in:)`；Tidey 在 macOS 15 的真實 Dev 視窗即使覆寫 row drawing，仍會顯示原生藍色。若產品要求精確自訂選取色，使用 `.plain`＋`.regular` 讓 row drawing 成為唯一 owner，並以測試明確凍結原本 Source List 的幾何；Classic 路徑仍可保留 `.sourceList`。
 - 如果 table view 嵌套在 `NSVisualEffectView` 內並設了透明背景，Big Sur 上 selection 可能變透明（Catalina 不會）。
 - `.automatic` style 在 SDK 升級後行為可能改變——建議明確指定 style。
 - View-based table view 只有可見區域的 view 存在，scroll 時會 recycle（reuse queue 機制）。
@@ -87,7 +87,7 @@ Row view 的 cell view 是透過 `addSubview:` 加入的普通 subview。可以�
 
 ### 常見坑
 
-- **Source list style (macOS 11+)**: 系統不一定呼叫 `drawSelection(in:)`，而是插入一個內部 `NSVisualEffectView` 來繪製 selection。要自訂 source list selection，需要攔截 subview 的加入（override `addSubview:` 或 `didAddSubview:`），移除或隱藏系統插入的 NSVisualEffectView，再用自己的 view 繪製。
+- **Source list style (macOS 11+)**: 系統不一定呼叫 `drawSelection(in:)`，內部 selection view 也不是公開契約。不要以攔截 `addSubview:`、隱藏私有 view 或猜測 z-order 當成穩定產品方案。精確自訂 selection 時改用 `.plain`＋`.regular`，並自行凍結需要保留的 padding、行高、字級與欄位 frame。
 - **isEmphasized 與顏色選擇**: override `drawSelection(in:)` 時應檢查 `self.isEmphasized`：
   - `YES` → 使用 `selectedContentBackgroundColor`（accent color）
   - `NO` → 使用 `unemphasizedSelectedContentBackgroundColor`（灰色）
