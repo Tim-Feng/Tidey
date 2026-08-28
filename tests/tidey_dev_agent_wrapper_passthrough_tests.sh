@@ -6,7 +6,9 @@ REPO="$(cd "$(dirname "$0")/.." && pwd)"
 TMP_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/tidey-dev-agent-wrapper.XXXXXX")"
 MOCK_BIN="$TMP_ROOT/mock-bin"
 REAL_BIN="$TMP_ROOT/real-bin"
+WRAPPER_BIN="$TMP_ROOT/wrapper-bin"
 TMUX_LOG="$TMP_ROOT/tmux.log"
+TIDEY_LOG="$TMP_ROOT/tidey.log"
 
 cleanup() {
     rm -rf "$TMP_ROOT"
@@ -18,7 +20,7 @@ fail() {
     exit 1
 }
 
-mkdir -p "$MOCK_BIN" "$REAL_BIN" "$TMP_ROOT/home"
+mkdir -p "$MOCK_BIN" "$REAL_BIN" "$WRAPPER_BIN" "$TMP_ROOT/home"
 
 cat > "$MOCK_BIN/tmux" <<'SH'
 #!/usr/bin/env bash
@@ -52,10 +54,21 @@ set -euo pipefail
 } > "${DEV_WRAPPER_REAL_LOG:?}"
 SH
 
-chmod +x "$MOCK_BIN/tmux" "$REAL_BIN/claude" "$REAL_BIN/codex"
+cp "$REPO/Resources/bin/codex" "$WRAPPER_BIN/codex"
+cp "$REPO/Resources/bin/codex-hook-dispatch" "$WRAPPER_BIN/codex-hook-dispatch"
+cp "$REPO/Resources/bin/tidey-tmux-pane-identity" "$WRAPPER_BIN/tidey-tmux-pane-identity"
+cat > "$WRAPPER_BIN/tidey" <<'SH'
+#!/usr/bin/env bash
+set -euo pipefail
+printf '%s\n' "$*" >> "${DEV_WRAPPER_TIDEY_LOG:?}"
+SH
+
+chmod +x "$MOCK_BIN/tmux" "$REAL_BIN/claude" "$REAL_BIN/codex" \
+    "$WRAPPER_BIN/codex" "$WRAPPER_BIN/codex-hook-dispatch" \
+    "$WRAPPER_BIN/tidey-tmux-pane-identity" "$WRAPPER_BIN/tidey"
 
 mkdir -p "$TMP_ROOT/home/.codex"
-python3 - "$TMP_ROOT/home/.codex/hooks.json" "$REPO/Resources/bin/codex-hook-dispatch" <<'PY'
+python3 - "$TMP_ROOT/home/.codex/hooks.json" "$WRAPPER_BIN/codex-hook-dispatch" <<'PY'
 from pathlib import Path
 import json
 import sys
@@ -85,7 +98,12 @@ PY
 
 for vendor in claude codex; do
     real_log="$TMP_ROOT/$vendor.real.log"
+    wrapper="$REPO/Resources/bin/$vendor"
+    if [[ "$vendor" == "codex" ]]; then
+        wrapper="$WRAPPER_BIN/codex"
+    fi
     rm -f "$TMUX_LOG"
+    rm -f "$TIDEY_LOG"
     env -u CODEX_HOME -u TIDEY_CODEX_HOOKS_ENABLED \
         HOME="$TMP_ROOT/home" \
         PATH="$MOCK_BIN:$REAL_BIN:/usr/bin:/bin" \
@@ -96,8 +114,9 @@ for vendor in claude codex; do
         TIDEY_WORKSPACE_ID=production-workspace \
         TIDEY_PANEL_ID=production-panel \
         DEV_WRAPPER_TMUX_LOG="$TMUX_LOG" \
+        DEV_WRAPPER_TIDEY_LOG="$TIDEY_LOG" \
         DEV_WRAPPER_REAL_LOG="$real_log" \
-        "$REPO/Resources/bin/$vendor" --sentinel "two words"
+        "$wrapper" --sentinel "two words"
 
     if [[ "$vendor" == "claude" ]]; then
         grep -qx 'args=<--sentinel><two words>' "$real_log" ||
@@ -110,6 +129,8 @@ for vendor in claude codex; do
         fail "$vendor read production tmux state in the Development sandbox"
 done
 
+grep -qx 'codex-hook session-start' "$TIDEY_LOG" ||
+    fail "Codex Development passthrough did not report its initial idle edge"
 grep -qx 'hooks=1' "$TMP_ROOT/codex.real.log" ||
     fail "Codex Development passthrough did not enable isolated status hooks"
 grep -qx 'arg=features.hooks=true' "$TMP_ROOT/codex.real.log" ||

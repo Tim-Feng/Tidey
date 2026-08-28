@@ -1271,6 +1271,9 @@ main() {
             fi
             exec "$real_codex" "$@"
         }
+        if [[ -n "${TIDEY_SOCKET_PATH:-}" && -n "${TIDEY_WORKSPACE_ID:-}" && -x "$HOOK_DIR/tidey" ]]; then
+            "$HOOK_DIR/tidey" codex-hook session-start || true
+        fi
         exec env TIDEY_CODEX_HOOKS_ENABLED=1 \
             "$real_codex" \
             -c 'features.hooks=true' \
