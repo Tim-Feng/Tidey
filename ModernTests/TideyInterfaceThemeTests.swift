@@ -100,6 +100,80 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(tokens.rightPanelTabCornerRadius, 8)
     }
 
+    func testWarmTerminalPaletteMatchesFrozenDesignValues() {
+        let palette = TideyTerminalPalettePolicy.warmColorTable
+        let expected: [(Int32, Int)] = [
+            (kColorMapBackground, 0x100F0E),
+            (kColorMapForeground, 0xDDD5C2),
+            (kColorMapBold, 0xF3EEDF),
+            (kColorMapCursor, 0xDDD5C2),
+            (kColorMapCursorText, 0x100F0E),
+            (kColorMapSelection, 0x3A362F),
+            (kColorMapSelectedText, 0xF3EEDF),
+            (kColorMapLink, 0x7E9CB8),
+        ] + [
+            0x24211E, 0xC97A6D, 0x9BB584, 0xD9B26C,
+            0x7E9CB8, 0xB693A5, 0x7AA89F, 0xD5CDBB,
+            0x57524A, 0xE09186, 0xB4CC9E, 0xE8C787,
+            0x97B4CE, 0xCBA9BB, 0x93C0B6, 0xF3EEDF,
+        ].enumerated().map { index, hex in
+            (kColorMap8bitBase + Int32(index), hex)
+        }
+
+        XCTAssertEqual(palette.count, expected.count)
+        for (key, hex) in expected {
+            guard let color = palette[NSNumber(value: key)] else {
+                XCTFail("Missing terminal palette key \(key)")
+                continue
+            }
+            assertColor(color, hex: hex)
+        }
+    }
+
+    func testTerminalPalettePolicyLeavesClassicColorTableAndInputsUnchanged() {
+        let factory = terminalColorTable(seed: 0x101010)
+        let original = factory
+
+        let result = TideyTerminalPalettePolicy.colorTable(
+            byApplyingWarmPaletteTo: factory,
+            factoryColorTable: factory,
+            warmEnabled: false)
+
+        assertColorTablesEqual(result, factory)
+        assertColorTablesEqual(factory, original)
+    }
+
+    func testTerminalPalettePolicyAppliesWarmOnlyToFactoryPaletteWithoutMutation() {
+        let factory = terminalColorTable(seed: 0x202020)
+        let original = factory
+
+        let result = TideyTerminalPalettePolicy.colorTable(
+            byApplyingWarmPaletteTo: factory,
+            factoryColorTable: factory,
+            warmEnabled: true)
+
+        XCTAssertEqual(result.count, factory.count)
+        assertColor(result[NSNumber(value: kColorMapBackground)]!, hex: 0x100F0E)
+        assertColor(result[NSNumber(value: kColorMapForeground)]!, hex: 0xDDD5C2)
+        assertColor(result[NSNumber(value: kColorMap8bitBase + 4)]!, hex: 0x7E9CB8)
+        assertColorTablesEqual(factory, original)
+    }
+
+    func testTerminalPalettePolicyExemptsEntireCustomPalette() {
+        let factory = terminalColorTable(seed: 0x303030)
+        var custom = factory
+        custom[NSNumber(value: kColorMapBackground)] = color(hex: 0x010203)
+        let original = custom
+
+        let result = TideyTerminalPalettePolicy.colorTable(
+            byApplyingWarmPaletteTo: custom,
+            factoryColorTable: factory,
+            warmEnabled: true)
+
+        assertColorTablesEqual(result, custom)
+        assertColorTablesEqual(custom, original)
+    }
+
     func testControllerPersistsEffectiveThemeAndNotifiesOnlyOnChange() {
         let suiteName = "TideyInterfaceThemeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
@@ -157,6 +231,45 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(converted.greenComponent, green, accuracy: 0.001, file: file, line: line)
         XCTAssertEqual(converted.blueComponent, blue, accuracy: 0.001, file: file, line: line)
         XCTAssertEqual(converted.alphaComponent, alpha, accuracy: 0.001, file: file, line: line)
+    }
+
+    private func terminalColorTable(seed: Int) -> [NSNumber: NSColor] {
+        let managedKeys = [
+            kColorMapForeground,
+            kColorMapBackground,
+            kColorMapBold,
+            kColorMapSelection,
+            kColorMapSelectedText,
+            kColorMapCursor,
+            kColorMapCursorText,
+            kColorMapLink,
+        ] + (0..<16).map { kColorMap8bitBase + Int32($0) }
+
+        return Dictionary(uniqueKeysWithValues: managedKeys.enumerated().map { index, key in
+            let component = (seed + index * 0x030303) & 0xFFFFFF
+            return (NSNumber(value: key), color(hex: component))
+        })
+    }
+
+    private func assertColorTablesEqual(_ lhs: [NSNumber: NSColor],
+                                        _ rhs: [NSNumber: NSColor],
+                                        file: StaticString = #filePath,
+                                        line: UInt = #line) {
+        XCTAssertEqual(Set(lhs.keys), Set(rhs.keys), file: file, line: line)
+        for key in lhs.keys {
+            guard let left = lhs[key], let right = rhs[key] else {
+                XCTFail("Missing color for key \(key)", file: file, line: line)
+                continue
+            }
+            XCTAssertTrue(left.isEqual(right), "Colors differ for key \(key)", file: file, line: line)
+        }
+    }
+
+    private func color(hex: Int) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+                green: CGFloat((hex >> 8) & 0xff) / 255,
+                blue: CGFloat(hex & 0xff) / 255,
+                alpha: 1)
     }
 
     private func assertColor(_ color: NSColor,

@@ -409,3 +409,75 @@ final class TideyInterfaceThemeTokens: NSObject {
         super.init()
     }
 }
+
+@objcMembers
+final class TideyTerminalPalettePolicy: NSObject {
+    static let warmColorTable: [NSNumber: NSColor] = {
+        let namedColors: [(Int32, Int)] = [
+            (kColorMapBackground, 0x100F0E),
+            (kColorMapForeground, 0xDDD5C2),
+            (kColorMapBold, 0xF3EEDF),
+            (kColorMapCursor, 0xDDD5C2),
+            (kColorMapCursorText, 0x100F0E),
+            (kColorMapSelection, 0x3A362F),
+            (kColorMapSelectedText, 0xF3EEDF),
+            (kColorMapLink, 0x7E9CB8),
+        ]
+        let ansiHexColors = [
+            0x24211E, 0xC97A6D, 0x9BB584, 0xD9B26C,
+            0x7E9CB8, 0xB693A5, 0x7AA89F, 0xD5CDBB,
+            0x57524A, 0xE09186, 0xB4CC9E, 0xE8C787,
+            0x97B4CE, 0xCBA9BB, 0x93C0B6, 0xF3EEDF,
+        ]
+        let ansiColors = ansiHexColors.enumerated().map { index, hex in
+            (kColorMap8bitBase + Int32(index), hex)
+        }
+
+        return Dictionary(uniqueKeysWithValues: (namedColors + ansiColors).map { key, hex in
+            (NSNumber(value: key), color(hex: hex))
+        })
+    }()
+
+    @objc(colorTableByApplyingWarmPaletteTo:factoryColorTable:warmEnabled:)
+    static func colorTable(byApplyingWarmPaletteTo colorTable: [NSNumber: NSColor],
+                           factoryColorTable: [NSNumber: NSColor],
+                           warmEnabled: Bool) -> [NSNumber: NSColor] {
+        guard warmEnabled,
+              matchesFactoryPalette(colorTable, factoryColorTable: factoryColorTable) else {
+            return colorTable
+        }
+
+        var result = colorTable
+        warmColorTable.forEach { result[$0.key] = $0.value }
+        return result
+    }
+
+    private static func matchesFactoryPalette(_ colorTable: [NSNumber: NSColor],
+                                               factoryColorTable: [NSNumber: NSColor]) -> Bool {
+        warmColorTable.keys.allSatisfy { key in
+            guard let current = colorTable[key], let factory = factoryColorTable[key] else {
+                return false
+            }
+            return colorsAreEqual(current, factory)
+        }
+    }
+
+    private static func colorsAreEqual(_ lhs: NSColor, _ rhs: NSColor) -> Bool {
+        guard let left = lhs.usingColorSpace(.sRGB),
+              let right = rhs.usingColorSpace(.sRGB) else {
+            return lhs.isEqual(rhs)
+        }
+        let tolerance: CGFloat = 0.002
+        return abs(left.redComponent - right.redComponent) <= tolerance &&
+            abs(left.greenComponent - right.greenComponent) <= tolerance &&
+            abs(left.blueComponent - right.blueComponent) <= tolerance &&
+            abs(left.alphaComponent - right.alphaComponent) <= tolerance
+    }
+
+    private static func color(hex: Int) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+                green: CGFloat((hex >> 8) & 0xff) / 255,
+                blue: CGFloat(hex & 0xff) / 255,
+                alpha: 1)
+    }
+}
