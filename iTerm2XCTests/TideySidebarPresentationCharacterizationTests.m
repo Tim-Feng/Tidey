@@ -153,6 +153,57 @@ static NSTableCellView *TideyConfiguredPresentationCell(TideySidebarPresentation
     return cellView;
 }
 
+static NSDictionary<NSString *, NSValue *> *TideyLaidOutSidebarGeometry(BOOL warm) {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = warm ? @"warm" : @"classic";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Workspace" ], @[ @"~/project" ], @[ @NO ]);
+    TideySidebarTableView *tableView = [[[TideySidebarTableView alloc]
+        initWithFrame:NSMakeRect(0, 0, 200, 120)] autorelease];
+    tableView.delegate = view;
+    tableView.dataSource = view;
+    tableView.headerView = nil;
+    tableView.intercellSpacing = NSMakeSize(0, 0);
+    tableView.rowHeight = 60;
+    if (@available(macOS 11.0, *)) {
+        tableView.style = [iTermRootTerminalView tideySidebarTableStyleForWarmTheme:warm];
+    }
+    tableView.selectionHighlightStyle =
+        [iTermRootTerminalView tideySidebarSelectionHighlightStyleForWarmTheme:warm];
+    NSTableColumn *column = [[[NSTableColumn alloc] initWithIdentifier:@"Sidebar"] autorelease];
+    column.width = 200;
+    column.resizingMask = NSTableColumnAutoresizingMask;
+    [tableView addTableColumn:column];
+    [view setValue:tableView forKey:@"tideySidebarTableView"];
+
+    NSScrollView *scrollView = [[[NSScrollView alloc]
+        initWithFrame:NSMakeRect(0, 0, 200, 120)] autorelease];
+    scrollView.drawsBackground = NO;
+    scrollView.documentView = tableView;
+    [tableView reloadData];
+    [scrollView layoutSubtreeIfNeeded];
+    [tableView layoutSubtreeIfNeeded];
+
+    NSTableRowView *rowView = [tableView rowViewAtRow:0 makeIfNecessary:YES];
+    NSTableCellView *cellView = [tableView viewAtColumn:0 row:0 makeIfNecessary:YES];
+    XCTAssertNotNil(rowView);
+    XCTAssertNotNil(cellView);
+    [cellView layoutSubtreeIfNeeded];
+    NSRect rowRect = [rowView convertRect:rowView.bounds toView:tableView];
+    NSRect cellRect = [cellView convertRect:cellView.bounds toView:tableView];
+    NSRect titleRect = [cellView convertRect:cellView.textField.frame toView:tableView];
+    NSRect visibleRowRect = [rowView convertRect:rowView.bounds toView:scrollView];
+    NSRect visibleCellRect = [cellView convertRect:cellView.bounds toView:scrollView];
+    NSRect visibleTitleRect = [cellView convertRect:cellView.textField.frame toView:scrollView];
+    return @{
+        @"row": [NSValue valueWithRect:rowRect],
+        @"cell": [NSValue valueWithRect:cellRect],
+        @"title": [NSValue valueWithRect:titleRect],
+        @"visibleRow": [NSValue valueWithRect:visibleRowRect],
+        @"visibleCell": [NSValue valueWithRect:visibleCellRect],
+        @"visibleTitle": [NSValue valueWithRect:visibleTitleRect],
+    };
+}
+
 static NSView *TideyPresentationSubview(NSTableCellView *cellView, NSString *identifier) {
     for (NSView *subview in cellView.subviews) {
         if ([subview.identifier isEqualToString:identifier]) {
@@ -421,6 +472,18 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
                    NSTableViewSelectionHighlightStyleRegular);
     XCTAssertEqual([iTermRootTerminalView tideySidebarSelectionHighlightStyleForWarmTheme:NO],
                    NSTableViewSelectionHighlightStyleSourceList);
+}
+
+- (void)testWarmAndClassicSidebarTableLayoutsUseTheSameVisibleGeometry {
+    NSDictionary<NSString *, NSValue *> *classic = TideyLaidOutSidebarGeometry(NO);
+    NSDictionary<NSString *, NSValue *> *warm = TideyLaidOutSidebarGeometry(YES);
+
+    TideyAssertRect(warm[@"row"].rectValue, classic[@"row"].rectValue);
+    TideyAssertRect(warm[@"cell"].rectValue, classic[@"cell"].rectValue);
+    TideyAssertRect(warm[@"title"].rectValue, classic[@"title"].rectValue);
+    TideyAssertRect(warm[@"visibleRow"].rectValue, classic[@"visibleRow"].rectValue);
+    TideyAssertRect(warm[@"visibleCell"].rectValue, classic[@"visibleCell"].rectValue);
+    TideyAssertRect(warm[@"visibleTitle"].rectValue, classic[@"visibleTitle"].rectValue);
 }
 
 - (void)testWarmAndClassicUseProductionMinimumWidth {

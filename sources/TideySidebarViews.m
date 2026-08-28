@@ -7,6 +7,7 @@ const CGFloat kTideySidebarBadgeLeadingInset = 1;
 const CGFloat kTideySidebarCloseButtonTopInset = 10;
 const CGFloat kTideySidebarCloseButtonTrailingInset = 4;
 const CGFloat kTideySidebarCloseButtonSize = 16;
+static const CGFloat kTideySidebarSourceListCellHorizontalInset = 16;
 
 NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
 NSUserInterfaceItemIdentifier const kTideySidebarBadgeViewIdentifier = @"TideySidebarBadgeView";
@@ -28,6 +29,16 @@ NSView *TideyFindCloseView(NSView *container) {
         _tideyHoveredRow = -1;
     }
     return self;
+}
+
+- (NSRect)frameOfCellAtColumn:(NSInteger)column row:(NSInteger)row {
+    NSRect frame = [super frameOfCellAtColumn:column row:row];
+    if (@available(macOS 11.0, *)) {
+        if (self.style == NSTableViewStylePlain) {
+            return NSInsetRect(frame, kTideySidebarSourceListCellHorizontalInset, 0);
+        }
+    }
+    return frame;
 }
 
 - (void)updateTrackingAreas {
