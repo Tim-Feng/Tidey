@@ -582,6 +582,8 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 + (CGFloat)tideySidebarMinimumWidthForWarmTheme:(BOOL)warm;
 + (NSColor *)tideySidebarTableBackgroundOverrideColorForWarmTheme:(BOOL)warm;
 + (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyleForWarmTheme:(BOOL)warm;
++ (NSColor *)tideyFileTreeBackgroundOverrideColorForWarmTheme:(BOOL)warm;
++ (NSTableViewSelectionHighlightStyle)tideyFileTreeSelectionHighlightStyleForWarmTheme:(BOOL)warm;
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
@@ -1097,6 +1099,56 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 @end
 
+typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
+    TideyPaneBoundaryEdgeLeft,
+    TideyPaneBoundaryEdgeRight,
+    TideyPaneBoundaryEdgeBottom,
+};
+
+// 1px separator pinned to one edge of its superview. Warm derives structural
+// separation from these lines because all base surfaces share a single fill;
+// Classic keeps them invisible via a clear paneBoundaryColor token.
+@interface TideyPaneBoundaryView : NSView
+@property(nonatomic) TideyPaneBoundaryEdge tideyEdge;
+@end
+
+@implementation TideyPaneBoundaryView
+
+- (void)tideyPinToSuperviewEdge {
+    NSView *parent = self.superview;
+    if (!parent) {
+        return;
+    }
+    const NSRect bounds = parent.bounds;
+    switch (self.tideyEdge) {
+        case TideyPaneBoundaryEdgeLeft:
+            self.frame = NSMakeRect(0, 0, 1, NSHeight(bounds));
+            break;
+        case TideyPaneBoundaryEdgeRight:
+            self.frame = NSMakeRect(MAX(0, NSWidth(bounds) - 1), 0, 1, NSHeight(bounds));
+            break;
+        case TideyPaneBoundaryEdgeBottom:
+            self.frame = NSMakeRect(0, 0, NSWidth(bounds), 1);
+            break;
+    }
+}
+
+- (void)viewDidMoveToSuperview {
+    [super viewDidMoveToSuperview];
+    [self tideyPinToSuperviewEdge];
+}
+
+- (void)resizeWithOldSuperviewSize:(NSSize)oldSize {
+    [super resizeWithOldSuperviewSize:oldSize];
+    [self tideyPinToSuperviewEdge];
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+@end
+
 @interface TideyRightPanelTabStripView : NSView
 @property(nonatomic, assign) id tideyOwner;
 @end
@@ -1155,6 +1207,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSScrollView *_tideySidebarScrollView;
     NSTableView *_tideySidebarTableView;
     NSColor *_tideyClassicSidebarTableBackgroundColor;
+    NSColor *_tideyClassicFileTreeBackgroundColor;
+    NSHashTable<TideyPaneBoundaryView *> *_tideyPaneBoundaryViews;
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
     NSView *_tideyEditorTabStripView;
@@ -1372,6 +1426,15 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 
 + (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyleForWarmTheme:(BOOL)warm {
+    return warm ? NSTableViewSelectionHighlightStyleNone
+                : NSTableViewSelectionHighlightStyleSourceList;
+}
+
++ (NSColor *)tideyFileTreeBackgroundOverrideColorForWarmTheme:(BOOL)warm {
+    return warm ? NSColor.clearColor : nil;
+}
+
++ (NSTableViewSelectionHighlightStyle)tideyFileTreeSelectionHighlightStyleForWarmTheme:(BOOL)warm {
     return warm ? NSTableViewSelectionHighlightStyleNone
                 : NSTableViewSelectionHighlightStyleSourceList;
 }
@@ -1966,6 +2029,16 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         if (@available(macOS 11.0, *)) {
             _tideyEditorFileTreeView.style = NSTableViewStyleSourceList;
         }
+        _tideyClassicFileTreeBackgroundColor = [_tideyEditorFileTreeView.backgroundColor copy];
+        {
+            const BOOL fileTreeWarm = TideyWarmInterfaceThemeIsActive();
+            _tideyEditorFileTreeView.selectionHighlightStyle =
+                [[self class] tideyFileTreeSelectionHighlightStyleForWarmTheme:fileTreeWarm];
+            NSColor *fileTreeBackgroundOverride =
+                [[self class] tideyFileTreeBackgroundOverrideColorForWarmTheme:fileTreeWarm];
+            _tideyEditorFileTreeView.backgroundColor = fileTreeBackgroundOverride
+                ?: _tideyClassicFileTreeBackgroundColor;
+        }
         _tideyEditorFileTreeView.rowHeight = 22;
         _tideyEditorFileTreeView.indentationPerLevel = 12;
         _tideyEditorFileTreeView.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
@@ -1979,6 +2052,16 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorFileTreeView.outlineTableColumn = fileTreeColumn;
         _tideyEditorFileTreeScrollView.documentView = _tideyEditorFileTreeView;
         [self reloadTideyEditorFileTree];
+
+        _tideyPaneBoundaryViews = [NSHashTable weakObjectsHashTable];
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
+                                        toView:_tideySidebarView];
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                        toView:_tideyEditorPanelView];
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                        toView:_tideyEditorFileTreeContainerView];
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
+                                        toView:_tideyEditorTabStripView];
 
         self.tideySidebarDragHandle = [[iTermDragHandleView alloc] initWithFrame:NSZeroRect];
         self.tideySidebarDragHandle.delegate = self;
@@ -2106,6 +2189,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         }
         [self addSubview:_tabBarBacking];
         [_tabBarBacking addSubview:_tabBarControl];
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
+                                        toView:_tabBarBacking];
         _tideyTerminalPanelHintOverlayView = [[TideyPassthroughView alloc] initWithFrame:NSZeroRect];
         _tideyTerminalPanelHintOverlayView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [_tabBarControl addSubview:_tideyTerminalPanelHintOverlayView];
@@ -5081,6 +5166,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         if (pane == _primaryPane && subview == _tideyEditorPanelHintOverlayView) {
             continue;
         }
+        if ([subview isKindOfClass:[TideyPaneBoundaryView class]]) {
+            continue;
+        }
         [subview removeFromSuperview];
     }
 
@@ -6313,6 +6401,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     tabStripView.layer.masksToBounds = YES;
     ((TideyRightPanelTabStripView *)tabStripView).tideyOwner = self;
     [containerView addSubview:tabStripView];
+    [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
+                                    toView:tabStripView];
     _secondaryPane.tabStripView = tabStripView;
 
     [self loadTideyEditorShellIfNeededForPane:_secondaryPane];
@@ -6837,9 +6927,26 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self tideyApplyInterfaceThemeTokens];
 }
 
+- (void)tideyAddPaneBoundaryViewWithEdge:(TideyPaneBoundaryEdge)edge toView:(NSView *)parent {
+    if (!parent) {
+        return;
+    }
+    TideyPaneBoundaryView *boundaryView = [[TideyPaneBoundaryView alloc] initWithFrame:NSZeroRect];
+    boundaryView.tideyEdge = edge;
+    boundaryView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    boundaryView.wantsLayer = YES;
+    boundaryView.layer.backgroundColor =
+        TideyInterfaceThemeController.shared.currentTokens.paneBoundaryColor.CGColor;
+    [parent addSubview:boundaryView positioned:NSWindowAbove relativeTo:nil];
+    [_tideyPaneBoundaryViews addObject:boundaryView];
+}
+
 - (void)tideyApplyInterfaceThemeTokens {
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     BOOL warm = TideyWarmInterfaceThemeIsActive();
+    for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
+        boundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
+    }
     if (@available(macOS 11.0, *)) {
         _tideySidebarTableView.style = [[self class] tideySidebarTableStyleForWarmTheme:warm];
     }
@@ -6854,6 +6961,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     _tideyEditorPanelView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
     _tideyEditorTabStripView.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
     _tideyEditorFileTreeContainerView.layer.backgroundColor = tokens.rightPanelFileTreeBackgroundColor.CGColor;
+    _tideyEditorFileTreeView.selectionHighlightStyle = [[self class]
+        tideyFileTreeSelectionHighlightStyleForWarmTheme:warm];
+    NSColor *fileTreeBackgroundOverride = [[self class]
+        tideyFileTreeBackgroundOverrideColorForWarmTheme:warm];
+    _tideyEditorFileTreeView.backgroundColor = fileTreeBackgroundOverride
+        ?: _tideyClassicFileTreeBackgroundColor;
+    [_tideyEditorFileTreeView reloadData];
     _tideyEditorPanelLabel.textColor = tokens.rightPanelPrimaryTextColor;
     _windowTitleLabel.textColor = warm
         ? tokens.sidebarPrimaryTextColor
@@ -6871,10 +6985,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         : [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
     _tabBarBacking.wantsLayer = YES;
     _tabBarBacking.layer.backgroundColor = warm
-        ? [NSColor colorWithSRGBRed:0x1A / 255.0
-                              green:0x19 / 255.0
-                               blue:0x18 / 255.0
-                              alpha:1].CGColor
+        ? tokens.rightPanelTabStripBackgroundColor.CGColor
         : NSColor.clearColor.CGColor;
     _tabBarBacking.visualEffectView.hidden = warm || _tideyClassicTabBarVisualEffectHidden;
     for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
@@ -7559,7 +7670,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         cellView = [self newTideyEditorFileTreeCellView];
     }
     TideyEditorFileNode *node = item;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     cellView.textField.stringValue = node.displayName ?: node.path.lastPathComponent;
+    cellView.textField.textColor = tokens.fileTreeTextColor;
     cellView.textField.lineBreakMode = NSLineBreakByTruncatingTail;
     cellView.textField.usesSingleLineMode = YES;
     cellView.textField.cell.wraps = NO;
@@ -7576,9 +7689,16 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
             fileImage.template = YES;
         });
         cellView.imageView.image = node.directory ? folderImage : fileImage;
-        cellView.imageView.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+        cellView.imageView.contentTintColor = tokens.fileTreeIconColor;
     }
     return cellView;
+}
+
+- (NSTableRowView *)outlineView:(NSOutlineView *)outlineView rowViewForItem:(id)item {
+    if (outlineView != _tideyEditorFileTreeView) {
+        return nil;
+    }
+    return [[TideyFileTreeRowView alloc] initWithFrame:NSZeroRect];
 }
 
 - (NSTableCellView *)newTideyEditorFileTreeCellView {

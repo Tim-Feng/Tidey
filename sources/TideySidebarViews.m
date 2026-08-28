@@ -174,6 +174,37 @@ NSView *TideyFindCloseView(NSView *container) {
 
 @end
 
+@implementation TideyFileTreeRowView
+
+- (void)drawBackgroundInRect:(NSRect)dirtyRect {
+    [super drawBackgroundInRect:dirtyRect];
+    if (!self.isSelected) {
+        return;
+    }
+    if (![TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return;
+    }
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 4, 1)
+                                                         xRadius:6
+                                                         yRadius:6];
+    [tokens.fileTreeSelectionColor setFill];
+    [path fill];
+}
+
+- (void)drawSelectionInRect:(NSRect)dirtyRect {
+    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
+        return;
+    }
+    [super drawSelectionInRect:dirtyRect];
+}
+
+- (BOOL)isEmphasized {
+    return YES;
+}
+
+@end
+
 @implementation TideySidebarCellView
 
 - (void)layout {

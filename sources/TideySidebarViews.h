@@ -31,6 +31,9 @@ FOUNDATION_EXPORT NSView *_Nullable TideyFindCloseView(NSView *container);
 @interface TideySidebarRowView : NSTableRowView
 @end
 
+@interface TideyFileTreeRowView : NSTableRowView
+@end
+
 @interface TideySidebarCellView : NSTableCellView
 @end
 
