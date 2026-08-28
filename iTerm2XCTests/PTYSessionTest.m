@@ -175,7 +175,7 @@ typedef NSModalResponse (^WarningBlockType)(NSAlert *alert, NSString *identifier
     }
 }
 
-- (void)testWarmTerminalPaletteDoesNotChangeCustomProfile {
+- (void)testWarmTerminalPaletteOverridesCustomProfileAtRenderTimeAndRestoresClassic {
     NSString *priorThemeIdentifier = [TideyInterfaceThemeController.shared.currentThemeIdentifier copy];
     @try {
         TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
@@ -194,6 +194,12 @@ typedef NSModalResponse (^WarningBlockType)(NSAlert *alert, NSString *identifier
         NSColor *factoryRed = [_session.screen.colorMap colorForKey:kColorMap8bitBase + 1];
 
         TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x151413];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 1] hex:0xC97A6D];
+        XCTAssertEqualObjects(profile, originalProfile);
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
 
         [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
              equalsColor:customBackground];

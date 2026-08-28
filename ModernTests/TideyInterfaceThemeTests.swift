@@ -149,7 +149,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColorTablesEqual(factory, original)
     }
 
-    func testTerminalPalettePolicyAppliesWarmOnlyToFactoryPaletteWithoutMutation() {
+    func testTerminalPalettePolicyAppliesWarmToFactoryPaletteWithoutMutation() {
         let factory = terminalColorTable(seed: 0x202020)
         let original = factory
 
@@ -165,7 +165,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColorTablesEqual(factory, original)
     }
 
-    func testTerminalPalettePolicyExemptsEntireCustomPalette() {
+    func testTerminalPalettePolicyAppliesWarmToCustomPaletteWithoutMutation() {
         let factory = terminalColorTable(seed: 0x303030)
         var custom = factory
         custom[NSNumber(value: kColorMapBackground)] = color(hex: 0x010203)
@@ -176,7 +176,9 @@ final class TideyInterfaceThemeTests: XCTestCase {
             factoryColorTable: factory,
             warmEnabled: true)
 
-        assertColorTablesEqual(result, custom)
+        assertColor(result[NSNumber(value: kColorMapBackground)]!, hex: 0x151413)
+        assertColor(result[NSNumber(value: kColorMapForeground)]!, hex: 0xEAE4D4)
+        assertColor(result[NSNumber(value: kColorMap8bitBase + 4)]!, hex: 0x7E9CB8)
         assertColorTablesEqual(custom, original)
     }
 

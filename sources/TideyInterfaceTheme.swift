@@ -442,10 +442,9 @@ final class TideyTerminalPalettePolicy: NSObject {
 
     @objc(colorTableByApplyingWarmPaletteTo:factoryColorTable:warmEnabled:)
     static func colorTable(byApplyingWarmPaletteTo colorTable: [NSNumber: NSColor],
-                           factoryColorTable: [NSNumber: NSColor],
+                           factoryColorTable _: [NSNumber: NSColor],
                            warmEnabled: Bool) -> [NSNumber: NSColor] {
-        guard warmEnabled,
-              matchesFactoryPalette(colorTable, factoryColorTable: factoryColorTable) else {
+        guard warmEnabled else {
             return colorTable
         }
 
@@ -457,28 +456,6 @@ final class TideyTerminalPalettePolicy: NSObject {
     @objc(terminalTabUnderlineColorWithWarmEnabled:)
     static func terminalTabUnderlineColor(warmEnabled: Bool) -> NSColor? {
         warmEnabled ? warmTabUnderlineColor : nil
-    }
-
-    private static func matchesFactoryPalette(_ colorTable: [NSNumber: NSColor],
-                                               factoryColorTable: [NSNumber: NSColor]) -> Bool {
-        warmColorTable.keys.allSatisfy { key in
-            guard let current = colorTable[key], let factory = factoryColorTable[key] else {
-                return false
-            }
-            return colorsAreEqual(current, factory)
-        }
-    }
-
-    private static func colorsAreEqual(_ lhs: NSColor, _ rhs: NSColor) -> Bool {
-        guard let left = lhs.usingColorSpace(.sRGB),
-              let right = rhs.usingColorSpace(.sRGB) else {
-            return lhs.isEqual(rhs)
-        }
-        let tolerance: CGFloat = 0.002
-        return abs(left.redComponent - right.redComponent) <= tolerance &&
-            abs(left.greenComponent - right.greenComponent) <= tolerance &&
-            abs(left.blueComponent - right.blueComponent) <= tolerance &&
-            abs(left.alphaComponent - right.alphaComponent) <= tolerance
     }
 
     private static func color(hex: Int) -> NSColor {
