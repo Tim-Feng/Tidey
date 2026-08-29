@@ -474,24 +474,43 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     // Baseline under everything except the selected tab.
     const CGFloat baselineY = NSMaxY(bar.bounds) - 0.5;
     if (selectedCell && !selectedCell.isInOverflowMenu) {
+        const BOOL connectsToLeadingBoundary =
+            [TideyPaperTabPolicy selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:selectedCell.frame
+                                                                                stripBounds:bar.bounds];
+        const CGFloat availableLeadingWidth = MAX(0, NSMinX(selectedCell.frame) - NSMinX(bar.bounds));
         const CGFloat availableTrailingWidth = MAX(0, NSMaxX(bar.bounds) - NSMaxX(selectedCell.frame));
         NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:selectedCell.frame selected:YES];
+        const NSRect leadingFadeBaseline = [TideyPaperTabPolicy leadingBaselineRectForTabRect:outlineRect
+                                                                              availableLeadingWidth:availableLeadingWidth];
         const NSRect fadeBaseline = [TideyPaperTabPolicy trailingBaselineRectForTabRect:outlineRect
                                                                  availableTrailingWidth:availableTrailingWidth];
+        const CGFloat plainLeadingBaselineEnd = connectsToLeadingBoundary
+            ? NSMinX(selectedCell.frame) + 0.5
+            : NSMinX(leadingFadeBaseline);
         [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
-                                  toPoint:NSMakePoint(NSMinX(selectedCell.frame) + 0.5, baselineY)];
+                                  toPoint:NSMakePoint(plainLeadingBaselineEnd, baselineY)];
         // Plain baseline resumes only after the trailing fade.
         [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMaxX(fadeBaseline), baselineY)
                                   toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
         // Front sheet: redraw the selected cell over neighbouring outlines,
-        // stroke its leading side + top once in the focus color, then draw the
-        // trailing leg / corner / baseline fade as one continuous ramp.
+        // A tab at the strip's leading edge keeps its left leg so it can join
+        // the workspace separator. A later selected tab hands both legs to the
+        // mirrored corner renderers so they fade into the baseline.
         [selectedCell drawWithFrame:selectedCell.frame inView:bar];
         NSColor *selectedOutlineColor = [self.tabBar.delegate tabView:self.tabBar
                                                         valueOfOption:PSMTabBarControlOptionPaperTabSelectedOutlineColor]
             ?: outlineColor;
         [selectedOutlineColor set];
-        [[TideyPaperTabPolicy selectedLeadingAndTopOutlinePathForRect:outlineRect] stroke];
+        if (connectsToLeadingBoundary) {
+            [[TideyPaperTabPolicy selectedLeadingAndTopOutlinePathForRect:outlineRect] stroke];
+        } else {
+            [[TideyPaperTabPolicy selectedTopOutlinePathForRect:outlineRect] stroke];
+            [TideyPaperTabPolicy drawLeadingCornerForTabRect:outlineRect
+                                        availableLeadingWidth:availableLeadingWidth
+                                                  outlineColor:selectedOutlineColor
+                                                separatorColor:outlineColor
+                                          stripBackgroundColor:self.tabBarColor];
+        }
         [TideyPaperTabPolicy drawTrailingCornerForTabRect:outlineRect
                                    availableTrailingWidth:availableTrailingWidth
                                              outlineColor:selectedOutlineColor

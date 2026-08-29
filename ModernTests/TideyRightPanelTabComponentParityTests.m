@@ -30,6 +30,8 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                             warmTheme:(BOOL)warm;
 + (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
 + (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
++ (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                          tabBarBounds:(NSRect)tabBarBounds;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -225,6 +227,18 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 0, 400, 1)], 0);
     // The parked 2pt pull bar keeps rounded ends.
     XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 283, 2, 34)], 1);
+}
+
+- (void)testWorkspaceSeparatorJoinGradientOnlyFollowsTheLeadingFocusedTab {
+    const NSRect bounds = NSMakeRect(0, 0, 500, 30);
+    XCTAssertTrue([iTermRootTerminalView tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:
+                       NSMakeRect(0, 0, 120, 30)
+                                                                                                  tabBarBounds:bounds]);
+    XCTAssertFalse([iTermRootTerminalView tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:
+                        NSMakeRect(120, 0, 120, 30)
+                                                                                                   tabBarBounds:bounds]);
+    XCTAssertFalse([iTermRootTerminalView tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:NSZeroRect
+                                                                                           tabBarBounds:bounds]);
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {

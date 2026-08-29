@@ -12083,6 +12083,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 - (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem {
     DLog(@"Did select tab view %@", tabViewItem);
     [_contentView.tabBarControl setFlashing:YES];
+    [_contentView tideyTerminalTabSelectionDidChange];
 
     if (self.autoCommandHistorySessionGuid) {
         [self hideAutoCommandHistory];

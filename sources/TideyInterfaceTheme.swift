@@ -695,6 +695,21 @@ final class TideyPaperTabPolicy: NSObject {
     static let trailingFadeVerticalLength: CGFloat = 14
     static let trailingFadeHorizontalLength: CGFloat = 24
 
+    /// Whether the selected tab's leading edge is the strip's own leading
+    /// boundary. Only that state may continue into the workspace separator;
+    /// a selected tab farther right instead turns into the strip baseline.
+    @objc(selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:stripBounds:)
+    static func selectedTabConnectsToLeadingBoundary(selectedTabFrame: NSRect,
+                                                      stripBounds: NSRect) -> Bool {
+        guard selectedTabFrame.width > 0,
+              selectedTabFrame.height > 0,
+              stripBounds.width > 0,
+              stripBounds.height > 0 else {
+            return false
+        }
+        return abs(selectedTabFrame.minX - stripBounds.minX) < outlineWidth
+    }
+
     /// Left side + rounded top for the focused tab; the trailing leg is drawn
     /// by `drawTrailingCorner…` so it is never stroked twice. Ends exactly
     /// where the trailing leg begins: (maxX - 0.5, minY + radius).
@@ -722,6 +737,106 @@ final class TideyPaperTabPolicy: NSObject {
                        endAngle: 360,
                        clockwise: false)
         return path
+    }
+
+    /// Rounded top only. A non-leading focused tab hands both vertical legs to
+    /// the corner renderers so each can fade continuously into its baseline.
+    @objc(selectedTopOutlinePathForRect:)
+    static func selectedTopOutlinePath(for rect: NSRect) -> NSBezierPath {
+        let inset = outlineWidth / 2
+        let left = rect.minX + inset
+        let right = rect.maxX - inset
+        let top = rect.minY + inset
+        let radius = min(topCornerRadius, (right - left) / 2)
+        let path = NSBezierPath()
+        path.lineWidth = outlineWidth
+        path.move(to: NSPoint(x: left, y: top + radius))
+        path.appendArc(withCenter: NSPoint(x: left + radius, y: top + radius),
+                       radius: radius,
+                       startAngle: 180,
+                       endAngle: 270,
+                       clockwise: false)
+        path.line(to: NSPoint(x: right - radius, y: top))
+        path.appendArc(withCenter: NSPoint(x: right - radius, y: top + radius),
+                       radius: radius,
+                       startAngle: 270,
+                       endAngle: 360,
+                       clockwise: false)
+        return path
+    }
+
+    /// 1pt leading column of a focused non-leading tab. It mirrors the
+    /// trailing leg and ends immediately above the baseline corner pixel.
+    @objc(leadingLegRectForTabRect:)
+    static func leadingLegRect(forTabRect rect: NSRect) -> NSRect {
+        let radius = min(topCornerRadius, rect.width / 2)
+        let top = rect.minY + outlineWidth / 2 + radius
+        let bottom = rect.maxY - outlineWidth
+        return NSRect(x: rect.minX,
+                      y: top,
+                      width: outlineWidth,
+                      height: max(0, bottom - top))
+    }
+
+    /// Baseline row ending at the focused non-leading tab's lower-left corner.
+    @objc(leadingBaselineRectForTabRect:availableLeadingWidth:)
+    static func leadingBaselineRect(forTabRect rect: NSRect,
+                                    availableLeadingWidth: CGFloat) -> NSRect {
+        let length = min(trailingFadeHorizontalLength, max(0, availableLeadingWidth))
+        return NSRect(x: rect.minX - length,
+                      y: rect.maxY - outlineWidth,
+                      width: length + outlineWidth,
+                      height: outlineWidth)
+    }
+
+    /// Mirror of `drawTrailingCorner`: fade down the selected tab's leading
+    /// leg, turn the lower-left corner, and continue leftward into the ordinary
+    /// strip baseline.
+    @objc(drawLeadingCornerForTabRect:availableLeadingWidth:outlineColor:separatorColor:stripBackgroundColor:)
+    static func drawLeadingCorner(forTabRect rect: NSRect,
+                                  availableLeadingWidth: CGFloat,
+                                  outlineColor: NSColor,
+                                  separatorColor: NSColor,
+                                  stripBackgroundColor: NSColor) {
+        guard let context = NSGraphicsContext.current?.cgContext else {
+            return
+        }
+        let leg = leadingLegRect(forTabRect: rect)
+        let baseline = leadingBaselineRect(forTabRect: rect,
+                                           availableLeadingWidth: availableLeadingWidth)
+        let cornerColor = trailingCornerColor(outlineColor: outlineColor,
+                                              separatorColor: separatorColor)
+        let fadeLength = min(trailingFadeVerticalLength, leg.height)
+
+        context.saveGState()
+        if leg.height - fadeLength > 0 {
+            context.setFillColor(outlineColor.cgColor)
+            context.fill(NSRect(x: leg.minX,
+                                y: leg.minY,
+                                width: leg.width,
+                                height: leg.height - fadeLength))
+        }
+        if fadeLength > 0 {
+            let fadeRect = NSRect(x: leg.minX,
+                                  y: leg.maxY - fadeLength,
+                                  width: leg.width,
+                                  height: fadeLength)
+            drawLinearGradient(context,
+                               from: outlineColor,
+                               to: cornerColor,
+                               in: fadeRect,
+                               start: CGPoint(x: fadeRect.midX, y: fadeRect.minY),
+                               end: CGPoint(x: fadeRect.midX, y: fadeRect.maxY))
+        }
+        context.setFillColor(stripBackgroundColor.cgColor)
+        context.fill(baseline)
+        drawLinearGradient(context,
+                           from: separatorColor,
+                           to: cornerColor,
+                           in: baseline,
+                           start: CGPoint(x: baseline.minX, y: baseline.midY),
+                           end: CGPoint(x: baseline.maxX, y: baseline.midY))
+        context.restoreGState()
     }
 
     /// 1pt trailing column of the focused tab, from just below the top-right

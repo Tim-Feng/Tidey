@@ -198,6 +198,92 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(TideyPaperTabPolicy.trailingFadeHorizontalLength, 24)
     }
 
+    func testFocusedNonLeadingPaperTabHandsBothLegsToCornerRenderers() {
+        let tab = NSRect(x: 80, y: 0, width: 100, height: 30)
+        let topOnly = TideyPaperTabPolicy.selectedTopOutlinePath(for: tab)
+        XCTAssertEqual(topOnly.currentPoint.x, 179.5, accuracy: 0.001)
+        XCTAssertEqual(topOnly.currentPoint.y, 4.5, accuracy: 0.001)
+        XCTAssertEqual(TideyPaperTabPolicy.leadingLegRect(forTabRect: tab),
+                       NSRect(x: 80, y: 4.5, width: 1, height: 24.5))
+        XCTAssertEqual(TideyPaperTabPolicy.leadingBaselineRect(forTabRect: tab, availableLeadingWidth: 60),
+                       NSRect(x: 56, y: 29, width: 25, height: 1))
+        XCTAssertEqual(TideyPaperTabPolicy.leadingBaselineRect(forTabRect: tab, availableLeadingWidth: 6),
+                       NSRect(x: 74, y: 29, width: 7, height: 1))
+    }
+
+    func testWorkspaceSeparatorJoinGradientRequiresTheFocusedTabAtTheLeadingEdge() {
+        let strip = NSRect(x: 0, y: 0, width: 500, height: 30)
+        XCTAssertTrue(TideyPaperTabPolicy.selectedTabConnectsToLeadingBoundary(
+            selectedTabFrame: NSRect(x: 0, y: 0, width: 120, height: 30),
+            stripBounds: strip))
+        XCTAssertFalse(TideyPaperTabPolicy.selectedTabConnectsToLeadingBoundary(
+            selectedTabFrame: NSRect(x: 120, y: 0, width: 120, height: 30),
+            stripBounds: strip))
+        XCTAssertFalse(TideyPaperTabPolicy.selectedTabConnectsToLeadingBoundary(
+            selectedTabFrame: .zero,
+            stripBounds: strip))
+    }
+
+    func testFocusedPaperTabLeadingCornerRampIsVisibleAndContinuousInPixels() throws {
+        let width = 200, height = 40
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                                                 pixelsWide: width,
+                                                 pixelsHigh: height,
+                                                 bitsPerSample: 8,
+                                                 samplesPerPixel: 4,
+                                                 hasAlpha: true,
+                                                 isPlanar: false,
+                                                 colorSpaceName: .deviceRGB,
+                                                 bytesPerRow: 0,
+                                                 bitsPerPixel: 0))
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: rep))
+        let tokens = TideyInterfaceThemeTokens.warm
+        let strip = tokens.rightPanelTabStripBackgroundColor
+        let outline = tokens.tabSelectedOutlineColor
+        let separator = tokens.paneBoundaryColor
+        let tab = NSRect(x: 80, y: 0, width: 100, height: 30)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        context.cgContext.translateBy(x: 0, y: CGFloat(height))
+        context.cgContext.scaleBy(x: 1, y: -1)
+        strip.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        separator.setFill()
+        NSRect(x: 0, y: 29, width: width, height: 1).fill()
+        TideyPaperTabPolicy.drawLeadingCorner(forTabRect: tab,
+                                              availableLeadingWidth: 60,
+                                              outlineColor: outline,
+                                              separatorColor: separator,
+                                              stripBackgroundColor: strip)
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+
+        func luma(_ x: Int, _ y: Int) -> CGFloat {
+            let c = rep.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+            return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        }
+        let stripLuma = luma(5, 5)
+        let separatorLuma = luma(40, 29)
+        let legTop = luma(80, 8)
+        let legMid = luma(80, 22)
+        let corner = luma(80, 29)
+        let baselineNear = luma(74, 29)
+        let baselineFar = luma(60, 29)
+        let baselineAfter = luma(50, 29)
+
+        XCTAssertGreaterThan(legTop, stripLuma + 0.10)
+        XCTAssertGreaterThan(legTop, legMid + 0.02)
+        XCTAssertGreaterThan(legMid, corner)
+        XCTAssertGreaterThan(corner, baselineNear - 0.005)
+        XCTAssertGreaterThan(baselineNear, baselineFar)
+        XCTAssertGreaterThan(baselineFar, separatorLuma - 0.005)
+        XCTAssertEqual(baselineAfter, separatorLuma, accuracy: 0.01)
+        XCTAssertGreaterThan(corner, separatorLuma)
+        XCTAssertEqual(luma(79, 8), stripLuma, accuracy: 0.01)
+        XCTAssertEqual(luma(80, 31), stripLuma, accuracy: 0.01)
+    }
+
     /// Renders the shared trailing-corner ramp into a bitmap and checks the
     /// actual pixels: solid focus color at the top of the leg, a visible
     /// monotonic fade down to the corner, the corner pixel itself, then a fade

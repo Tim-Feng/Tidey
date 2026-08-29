@@ -63,6 +63,9 @@
   - 這會連 tab bar、status bar、division view 一起動
 - `PSMTabBarControl` 會在 layout 後重設 overflow button
   - `>>` 是 PSM overflow button，不是 Tidey toggle
+- paper tab 與 workspace separator 的銜接取決於目前選中的 tab
+  - 第一個 tab 被選取時，左側 focus outline 才能延續到 workspace separator；選中後續 tab 時，workspace separator 要恢復普通分隔線，該 tab 的左右垂直邊則各自漸層接回 tab strip baseline
+  - tab selection callback 要在 PSM cell state 更新後重新計算 join 狀態；render regression 必須同時覆蓋第一個與後續 tab 被選取的畫面
 - `autoresizingMask` 會製造中間態
   - 先分清楚最終 frame 錯，還是中間一拍錯
 - `NSOutlineView` / `NSTableView` / `NSScrollView` 的行為先查 API

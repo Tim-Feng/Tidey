@@ -367,6 +367,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs;
 - (void)updateTideyChromeDragHandles;
 - (void)updateTideyChromeToggleButtons;
+- (void)tideyUpdateWorkspaceSeparatorJoinGradientState;
 - (void)syncTideyEditorFileTreeRootIfNeeded;
 - (void)constrainTideyEditorFileTreeToVisibleWidth;
 - (void)tideyHandleMouseDownEvent:(NSEvent *)event;
@@ -1264,6 +1265,8 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                             warmTheme:(BOOL)warm;
 + (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
 + (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
++ (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                          tabBarBounds:(NSRect)tabBarBounds;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1809,6 +1812,12 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 + (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame {
     const CGFloat thickness = MIN(NSWidth(frame), NSHeight(frame));
     return thickness > 1 ? floor(thickness / 2.0) : 0;
+}
+
++ (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                          tabBarBounds:(NSRect)tabBarBounds {
+    return [TideyPaperTabPolicy selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:selectedTabFrame
+                                                                              stripBounds:tabBarBounds];
 }
 
 // The 1pt row where the focused first tab's leading outline ends: the tab
@@ -2501,7 +2510,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                                                       tabRowHeight:[strongSelf tideyTerminalTabRowHeight]
                                                                          warmTheme:TideyWarmInterfaceThemeIsActive()];
         };
-        _tideyWorkspaceSeparatorView.tideyUsesPaperTabJoinGradient = YES;
+        _tideyWorkspaceSeparatorView.tideyUsesPaperTabJoinGradient = NO;
         [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
         [self addSubview:self.tideySidebarDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideyEditorDragHandle positioned:NSWindowAbove relativeTo:_tabView];
@@ -7389,6 +7398,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 - (void)tideyApplyInterfaceThemeTokens {
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     BOOL warm = TideyWarmInterfaceThemeIsActive();
+    [self tideyUpdateWorkspaceSeparatorJoinGradientState];
     for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
         [boundaryView tideyApplyBoundaryColor:
             [self tideyPaneBoundaryColorForEdge:boundaryView.tideyEdge tokens:tokens]
@@ -7484,6 +7494,35 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self layoutSubviews];
     [self.tabBarControl setNeedsDisplay:YES];
     [self setNeedsDisplay:YES];
+}
+
+- (void)tideyUpdateWorkspaceSeparatorJoinGradientState {
+    if (!_tideyWorkspaceSeparatorView) {
+        return;
+    }
+    PSMTabBarCell *selectedCell = nil;
+    for (PSMTabBarCell *cell in _tabBarControl.cells) {
+        if (!cell.isInOverflowMenu && cell.state == NSControlStateValueOn) {
+            selectedCell = cell;
+            break;
+        }
+    }
+    _tideyWorkspaceSeparatorView.tideyUsesPaperTabJoinGradient =
+        TideyWarmInterfaceThemeIsActive() &&
+        selectedCell &&
+        [[self class] tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:selectedCell.frame
+                                                                       tabBarBounds:_tabBarControl.bounds];
+}
+
+- (void)tideyTerminalTabSelectionDidChange {
+    [self tideyUpdateWorkspaceSeparatorJoinGradientState];
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    [_tideyWorkspaceSeparatorView tideyApplyBoundaryColor:
+        [self tideyPaneBoundaryColorForEdge:_tideyWorkspaceSeparatorView.tideyEdge tokens:tokens]
+                                             tabJoinColor:tokens.tabSelectedOutlineColor
+                                                warmTheme:TideyWarmInterfaceThemeIsActive()];
+    [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
+    [_tabBarControl setNeedsDisplay:YES];
 }
 
 - (void)tideyStatusStoreDidChange:(NSNotification *)notification {
@@ -7583,6 +7622,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                        NSHeight(self.bounds));
     }
 
+    [self tideyUpdateWorkspaceSeparatorJoinGradientState];
     [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
 
     const CGFloat editorWidth = self.tideyEditorPanelWidth;
