@@ -1103,6 +1103,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     TideyPaneBoundaryEdgeLeft,
     TideyPaneBoundaryEdgeRight,
     TideyPaneBoundaryEdgeBottom,
+    TideyPaneBoundaryEdgeTop,
 };
 
 // 1px separator pinned to one edge of its superview. Warm derives structural
@@ -1129,6 +1130,9 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
             break;
         case TideyPaneBoundaryEdgeBottom:
             self.frame = NSMakeRect(0, 0, NSWidth(bounds), 1);
+            break;
+        case TideyPaneBoundaryEdgeTop:
+            self.frame = NSMakeRect(0, MAX(0, NSHeight(bounds) - 1), NSWidth(bounds), 1);
             break;
     }
 }
@@ -2059,6 +2063,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                         toView:_tideyEditorPanelView];
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                        toView:_tideyEditorFileTreeContainerView];
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeTop
                                         toView:_tideyEditorFileTreeContainerView];
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
                                         toView:_tideyEditorTabStripView];
@@ -4805,7 +4811,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     gradientLayer.frame = self.tideyEditorChromeGradientMaskView.bounds;
     CGColorRef solidColor = maskBackgroundColor ?: tokens.rightPanelInactiveTabStripBackgroundColor.CGColor;
-    gradientLayer.colors = @[ (__bridge id)NSColor.clearColor.CGColor,
+    NSColor *solidNSColor = [NSColor colorWithCGColor:solidColor];
+    CGColorRef transparentSolidColor = [solidNSColor colorWithAlphaComponent:0].CGColor;
+    gradientLayer.colors = @[ (__bridge id)transparentSolidColor,
                               (__bridge id)solidColor,
                               (__bridge id)solidColor ];
     self.tideyEditorSplitDividerView.hidden = !shouldShowSplitShell;

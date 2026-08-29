@@ -8,10 +8,6 @@
 #import "PSMMinimalTabStyle.h"
 #import "PSMOverflowPopUpButton.h"
 
-static NSColor *PSMTideyTabBarBackgroundColor(void) {
-    return [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1];
-}
-
 @implementation NSColor(PSMMinimalTabStyle)
 
 - (NSColor *)psm_nonSelectedColorWithDifference:(double)difference {
@@ -78,7 +74,7 @@ static NSColor *PSMTideyTabBarBackgroundColor(void) {
 }
 
 - (NSColor *)tabBarColor {
-    return PSMTideyTabBarBackgroundColor();
+    return [self.delegate minimalTabStyleBackgroundColor] ?: NSColor.blackColor;
 }
 
 - (BOOL)backgroundIsDark {

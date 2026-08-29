@@ -477,6 +477,13 @@ final class TideyTerminalPalettePolicy: NSObject {
         warmEnabled ? warmTabUnderlineColor : nil
     }
 
+    @objc(terminalTabStripBackgroundColorWithWarmEnabled:)
+    static func terminalTabStripBackgroundColor(warmEnabled: Bool) -> NSColor {
+        warmEnabled
+            ? TideyInterfaceThemeTokens.warm.rightPanelTabStripBackgroundColor
+            : TideyInterfaceThemeTokens.classic.rightPanelInactiveTabStripBackgroundColor
+    }
+
     private static func color(hex: Int) -> NSColor {
         NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
                 green: CGFloat((hex >> 8) & 0xff) / 255,

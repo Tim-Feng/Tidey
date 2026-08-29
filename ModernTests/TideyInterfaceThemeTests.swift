@@ -130,6 +130,16 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(TideyInterfaceThemeTokens.classic.paneBoundaryColor, .clear)
     }
 
+    func testTerminalTabStripUsesThemeBaseAndPreservesClassicColor() {
+        assertColor(TideyTerminalPalettePolicy.terminalTabStripBackgroundColor(warmEnabled: false),
+                    red: 0.102,
+                    green: 0.108,
+                    blue: 0.135)
+        let warmColor = TideyTerminalPalettePolicy.terminalTabStripBackgroundColor(warmEnabled: true)
+        assertColor(warmColor, hex: 0x151413)
+        XCTAssertEqual(warmColor, TideyInterfaceThemeTokens.warm.rightPanelTabStripBackgroundColor)
+    }
+
     func testWarmTerminalPaletteMatchesFrozenDesignValues() {
         let palette = TideyTerminalPalettePolicy.warmColorTable
         let expected: [(Int32, Int)] = [

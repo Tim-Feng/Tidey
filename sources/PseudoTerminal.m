@@ -19338,8 +19338,9 @@ backgroundColor:(NSColor *)backgroundColor {
 #pragma mark - PSMMinimalTabStyleDelegate
 
 - (NSColor *)minimalTabStyleBackgroundColor {
-    DLog(@"Getting bg color for session %@, colormap %@", self.currentSession, self.currentSession.screen.colorMap);
-    return self.currentSession.effectiveUnprocessedBackgroundColor;
+    const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
+        isEqualToString:@"warm"];
+    return [TideyTerminalPalettePolicy terminalTabStripBackgroundColorWithWarmEnabled:warm];
 }
 
 #pragma mark - iTermBroadcastInputHelperDelegate
