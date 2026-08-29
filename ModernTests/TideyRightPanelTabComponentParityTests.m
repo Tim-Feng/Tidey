@@ -32,8 +32,9 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
 + (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
                                                           tabBarBounds:(NSRect)tabBarBounds;
++ (BOOL)tideyEditorPaneBoundaryUsesPaperTabJoinGradient;
 + (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
-                                                 precedingFileTabsSpan:(CGFloat)precedingFileTabsSpan;
+                                                        tabStripBounds:(NSRect)tabStripBounds;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -243,29 +244,33 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                                                            tabBarBounds:bounds]);
 }
 
-// Regression for 1ebadf067: the first file tab after the `Code` group pill
-// (absolute x 146, no preceding file tab) must keep its hard leading outline,
-// exactly like the accepted first terminal tab; the same absolute x with a
-// preceding file tab in the group gets the mirrored leading gradient.
-- (void)testEditorLeadingCornerOverlayFollowsGroupOrderNotStripX {
+// The editor pane boundary sits under the `Code` group chrome, not under a
+// selected paper-tab leg. It must remain the ordinary pane separator; the
+// selected file tab owns the focus transition at its own lower-left corner.
+- (void)testEditorPaneBoundaryDoesNotClaimTheSelectedPaperTabJoin {
+    XCTAssertFalse([iTermRootTerminalView tideyEditorPaneBoundaryUsesPaperTabJoinGradient]);
+}
+
+// Regression for b68618806: `Code` is group chrome, but it still creates real
+// strip space before the first file tab. Since that tab's leading leg cannot
+// continue into the pane boundary, it must turn and fade into the baseline.
+- (void)testEditorLeadingCornerOverlayFollowsActualStripSpaceBeforeTheTab {
+    const NSRect bounds = NSMakeRect(0, 0, 700, 30);
     const NSRect firstFileTabAfterPill = NSMakeRect(146, 0, 478, 30);
-    XCTAssertTrue(NSIsEmptyRect(
-        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:firstFileTabAfterPill
-                                                                        precedingFileTabsSpan:0]));
-    // Same absolute frame, but 120pt of earlier file tabs in the group: fade over them.
     XCTAssertTrue(NSEqualRects(
         [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:firstFileTabAfterPill
-                                                                        precedingFileTabsSpan:120],
+                                                                               tabStripBounds:bounds],
         NSMakeRect(122, 0, 25, 30)));
-    // A short preceding span clamps the fade to what precedes the tab.
+    // A short amount of real strip space clamps the horizontal fade.
     XCTAssertTrue(NSEqualRects(
-        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:NSMakeRect(80, 0, 120, 30)
-                                                                        precedingFileTabsSpan:6],
-        NSMakeRect(74, 0, 7, 30)));
-    // A tab at strip x 0 with a preceding span is impossible; sub-1pt spans count as none.
+        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:NSMakeRect(6, 0, 120, 30)
+                                                                               tabStripBounds:bounds],
+        NSMakeRect(0, 0, 7, 30)));
+    // Only a tab whose left leg truly coincides with the strip boundary keeps
+    // the hard continuation instead of a lower-left turn.
     XCTAssertTrue(NSIsEmptyRect(
-        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:NSMakeRect(146, 0, 478, 30)
-                                                                        precedingFileTabsSpan:0.5]));
+        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:NSMakeRect(0, 0, 120, 30)
+                                                                               tabStripBounds:bounds]));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {

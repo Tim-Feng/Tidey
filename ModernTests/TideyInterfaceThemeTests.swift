@@ -198,6 +198,19 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(TideyPaperTabPolicy.trailingFadeHorizontalLength, 24)
     }
 
+    func testEditorTrailingOverlayPreservesTheSelectedTabsFullCornerRadius() {
+        let reference = TideyPaperTabPolicy.trailingOverlayReferenceTabRect(
+            tabWidth: 478,
+            tabHeight: 30)
+        // The overlay's x=0 column is the selected tab's trailing column, but
+        // the reference rect retains the real tab width. A 2pt dummy rect
+        // would collapse the 4pt radius to 1pt and double-paint the top-right
+        // arc with the trailing leg.
+        XCTAssertEqual(reference, NSRect(x: -477, y: 0, width: 478, height: 30))
+        XCTAssertEqual(TideyPaperTabPolicy.trailingLegRect(forTabRect: reference),
+                       NSRect(x: 0, y: 4.5, width: 1, height: 24.5))
+    }
+
     func testFocusedNonLeadingPaperTabHandsBothLegsToCornerRenderers() {
         let tab = NSRect(x: 80, y: 0, width: 100, height: 30)
         let topOnly = TideyPaperTabPolicy.selectedTopOutlinePath(for: tab)

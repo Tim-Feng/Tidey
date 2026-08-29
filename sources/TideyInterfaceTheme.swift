@@ -695,6 +695,23 @@ final class TideyPaperTabPolicy: NSObject {
     static let trailingFadeVerticalLength: CGFloat = 14
     static let trailingFadeHorizontalLength: CGFloat = 24
 
+    /// Reference geometry for a trailing-corner overlay whose local x=0 is
+    /// the selected tab's trailing pixel column. Preserve the real tab width
+    /// so `trailingLegRect` uses the same 4pt top radius as the tab outline;
+    /// a narrow dummy rect would shrink the radius and overlap the top arc.
+    @objc(trailingOverlayReferenceTabRectForTabWidth:tabHeight:)
+    static func trailingOverlayReferenceTabRect(tabWidth: CGFloat,
+                                                tabHeight: CGFloat) -> NSRect {
+        guard tabWidth > 0, tabHeight > 0 else {
+            return .zero
+        }
+        let width = max(outlineWidth, tabWidth)
+        return NSRect(x: outlineWidth - width,
+                      y: 0,
+                      width: width,
+                      height: tabHeight)
+    }
+
     /// Whether the selected tab's leading edge is the strip's own leading
     /// boundary. Only that state may continue into the workspace separator;
     /// a selected tab farther right instead turns into the strip baseline.
