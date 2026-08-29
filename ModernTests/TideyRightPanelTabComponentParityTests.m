@@ -10,6 +10,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 
 @interface iTermRootTerminalView (TideyRightPanelTabComponentParityTests)
 + (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetricsForWarmTheme:(BOOL)warm;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetricsForWarmTheme:(BOOL)warm;
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
                         superviewBounds:(NSRect)bounds
                               warmTheme:(BOOL)warm;
@@ -58,6 +59,20 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     XCTAssertEqualObjects(metrics[@"closeButtonWidth"], @20);
     XCTAssertEqualObjects(metrics[@"closeButtonTrailingInset"], @2);
     XCTAssertEqualObjects(metrics[@"addButtonSize"], @22);
+}
+
+- (void)testWarmGroupTagUsesPaperIndexMetricsAndPreservesClassicCapsuleMetrics {
+    NSDictionary<NSString *, NSNumber *> *classic =
+        [iTermRootTerminalView tideyRightPanelGroupMetricsForWarmTheme:NO];
+    XCTAssertEqualObjects(classic[@"horizontalPadding"], @12);
+    XCTAssertEqualObjects(classic[@"tabsGap"], @8);
+    XCTAssertEqualObjects(classic[@"usesPaperIndexStyle"], @NO);
+
+    NSDictionary<NSString *, NSNumber *> *warm =
+        [iTermRootTerminalView tideyRightPanelGroupMetricsForWarmTheme:YES];
+    XCTAssertEqualObjects(warm[@"horizontalPadding"], @10);
+    XCTAssertEqualObjects(warm[@"tabsGap"], @0);
+    XCTAssertEqualObjects(warm[@"usesPaperIndexStyle"], @YES);
 }
 
 - (void)testClassicPaneBoundariesStayFullLength {

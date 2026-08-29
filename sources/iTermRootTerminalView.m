@@ -754,12 +754,108 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-// Dedicated group-button type. It is behavior-neutral for now; the Warm paper
-// index renderer can be introduced behind this seam without changing Classic.
-@interface TideyRightPanelGroupButton : NSButton
+// Warm renders a group label as the index tab of the paper-tab stack. Classic
+// keeps the existing filled capsule through the ordinary NSButton path.
+@interface TideyRightPanelGroupButton : NSButton {
+    NSTrackingArea *_tideyTrackingArea;
+}
+@property(nonatomic) BOOL tideyUsesPaperIndexStyle;
+@property(nonatomic) BOOL tideyExpanded;
+@property(nonatomic) BOOL tideyDrawsTrailingEdge;
+@property(nonatomic) BOOL tideyHovered;
+@property(nonatomic, strong) NSColor *tideyOutlineColor;
+@property(nonatomic, strong) NSColor *tideyExpandedTextColor;
+@property(nonatomic, strong) NSColor *tideyCollapsedTextColor;
+@property(nonatomic, strong) NSColor *tideyHoverTextColor;
+- (void)tideyUpdateAppearance;
 @end
 
 @implementation TideyRightPanelGroupButton
+
+- (BOOL)isFlipped {
+    return _tideyUsesPaperIndexStyle ? YES : [super isFlipped];
+}
+
+- (void)updateTrackingAreas {
+    [super updateTrackingAreas];
+    if (_tideyTrackingArea) {
+        [self removeTrackingArea:_tideyTrackingArea];
+    }
+    _tideyTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
+                                                      options:(NSTrackingActiveInKeyWindow |
+                                                               NSTrackingInVisibleRect |
+                                                               NSTrackingMouseEnteredAndExited)
+                                                        owner:self
+                                                     userInfo:nil];
+    [self addTrackingArea:_tideyTrackingArea];
+}
+
+- (void)mouseEntered:(NSEvent *)event {
+    [super mouseEntered:event];
+    self.tideyHovered = YES;
+    [self tideyUpdateAppearance];
+}
+
+- (void)mouseExited:(NSEvent *)event {
+    [super mouseExited:event];
+    self.tideyHovered = NO;
+    [self tideyUpdateAppearance];
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (!_tideyUsesPaperIndexStyle || !_tideyOutlineColor) {
+        return;
+    }
+
+    [_tideyOutlineColor setStroke];
+    NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:self.bounds selected:NO];
+    NSBezierPath *path = [TideyPaperTabPolicy outlinePathForRect:outlineRect];
+    if (_tideyDrawsTrailingEdge) {
+        [path stroke];
+        return;
+    }
+
+    // The first file tab owns the shared vertical edge. Draw only the index
+    // tab's leading side and top so two adjacent 1pt strokes never brighten.
+    NSBezierPath *leadingAndTop = [NSBezierPath bezierPath];
+    leadingAndTop.lineWidth = path.lineWidth;
+    NSPoint points[3];
+    for (NSInteger index = 0; index < path.elementCount - 1; index++) {
+        switch ([path elementAtIndex:index associatedPoints:points]) {
+            case NSBezierPathElementMoveTo:
+                [leadingAndTop moveToPoint:points[0]];
+                break;
+            case NSBezierPathElementLineTo:
+                [leadingAndTop lineToPoint:points[0]];
+                break;
+            case NSBezierPathElementCurveTo:
+                [leadingAndTop curveToPoint:points[2] controlPoint1:points[0] controlPoint2:points[1]];
+                break;
+            default:
+                break;
+        }
+    }
+    [leadingAndTop stroke];
+}
+
+- (void)tideyUpdateAppearance {
+    if (!_tideyUsesPaperIndexStyle) {
+        return;
+    }
+    NSColor *textColor = _tideyHovered
+        ? _tideyHoverTextColor
+        : (_tideyExpanded ? _tideyExpandedTextColor : _tideyCollapsedTextColor);
+    self.layer.cornerRadius = 0;
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    self.attributedTitle = [[NSAttributedString alloc] initWithString:self.title ?: @""
+                                                           attributes:@{
+        NSFontAttributeName: self.font ?: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: textColor ?: NSColor.secondaryLabelColor,
+    }];
+    [self setNeedsDisplay:YES];
+}
+
 @end
 
 @interface TideyEditorTabItemView : NSView {
@@ -1863,7 +1959,13 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 }
 
 + (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetricsForWarmTheme:(BOOL)warm {
-    (void)warm;
+    if (warm) {
+        return @{
+            @"horizontalPadding": @10,
+            @"tabsGap": @0,
+            @"usesPaperIndexStyle": @YES,
+        };
+    }
     return @{
         @"horizontalPadding": @(kTideyRightPanelGroupLabelHorizontalPadding),
         @"tabsGap": @(kTideyRightPanelGroupTabsGap),
@@ -5755,7 +5857,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
         CGFloat labelWidth = labelTextWidth + groupMetrics[@"horizontalPadding"].doubleValue * 2;
-        CGFloat groupButtonHeight = metrics[@"groupButtonHeight"].doubleValue;
+        BOOL usesPaperIndexStyle = groupMetrics[@"usesPaperIndexStyle"].boolValue;
+        CGFloat groupButtonHeight = usesPaperIndexStyle
+            ? tabHeight
+            : metrics[@"groupButtonHeight"].doubleValue;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
         TideyRightPanelGroupButton *groupButton =
             [[TideyRightPanelGroupButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
@@ -5771,17 +5876,27 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         groupButton.target = self;
         groupButton.action = @selector(tideyRightPanelSelectGroup:);
         groupButton.wantsLayer = YES;
-        groupButton.layer.cornerRadius = floor(groupButtonHeight / 2.0);
         NSColor *expandedBackgroundColor = tokens.rightPanelGroupExpandedFillColor;
         NSColor *collapsedBackgroundColor = tokens.rightPanelGroupCollapsedFillColor;
         NSColor *expandedTextColor = tokens.rightPanelGroupExpandedTextColor;
-        NSColor *collapsedTextColor = tokens.rightPanelGroupCollapsedTextColor;
+        NSColor *collapsedTextColor = usesPaperIndexStyle
+            ? tokens.rightPanelTertiaryTextColor
+            : tokens.rightPanelGroupCollapsedTextColor;
+        groupButton.tideyUsesPaperIndexStyle = usesPaperIndexStyle;
+        groupButton.tideyExpanded = group.expanded;
+        groupButton.tideyDrawsTrailingEdge = (!group.expanded || group.visibleTabs.count == 0);
+        groupButton.tideyOutlineColor = tokens.tabOutlineColor;
+        groupButton.tideyExpandedTextColor = expandedTextColor;
+        groupButton.tideyCollapsedTextColor = collapsedTextColor;
+        groupButton.tideyHoverTextColor = tokens.rightPanelSecondaryTextColor;
+        groupButton.layer.cornerRadius = usesPaperIndexStyle ? 0 : floor(groupButtonHeight / 2.0);
         groupButton.layer.backgroundColor = (group.expanded ? expandedBackgroundColor : collapsedBackgroundColor).CGColor;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
             NSFontAttributeName: groupLabelAttributes[NSFontAttributeName],
             NSForegroundColorAttributeName: group.expanded ? expandedTextColor : collapsedTextColor,
         }];
+        [groupButton tideyUpdateAppearance];
         [tabStripView addSubview:groupButton];
         x += labelWidth;
 
