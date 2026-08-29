@@ -139,6 +139,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(TideyPaperTabPolicy.selectionIndicatorHeight, 2)
         XCTAssertEqual(TideyPaperTabPolicy.pullBarWidth, 2)
         XCTAssertEqual(TideyPaperTabPolicy.pullBarLength, 34)
+        XCTAssertEqual(TideyPaperTabPolicy.boundaryJoinGradientLength, 14)
 
         let bounds = NSRect(x: 10, y: 0, width: 120, height: 30)
         // Selected tab: full height, in front, open at the bottom.
@@ -163,6 +164,15 @@ final class TideyInterfaceThemeTests: XCTestCase {
                        TideyInterfaceThemeTokens.warm.sidebarUnreadColor)
         XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabSelectedOutlineColor(warmEnabled: true),
                        TideyInterfaceThemeTokens.warm.sidebarSelectionBorderColor)
+    }
+
+    func testPaperTabBoundaryJoinGradientStartsAtTheTabEdgeAndSettlesQuickly() {
+        XCTAssertEqual(TideyPaperTabPolicy.boundaryJoinGradientLocations(forBoundaryHeight: 100)
+            .map(\.doubleValue), [0, 0.14, 1])
+        XCTAssertEqual(TideyPaperTabPolicy.boundaryJoinGradientLocations(forBoundaryHeight: 7)
+            .map(\.doubleValue), [0, 1, 1])
+        XCTAssertEqual(TideyPaperTabPolicy.boundaryJoinGradientLocations(forBoundaryHeight: 0)
+            .map(\.doubleValue), [0, 1, 1])
     }
 
     func testEditorCanvasPolicyKeepsClassicMonacoAndJoinsWarmBaseSurface() {

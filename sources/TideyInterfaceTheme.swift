@@ -674,6 +674,18 @@ final class TideyPaperTabPolicy: NSObject {
     static let pullBarWidth: CGFloat = 2
     static let pullBarLength: CGFloat = 34
 
+    /// Distance over which a paper-tab leading edge settles into the fainter
+    /// pane separator below the tab row.
+    static let boundaryJoinGradientLength: CGFloat = 14
+
+    @objc(boundaryJoinGradientLocationsForBoundaryHeight:)
+    static func boundaryJoinGradientLocations(forBoundaryHeight height: CGFloat) -> [NSNumber] {
+        let settledLocation = height > 0
+            ? min(1, boundaryJoinGradientLength / height)
+            : 1
+        return [0, NSNumber(value: Double(settledLocation)), 1]
+    }
+
     @objc(outlineRectForTabBounds:selected:)
     static func outlineRect(forTabBounds bounds: NSRect, selected: Bool) -> NSRect {
         guard !selected else {

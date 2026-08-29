@@ -1172,8 +1172,8 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 // Separator pinned to one edge of its superview. Warm derives structural
 // separation from these because all base surfaces share a single fill; Classic
 // keeps them invisible via clear tokens. Vertical edges are the three resizable
-// boundaries: in Warm they show only a short pull bar centered on the arrow
-// control (the full-height drag handle is a separate, unchanged view).
+// boundaries. Warm tab-joining boundaries begin below the tab row and continue
+// the paper-tab leading edge; the full-height drag handle remains separate.
 @interface TideyPaneBoundaryView : NSView
 @property(nonatomic) TideyPaneBoundaryEdge tideyEdge;
 // Optional: pull-bar midpoint in superview coordinates. When nil the bar is
@@ -1184,6 +1184,17 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 // coordinates, unflipped). Used so the line between the terminal tab list and
 // the editor tab list disappears and the two strips read as one row.
 @property(nonatomic, copy) CGFloat (^tideyTopInsetProvider)(void);
+// Warm-only alignment and appearance used where a pane separator continues
+// from the leading edge of a paper tab below the tab row.
+@property(nonatomic) CGFloat tideyWarmHorizontalOffset;
+@property(nonatomic) BOOL tideyUsesPaperTabJoinGradient;
+@property(nonatomic, strong) NSColor *tideyBoundaryColor;
+@property(nonatomic, strong) NSColor *tideyTabJoinColor;
+@property(nonatomic, strong) CAGradientLayer *tideyTabJoinGradientLayer;
+@property(nonatomic) BOOL tideyWarmThemeActive;
+- (void)tideyApplyBoundaryColor:(NSColor *)boundaryColor
+                   tabJoinColor:(NSColor *)tabJoinColor
+                      warmTheme:(BOOL)warmTheme;
 @end
 
 @interface iTermRootTerminalView (TideyPaneBoundaryPolicy)
@@ -1197,6 +1208,8 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
       byExcludingTopHeight:(CGFloat)topInset
            superviewBounds:(NSRect)bounds;
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+                byOffsettingX:(CGFloat)xOffset;
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
@@ -1204,6 +1217,44 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 @end
 
 @implementation TideyPaneBoundaryView
+
+- (void)tideyUpdateLineAppearance {
+    const BOOL drawsJoinGradient = (self.tideyWarmThemeActive &&
+                                    self.tideyUsesPaperTabJoinGradient &&
+                                    self.tideyBoundaryColor &&
+                                    self.tideyTabJoinColor);
+    if (!drawsJoinGradient) {
+        self.layer.backgroundColor = self.tideyBoundaryColor.CGColor;
+        self.tideyTabJoinGradientLayer.hidden = YES;
+        return;
+    }
+
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    if (!self.tideyTabJoinGradientLayer) {
+        self.tideyTabJoinGradientLayer = [CAGradientLayer layer];
+        self.tideyTabJoinGradientLayer.startPoint = CGPointMake(0.5, 1);
+        self.tideyTabJoinGradientLayer.endPoint = CGPointMake(0.5, 0);
+        [self.layer addSublayer:self.tideyTabJoinGradientLayer];
+    }
+    self.tideyTabJoinGradientLayer.hidden = NO;
+    self.tideyTabJoinGradientLayer.frame = self.bounds;
+    self.tideyTabJoinGradientLayer.colors = @[
+        (__bridge id)self.tideyTabJoinColor.CGColor,
+        (__bridge id)self.tideyBoundaryColor.CGColor,
+        (__bridge id)self.tideyBoundaryColor.CGColor,
+    ];
+    self.tideyTabJoinGradientLayer.locations =
+        [TideyPaperTabPolicy boundaryJoinGradientLocationsForBoundaryHeight:NSHeight(self.bounds)];
+}
+
+- (void)tideyApplyBoundaryColor:(NSColor *)boundaryColor
+                   tabJoinColor:(NSColor *)tabJoinColor
+                      warmTheme:(BOOL)warmTheme {
+    self.tideyWarmThemeActive = warmTheme;
+    self.tideyBoundaryColor = boundaryColor;
+    self.tideyTabJoinColor = tabJoinColor;
+    [self tideyUpdateLineAppearance];
+}
 
 - (void)tideyPinToSuperviewEdge {
     NSView *parent = self.superview;
@@ -1217,12 +1268,18 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                         superviewBounds:parent.bounds
                                                            pullBarMidY:midY
                                                               warmTheme:TideyWarmInterfaceThemeIsActive()];
-    if (self.tideyTopInsetProvider && [iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:self.tideyEdge]) {
+    const BOOL warm = TideyWarmInterfaceThemeIsActive();
+    if (warm && self.tideyTopInsetProvider && [iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:self.tideyEdge]) {
         frame = [iTermRootTerminalView tideyPaneBoundaryFrame:frame
                                          byExcludingTopHeight:self.tideyTopInsetProvider()
                                               superviewBounds:parent.bounds];
     }
+    if (warm && self.tideyWarmHorizontalOffset != 0) {
+        frame = [iTermRootTerminalView tideyPaneBoundaryFrame:frame
+                                               byOffsettingX:self.tideyWarmHorizontalOffset];
+    }
     self.frame = frame;
+    [self tideyUpdateLineAppearance];
 }
 
 - (void)viewDidMoveToSuperview {
@@ -1698,6 +1755,12 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     }
     const CGFloat maxY = MIN(NSMaxY(frame), NSMaxY(bounds) - topInset);
     return NSMakeRect(NSMinX(frame), NSMinY(frame), NSWidth(frame), MAX(0, maxY - NSMinY(frame)));
+}
+
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+                byOffsettingX:(CGFloat)xOffset {
+    frame.origin.x += xOffset;
+    return frame;
 }
 
 // Full-height (or full-width) 1px line in both themes; Warm resizer edges use
@@ -2241,8 +2304,22 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         [self reloadTideyEditorFileTree];
 
         _tideyPaneBoundaryViews = [NSHashTable weakObjectsHashTable];
-        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
-                                        toView:_tideySidebarView];
+        TideyPaneBoundaryView *sidebarBoundaryView =
+            [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
+                                            toView:_tideySidebarView];
+        __weak __typeof(self) weakSelfForSidebarBoundary = self;
+        sidebarBoundaryView.tideyTopInsetProvider = ^CGFloat{
+            __strong __typeof(weakSelfForSidebarBoundary) strongSelf = weakSelfForSidebarBoundary;
+            if (!strongSelf || strongSelf.tabBarControl.hidden) {
+                return 0;
+            }
+            const CGFloat height = NSHeight(strongSelf.tabBarControl.frame);
+            return height > 0 ? height : kTideyEditorTabStripHeight;
+        };
+        // The sidebar separator is hosted inside the sidebar. Move its Warm
+        // stroke onto the adjacent tab's leading stroke column.
+        sidebarBoundaryView.tideyWarmHorizontalOffset = 1;
+        sidebarBoundaryView.tideyUsesPaperTabJoinGradient = YES;
         TideyPaneBoundaryView *editorBoundaryView =
             [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                             toView:_tideyEditorPanelView];
@@ -2253,6 +2330,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
             __strong __typeof(weakSelfForEditorBoundary) strongSelf = weakSelfForEditorBoundary;
             return strongSelf ? NSHeight(strongSelf->_tideyEditorTabStripView.frame) : 0;
         };
+        editorBoundaryView.tideyUsesPaperTabJoinGradient = YES;
         _tideyEditorFileTreeBoundaryView =
             [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                             toView:_tideyEditorFileTreeContainerView];
@@ -7189,8 +7267,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     BOOL warm = TideyWarmInterfaceThemeIsActive();
     for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
-        boundaryView.layer.backgroundColor =
-            [self tideyPaneBoundaryColorForEdge:boundaryView.tideyEdge tokens:tokens].CGColor;
+        [boundaryView tideyApplyBoundaryColor:
+            [self tideyPaneBoundaryColorForEdge:boundaryView.tideyEdge tokens:tokens]
+                                 tabJoinColor:tokens.tabSelectedOutlineColor
+                                    warmTheme:warm];
         [boundaryView tideyPinToSuperviewEdge];
     }
     _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
