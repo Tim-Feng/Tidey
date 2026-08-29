@@ -474,19 +474,29 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     // Baseline under everything except the selected tab.
     const CGFloat baselineY = NSMaxY(bar.bounds) - 0.5;
     if (selectedCell && !selectedCell.isInOverflowMenu) {
+        const CGFloat availableTrailingWidth = MAX(0, NSMaxX(bar.bounds) - NSMaxX(selectedCell.frame));
+        NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:selectedCell.frame selected:YES];
+        const NSRect fadeBaseline = [TideyPaperTabPolicy trailingBaselineRectForTabRect:outlineRect
+                                                                 availableTrailingWidth:availableTrailingWidth];
         [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
                                   toPoint:NSMakePoint(NSMinX(selectedCell.frame) + 0.5, baselineY)];
-        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMaxX(selectedCell.frame) - 0.5, baselineY)
+        // Plain baseline resumes only after the trailing fade.
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMaxX(fadeBaseline), baselineY)
                                   toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
         // Front sheet: redraw the selected cell over neighbouring outlines,
-        // then draw its own outline once in the focus color.
+        // stroke its leading side + top once in the focus color, then draw the
+        // trailing leg / corner / baseline fade as one continuous ramp.
         [selectedCell drawWithFrame:selectedCell.frame inView:bar];
         NSColor *selectedOutlineColor = [self.tabBar.delegate tabView:self.tabBar
                                                         valueOfOption:PSMTabBarControlOptionPaperTabSelectedOutlineColor]
             ?: outlineColor;
         [selectedOutlineColor set];
-        NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:selectedCell.frame selected:YES];
-        [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
+        [[TideyPaperTabPolicy selectedLeadingAndTopOutlinePathForRect:outlineRect] stroke];
+        [TideyPaperTabPolicy drawTrailingCornerForTabRect:outlineRect
+                                   availableTrailingWidth:availableTrailingWidth
+                                             outlineColor:selectedOutlineColor
+                                           separatorColor:outlineColor
+                                     stripBackgroundColor:self.tabBarColor];
     } else {
         [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
                                   toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];

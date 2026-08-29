@@ -119,8 +119,13 @@ final class TideyInterfaceThemeTests: XCTestCase {
                     green: 230.0 / 255.0,
                     blue: 210.0 / 255.0,
                     alpha: 0.08)
-        // Focused tab outline shares the workspace focus card edge color.
-        XCTAssertEqual(tokens.tabSelectedOutlineColor, tokens.sidebarSelectionBorderColor)
+        // Focused tab outline: same cream as the workspace focus edge but strong
+        // enough (0.40) for its trailing fade into the separators to be visible.
+        assertColor(tokens.tabSelectedOutlineColor,
+                    red: 240.0 / 255.0,
+                    green: 230.0 / 255.0,
+                    blue: 210.0 / 255.0,
+                    alpha: 0.40)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
         // Editor tabs reuse the production flat-tab component: no raised card,
         // no corner radius, and the selection indicator line carries seaglass.
@@ -163,7 +168,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabNewOutputDotColor(warmEnabled: true),
                        TideyInterfaceThemeTokens.warm.sidebarUnreadColor)
         XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabSelectedOutlineColor(warmEnabled: true),
-                       TideyInterfaceThemeTokens.warm.sidebarSelectionBorderColor)
+                       TideyInterfaceThemeTokens.warm.tabSelectedOutlineColor)
     }
 
     func testPaperTabBoundaryJoinGradientStartsAtTheTabEdgeAndSettlesQuickly() {
@@ -173,6 +178,91 @@ final class TideyInterfaceThemeTests: XCTestCase {
             .map(\.doubleValue), [0, 1, 1])
         XCTAssertEqual(TideyPaperTabPolicy.boundaryJoinGradientLocations(forBoundaryHeight: 0)
             .map(\.doubleValue), [0, 1, 1])
+    }
+
+    func testFocusedPaperTabTrailingCornerGeometryHandsTheLegToTheFadeRenderer() {
+        let tab = NSRect(x: 20, y: 0, width: 100, height: 30)
+        // Leading side + top end where the trailing leg starts, so the leg is never double-stroked.
+        let leadingAndTop = TideyPaperTabPolicy.selectedLeadingAndTopOutlinePath(for: tab)
+        XCTAssertEqual(leadingAndTop.currentPoint.x, 119.5, accuracy: 0.001)
+        XCTAssertEqual(leadingAndTop.currentPoint.y, 4.5, accuracy: 0.001)
+        // Trailing leg: the tab's last column, from below the arc to just above the corner pixel.
+        XCTAssertEqual(TideyPaperTabPolicy.trailingLegRect(forTabRect: tab),
+                       NSRect(x: 119, y: 4.5, width: 1, height: 24.5))
+        // Baseline fade: starts at the corner pixel, 24pt when room allows, clamped otherwise.
+        XCTAssertEqual(TideyPaperTabPolicy.trailingBaselineRect(forTabRect: tab, availableTrailingWidth: 200),
+                       NSRect(x: 119, y: 29, width: 25, height: 1))
+        XCTAssertEqual(TideyPaperTabPolicy.trailingBaselineRect(forTabRect: tab, availableTrailingWidth: 6),
+                       NSRect(x: 119, y: 29, width: 7, height: 1))
+        XCTAssertEqual(TideyPaperTabPolicy.trailingFadeVerticalLength, 14)
+        XCTAssertEqual(TideyPaperTabPolicy.trailingFadeHorizontalLength, 24)
+    }
+
+    /// Renders the shared trailing-corner ramp into a bitmap and checks the
+    /// actual pixels: solid focus color at the top of the leg, a visible
+    /// monotonic fade down to the corner, the corner pixel itself, then a fade
+    /// along the baseline that ends at the plain separator value.
+    func testFocusedPaperTabTrailingCornerRampIsVisibleAndContinuousInPixels() throws {
+        let width = 200, height = 40
+        let rep = try XCTUnwrap(NSBitmapImageRep(bitmapDataPlanes: nil,
+                                                 pixelsWide: width,
+                                                 pixelsHigh: height,
+                                                 bitsPerSample: 8,
+                                                 samplesPerPixel: 4,
+                                                 hasAlpha: true,
+                                                 isPlanar: false,
+                                                 colorSpaceName: .deviceRGB,
+                                                 bytesPerRow: 0,
+                                                 bitsPerPixel: 0))
+        let context = try XCTUnwrap(NSGraphicsContext(bitmapImageRep: rep))
+        let tokens = TideyInterfaceThemeTokens.warm
+        let strip = tokens.rightPanelTabStripBackgroundColor
+        let outline = tokens.tabSelectedOutlineColor
+        let separator = tokens.paneBoundaryColor
+        let tab = NSRect(x: 20, y: 0, width: 100, height: 30)
+
+        NSGraphicsContext.saveGraphicsState()
+        NSGraphicsContext.current = context
+        // Flip so the policy's flipped (y-down) coordinates map onto bitmap rows.
+        context.cgContext.translateBy(x: 0, y: CGFloat(height))
+        context.cgContext.scaleBy(x: 1, y: -1)
+        strip.setFill()
+        NSRect(x: 0, y: 0, width: width, height: height).fill()
+        // Host separator that the fade must replace under its baseline run.
+        separator.setFill()
+        NSRect(x: 0, y: 29, width: width, height: 1).fill()
+        TideyPaperTabPolicy.drawTrailingCorner(forTabRect: tab,
+                                               availableTrailingWidth: 80,
+                                               outlineColor: outline,
+                                               separatorColor: separator,
+                                               stripBackgroundColor: strip)
+        context.flushGraphics()
+        NSGraphicsContext.restoreGraphicsState()
+
+        func luma(_ x: Int, _ y: Int) -> CGFloat {
+            let c = rep.colorAt(x: x, y: y)!.usingColorSpace(.deviceRGB)!
+            return 0.2126 * c.redComponent + 0.7152 * c.greenComponent + 0.0722 * c.blueComponent
+        }
+        let stripLuma = luma(5, 5)
+        let separatorLuma = luma(180, 29)      // untouched host separator far right
+        let legTop = luma(119, 8)              // solid part of the trailing leg
+        let legMid = luma(119, 22)             // inside the vertical fade
+        let corner = luma(119, 29)             // corner pixel
+        let baselineNear = luma(125, 29)       // early in the baseline fade
+        let baselineFar = luma(140, 29)        // late in the baseline fade
+        let baselineAfter = luma(150, 29)      // beyond the fade: plain separator again
+
+        XCTAssertGreaterThan(legTop, stripLuma + 0.10, "focus outline must read clearly against the strip")
+        XCTAssertGreaterThan(legTop, legMid + 0.02, "leg must already be fading before its endpoint")
+        XCTAssertGreaterThan(legMid, corner, "fade continues down to the corner")
+        XCTAssertGreaterThan(corner, baselineNear - 0.005, "no color reset at the turn")
+        XCTAssertGreaterThan(baselineNear, baselineFar, "baseline keeps fading")
+        XCTAssertGreaterThan(baselineFar, separatorLuma - 0.005, "fade settles into the separator")
+        XCTAssertEqual(baselineAfter, separatorLuma, accuracy: 0.01)
+        XCTAssertGreaterThan(corner, separatorLuma, "corner is still visibly brighter than the plain separator")
+        // Nothing stroked on the leg's right neighbour or below the baseline.
+        XCTAssertEqual(luma(120, 8), stripLuma, accuracy: 0.01)
+        XCTAssertEqual(luma(119, 31), stripLuma, accuracy: 0.01)
     }
 
     func testEditorCanvasPolicyKeepsClassicMonacoAndJoinsWarmBaseSurface() {

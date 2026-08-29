@@ -670,6 +670,44 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+// Overlay above the selected editor tab: draws the focused paper tab's
+// trailing leg, lower-right corner, and baseline fade with the same policy
+// renderer the terminal tab bar uses, so both hosts produce the same pixels.
+@interface TideyPaperTabTrailingCornerView : NSView
+@property(nonatomic) CGFloat tideyTabHeight;
+@property(nonatomic) CGFloat tideyAvailableTrailingWidth;
+@property(nonatomic, strong) NSColor *tideyOutlineColor;
+@property(nonatomic, strong) NSColor *tideySeparatorColor;
+@property(nonatomic, strong) NSColor *tideyStripBackgroundColor;
+@end
+
+@implementation TideyPaperTabTrailingCornerView
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (!_tideyOutlineColor || !_tideySeparatorColor || !_tideyStripBackgroundColor) {
+        return;
+    }
+    // A tab rect whose trailing column (maxX - outlineWidth) is this view's
+    // column 0; only the trailing leg and baseline are drawn from it.
+    const NSRect localTabRect = NSMakeRect(-1, 0, 1 + TideyPaperTabPolicy.outlineWidth, _tideyTabHeight);
+    [TideyPaperTabPolicy drawTrailingCornerForTabRect:localTabRect
+                               availableTrailingWidth:_tideyAvailableTrailingWidth
+                                         outlineColor:_tideyOutlineColor
+                                       separatorColor:_tideySeparatorColor
+                                 stripBackgroundColor:_tideyStripBackgroundColor];
+}
+
+@end
+
 @interface TideyEditorTabItemView : NSView {
     NSTrackingArea *_trackingArea;
 }
@@ -818,7 +856,12 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         NSRectFill(self.bounds);
     }
     [(_tideySelected ? tokens.tabSelectedOutlineColor : tokens.tabOutlineColor) setStroke];
-    if (_tideySelected || _tideyLastInGroup) {
+    if (_tideySelected) {
+        // Trailing leg + corner fade are drawn by TideyPaperTabTrailingCornerView.
+        [[TideyPaperTabPolicy selectedLeadingAndTopOutlinePathForRect:outlineRect] stroke];
+        return;
+    }
+    if (_tideyLastInGroup) {
         [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
         return;
     }
@@ -5554,6 +5597,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [[self class] tideyRightPanelEffectiveTabWidthsForPreferredWidths:preferredTabWidths
                                                            tabBodyBudget:MAX(0, visibleStripWidth - fixedChromeWidth)];
     NSUInteger effectiveWidthIndex = 0;
+    TideyEditorTabItemView *selectedPaperTabView = nil;
     BOOL isFirstGroup = YES;
     for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
@@ -5679,6 +5723,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             if (selected) {
                 // Front sheet: the selected tab sits above its neighbours.
                 [tabStripView addSubview:tabView positioned:NSWindowAbove relativeTo:nil];
+                selectedPaperTabView = tabView;
             }
             x += tabWidth;
         }
@@ -5709,6 +5754,27 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         pane.tabStripScrollOffset = clampedOffset;
         [self reloadTideyRightPanelTabsForPane:pane];
         return;
+    }
+
+    if (warm && selectedPaperTabView && tokens.tabOutlineColor.alphaComponent > 0) {
+        // Same trailing-corner treatment as the terminal tab bar.
+        const NSRect tabFrame = selectedPaperTabView.frame;
+        const CGFloat availableTrailingWidth = MAX(0, NSMaxX(tabStripView.bounds) - NSMaxX(tabFrame));
+        const NSRect baselineRect = [TideyPaperTabPolicy trailingBaselineRectForTabRect:NSMakeRect(0, 0, 1, NSHeight(tabFrame))
+                                                                 availableTrailingWidth:availableTrailingWidth];
+        TideyPaperTabTrailingCornerView *cornerView =
+            [[TideyPaperTabTrailingCornerView alloc] initWithFrame:NSMakeRect(NSMaxX(tabFrame) - TideyPaperTabPolicy.outlineWidth,
+                                                                              NSMinY(tabFrame),
+                                                                              NSWidth(baselineRect),
+                                                                              NSHeight(tabFrame))];
+        cornerView.tideyTabHeight = NSHeight(tabFrame);
+        cornerView.tideyAvailableTrailingWidth = availableTrailingWidth;
+        cornerView.tideyOutlineColor = tokens.tabSelectedOutlineColor;
+        cornerView.tideySeparatorColor = tokens.paneBoundaryColor;
+        cornerView.tideyStripBackgroundColor = activePane
+            ? tokens.rightPanelActiveTabStripBackgroundColor
+            : tokens.rightPanelInactiveTabStripBackgroundColor;
+        [tabStripView addSubview:cornerView positioned:NSWindowAbove relativeTo:nil];
     }
 
     if (pane == _primaryPane) {
