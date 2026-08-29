@@ -63,6 +63,12 @@ final class TideyInterfaceThemeTests: XCTestCase {
             NSRect(x: 92, y: 3, width: 380, height: 22)
         )
         XCTAssertEqual(
+            TideyBrowserToolbarPolicy.urlFieldTextRect(
+                fieldBounds: NSRect(x: 0, y: 0, width: 380, height: 22),
+                warmEnabled: true),
+            NSRect(x: 8, y: 3, width: 364, height: 16)
+        )
+        XCTAssertEqual(
             TideyBrowserToolbarPolicy.toolbarBackgroundColor(
                 tokens: tokens,
                 warmEnabled: true),
@@ -84,6 +90,12 @@ final class TideyInterfaceThemeTests: XCTestCase {
                 contentWidth: 500,
                 warmEnabled: false),
             NSRect(x: 92, y: 3, width: 380, height: 22)
+        )
+        XCTAssertEqual(
+            TideyBrowserToolbarPolicy.urlFieldTextRect(
+                fieldBounds: NSRect(x: 0, y: 0, width: 380, height: 22),
+                warmEnabled: false),
+            NSRect(x: 0, y: 0, width: 380, height: 22)
         )
         assertColor(
             TideyBrowserToolbarPolicy.toolbarBackgroundColor(

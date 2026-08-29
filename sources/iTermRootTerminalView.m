@@ -754,6 +754,62 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+// A borderless NSTextFieldCell otherwise places text against its upper-left
+// drawing origin. Warm gives the URL one deliberate content box while Classic
+// continues through AppKit's native cell geometry unchanged.
+@interface TideyBrowserURLFieldCell : NSTextFieldCell
+@property(nonatomic) BOOL tideyWarmLayout;
+@end
+
+@implementation TideyBrowserURLFieldCell
+
+- (NSRect)tideyTextRectForBounds:(NSRect)bounds {
+    return [TideyBrowserToolbarPolicy urlFieldTextRectForFieldBounds:bounds
+                                                         warmEnabled:_tideyWarmLayout];
+}
+
+- (NSRect)drawingRectForBounds:(NSRect)bounds {
+    return _tideyWarmLayout
+        ? [self tideyTextRectForBounds:bounds]
+        : [super drawingRectForBounds:bounds];
+}
+
+- (NSRect)titleRectForBounds:(NSRect)bounds {
+    return _tideyWarmLayout
+        ? [self tideyTextRectForBounds:bounds]
+        : [super titleRectForBounds:bounds];
+}
+
+- (void)editWithFrame:(NSRect)frame
+                inView:(NSView *)controlView
+                 editor:(NSText *)textObject
+               delegate:(id)delegate
+                  event:(NSEvent *)event {
+    NSRect editorFrame = _tideyWarmLayout ? [self tideyTextRectForBounds:frame] : frame;
+    [super editWithFrame:editorFrame
+                  inView:controlView
+                   editor:textObject
+                 delegate:delegate
+                    event:event];
+}
+
+- (void)selectWithFrame:(NSRect)frame
+                  inView:(NSView *)controlView
+                   editor:(NSText *)textObject
+                 delegate:(id)delegate
+                    start:(NSInteger)selectionStart
+                   length:(NSInteger)selectionLength {
+    NSRect editorFrame = _tideyWarmLayout ? [self tideyTextRectForBounds:frame] : frame;
+    [super selectWithFrame:editorFrame
+                    inView:controlView
+                     editor:textObject
+                   delegate:delegate
+                      start:selectionStart
+                     length:selectionLength];
+}
+
+@end
+
 // Warm renders a group label as the index tab of the paper-tab stack. Classic
 // keeps the existing filled capsule through the ordinary NSButton path.
 @interface TideyRightPanelGroupButton : NSButton {
@@ -4545,6 +4601,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                  3,
                                  100,
                                  [TideyBrowserToolbarPolicy urlFieldHeightWithWarmEnabled:warm])];
+    TideyBrowserURLFieldCell *urlFieldCell = [[TideyBrowserURLFieldCell alloc] initTextCell:@""];
+    urlFieldCell.tideyWarmLayout = warm;
+    pane.browserURLField.cell = urlFieldCell;
     pane.browserURLField.autoresizingMask = NSViewWidthSizable;
     pane.browserURLField.usesSingleLineMode = YES;
     pane.browserURLField.cell.wraps = NO;
@@ -7732,6 +7791,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         pane.browserURLField.layer.cornerRadius = warm ? 8 : 6;
         pane.browserURLField.layer.borderWidth = warm ? 1 : 0;
         pane.browserURLField.layer.borderColor = tokens.hairlineColor.CGColor;
+        if ([pane.browserURLField.cell isKindOfClass:[TideyBrowserURLFieldCell class]]) {
+            ((TideyBrowserURLFieldCell *)pane.browserURLField.cell).tideyWarmLayout = warm;
+        }
+        [pane.browserURLField setNeedsDisplay:YES];
         [self tideyLayoutBrowserContainerForPane:pane];
     }
     [self layoutTideyEditorContents];

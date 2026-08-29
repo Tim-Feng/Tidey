@@ -690,6 +690,18 @@ final class TideyBrowserToolbarPolicy: NSObject {
                       height: fieldHeight)
     }
 
+    @objc(urlFieldTextRectForFieldBounds:warmEnabled:)
+    static func urlFieldTextRect(fieldBounds: NSRect,
+                                 warmEnabled: Bool) -> NSRect {
+        guard warmEnabled else {
+            return fieldBounds
+        }
+        return NSRect(x: fieldBounds.minX + 8,
+                      y: fieldBounds.minY + 3,
+                      width: max(0, fieldBounds.width - 16),
+                      height: max(0, fieldBounds.height - 6))
+    }
+
     @objc(toolbarBackgroundColorWithTokens:warmEnabled:)
     static func toolbarBackgroundColor(tokens: TideyInterfaceThemeTokens,
                                        warmEnabled: Bool) -> NSColor {
