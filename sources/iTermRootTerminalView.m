@@ -1103,7 +1103,6 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     TideyPaneBoundaryEdgeLeft,
     TideyPaneBoundaryEdgeRight,
     TideyPaneBoundaryEdgeBottom,
-    TideyPaneBoundaryEdgeTop,
 };
 
 // 1px separator pinned to one edge of its superview. Warm derives structural
@@ -1130,9 +1129,6 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
             break;
         case TideyPaneBoundaryEdgeBottom:
             self.frame = NSMakeRect(0, 0, NSWidth(bounds), 1);
-            break;
-        case TideyPaneBoundaryEdgeTop:
-            self.frame = NSMakeRect(0, MAX(0, NSHeight(bounds) - 1), NSWidth(bounds), 1);
             break;
     }
 }
@@ -1218,6 +1214,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     NSView *_tideyEditorTabStripView;
 
     NSView *_tideyEditorFileTreeContainerView;
+    NSView *_tideyEditorFileTreeTopBoundaryView;
     NSScrollView *_tideyEditorFileTreeScrollView;
     NSOutlineView *_tideyEditorFileTreeView;
     TideyEditorFileNode *_tideyEditorFileTreeRootNode;
@@ -2064,10 +2061,15 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                         toView:_tideyEditorPanelView];
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                         toView:_tideyEditorFileTreeContainerView];
-        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeTop
-                                        toView:_tideyEditorFileTreeContainerView];
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
                                         toView:_tideyEditorTabStripView];
+        _tideyEditorFileTreeTopBoundaryView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeTopBoundaryView.wantsLayer = YES;
+        _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor =
+            TideyInterfaceThemeController.shared.currentTokens.paneBoundaryColor.CGColor;
+        [_tideyEditorPanelView addSubview:_tideyEditorFileTreeTopBoundaryView
+                               positioned:NSWindowAbove
+                               relativeTo:nil];
 
         self.tideySidebarDragHandle = [[iTermDragHandleView alloc] initWithFrame:NSZeroRect];
         self.tideySidebarDragHandle.delegate = self;
@@ -4825,6 +4827,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(contentWidth, 0, fileTreeWidth, contentHeight);
+    _tideyEditorFileTreeTopBoundaryView.hidden = !self.shouldShowTideyEditorFileTree;
+    _tideyEditorFileTreeTopBoundaryView.frame = NSMakeRect(contentWidth,
+                                                           contentHeight,
+                                                           fileTreeWidth,
+                                                           1);
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
     [self tideySyncEditorFileTreeWatcher];
     [self constrainTideyEditorFileTreeToVisibleWidth];
@@ -6955,6 +6962,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
         boundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
     }
+    _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
     if (@available(macOS 11.0, *)) {
         _tideySidebarTableView.style = [[self class] tideySidebarTableStyleForWarmTheme:warm];
     }
