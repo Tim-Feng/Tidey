@@ -574,6 +574,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 + (NSArray<NSNumber *> *)tideyRightPanelEffectiveTabWidthsForPreferredWidths:(NSArray<NSNumber *> *)preferredWidths
                                                                tabBodyBudget:(CGFloat)tabBodyBudget;
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetricsForWarmTheme:(BOOL)warm;
 + (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
                                                      clickedIdentifier:(NSString *)clickedIdentifier
                                                       closeTabsToRight:(BOOL)closeTabsToRight;
@@ -1570,6 +1571,24 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         [effectiveWidths addObject:@(equalWidth)];
     }
     return effectiveWidths;
+}
+
+// Production tab/group component geometry. Warm intentionally reuses it
+// unchanged; themes only differ through color tokens.
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetricsForWarmTheme:(BOOL)warm {
+    (void)warm;
+    return @{
+        @"tabFontSize": @11,
+        @"groupLabelFontSize": @9,
+        @"groupButtonHeight": @20,
+        @"tabVerticalInset": @0,
+        @"titleLeadingInset": @10,
+        @"titleTrailingInsetWithClose": @34,
+        @"titleTrailingInsetWithoutClose": @18,
+        @"closeButtonWidth": @20,
+        @"closeButtonTrailingInset": @2,
+        @"addButtonSize": @22,
+    };
 }
 
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {
@@ -5190,6 +5209,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     BOOL activePane = (pane == self.activePane);
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     BOOL warm = TideyWarmInterfaceThemeIsActive();
+    NSDictionary<NSString *, NSNumber *> *metrics =
+        [[self class] tideyRightPanelTabComponentMetricsForWarmTheme:warm];
     tabStripView.layer.backgroundColor = (activePane
         ? tokens.rightPanelActiveTabStripBackgroundColor
         : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
@@ -5198,13 +5219,15 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat insetX = 0;
     const CGFloat tabHeight = MAX(22, stripHeight);
-    const CGFloat addButtonSize = 22;
+    const CGFloat addButtonSize = metrics[@"addButtonSize"].doubleValue;
+    const CGFloat tabFontSize = metrics[@"tabFontSize"].doubleValue;
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *tabAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:warm ? 13 : 11 weight:NSFontWeightMedium]
+        NSFontAttributeName: [NSFont systemFontOfSize:tabFontSize weight:NSFontWeightMedium]
     };
     NSDictionary<NSAttributedStringKey, id> *groupLabelAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:warm ? 12 : 9 weight:NSFontWeightSemibold]
+        NSFontAttributeName: [NSFont systemFontOfSize:metrics[@"groupLabelFontSize"].doubleValue
+                                                weight:NSFontWeightSemibold]
     };
     NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:pane.tabs
                                                                                         editorExpanded:pane.editorGroupExpanded
@@ -5250,7 +5273,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
         CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
-        CGFloat groupButtonHeight = warm ? 24 : 20;
+        CGFloat groupButtonHeight = metrics[@"groupButtonHeight"].doubleValue;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
         NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
                                                                            groupButtonY,
@@ -5270,12 +5293,6 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         NSColor *collapsedBackgroundColor = tokens.rightPanelGroupCollapsedFillColor;
         NSColor *expandedTextColor = tokens.rightPanelGroupExpandedTextColor;
         NSColor *collapsedTextColor = tokens.rightPanelGroupCollapsedTextColor;
-        if (warm && group.kind == TideyRightPanelTabKindEditor) {
-            expandedBackgroundColor = [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.06];
-            collapsedBackgroundColor = [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.035];
-            expandedTextColor = tokens.rightPanelSecondaryTextColor;
-            collapsedTextColor = tokens.rightPanelTertiaryTextColor;
-        }
         groupButton.layer.backgroundColor = (group.expanded ? expandedBackgroundColor : collapsedBackgroundColor).CGColor;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
@@ -5299,7 +5316,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             effectiveWidthIndex++;
             NSInteger originalIndex = [pane.tabs indexOfObjectIdenticalTo:tab];
 
-            CGFloat tabVerticalInset = warm ? 4 : 0;
+            CGFloat tabVerticalInset = metrics[@"tabVerticalInset"].doubleValue;
             CGFloat tabContentHeight = MAX(22, tabHeight - tabVerticalInset * 2);
             TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
                                                                                                         tabVerticalInset,
@@ -5316,7 +5333,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             tabView.tideyHovered = NO;
             [tabView tideyUpdateAppearance];
 
-            NSFont *baseFont = [NSFont systemFontOfSize:warm ? 13 : 11
+            NSFont *baseFont = [NSFont systemFontOfSize:tabFontSize
                                                   weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
             TideyFadingPassthroughLabel *titleLabel = [TideyFadingPassthroughLabel labelWithString:title];
             titleLabel.usesSingleLineMode = YES;
@@ -5330,11 +5347,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             CGFloat titleLabelY = floor((tabContentHeight - titleLabelHeight) / 2.0);
             BOOL showCloseButton = [[self class] tideyRightPanelShouldShowCloseButtonForWidth:tabWidth
                                                                                      selected:selected];
-            CGFloat titleLeadingInset = warm ? 14 : 10;
-            CGFloat titleTrailingInset = showCloseButton ? (warm ? 45 : 34) : (warm ? 24 : 18);
-            CGFloat titleWidth = warm
-                ? tabWidth - titleLeadingInset - titleTrailingInset
-                : tabWidth - titleTrailingInset;
+            CGFloat titleLeadingInset = metrics[@"titleLeadingInset"].doubleValue;
+            CGFloat titleTrailingInset = (showCloseButton
+                ? metrics[@"titleTrailingInsetWithClose"]
+                : metrics[@"titleTrailingInsetWithoutClose"]).doubleValue;
+            CGFloat titleWidth = tabWidth - titleTrailingInset;
             titleLabel.frame = NSMakeRect(titleLeadingInset,
                                           titleLabelY,
                                           MAX(0, titleWidth),
@@ -5344,24 +5361,17 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             [tabView addSubview:titleLabel];
 
             if (showCloseButton) {
-                CGFloat closeSize = warm ? 17 : 20;
-                CGFloat closeTrailingInset = warm ? 12 : 2;
-                NSRect closeFrame = warm
-                    ? NSMakeRect(tabWidth - closeTrailingInset - closeSize,
-                                 floor((tabContentHeight - closeSize) / 2.0),
-                                 closeSize,
-                                 closeSize)
-                    : NSMakeRect(tabWidth - 22, 2, 20, tabHeight - 2);
+                const CGFloat closeWidth = metrics[@"closeButtonWidth"].doubleValue;
+                const CGFloat closeTrailingInset = metrics[@"closeButtonTrailingInset"].doubleValue;
+                NSRect closeFrame = NSMakeRect(tabWidth - closeTrailingInset - closeWidth,
+                                               2,
+                                               closeWidth,
+                                               tabHeight - 2);
                 NSButton *closeButton = [[NSButton alloc] initWithFrame:closeFrame];
                 closeButton.bordered = NO;
                 closeButton.buttonType = NSButtonTypeMomentaryChange;
                 closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
                 closeButton.contentTintColor = selected ? tokens.rightPanelPrimaryTextColor : tokens.rightPanelSecondaryTextColor;
-                closeButton.wantsLayer = warm;
-                closeButton.layer.cornerRadius = warm ? 5 : 0;
-                closeButton.layer.backgroundColor = warm
-                    ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.07].CGColor
-                    : NSColor.clearColor.CGColor;
                 closeButton.title = @"✕";
                 closeButton.tag = originalIndex;
                 closeButton.target = self;
@@ -6755,11 +6765,15 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     NSString *vsURLString = [[self tideyEditorMonacoVSURL] absoluteString];
     NSString *loaderURLString = [[self tideyEditorMonacoLoaderURL] absoluteString];
     NSString *workerURLString = [[self tideyEditorMonacoWorkerURL] absoluteString];
+    const BOOL warm = TideyWarmInterfaceThemeIsActive();
+    NSString *pageBackgroundHex = [TideyEditorCanvasPolicy pageBackgroundHexWithWarmEnabled:warm];
+    NSString *monacoThemeName = [TideyEditorCanvasPolicy monacoThemeNameWithWarmEnabled:warm];
+    NSString *themeDefinitionScript = [TideyEditorCanvasPolicy themeDefinitionScriptWithWarmEnabled:warm];
     return [NSString stringWithFormat:@"<!doctype html>"
             "<html><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             "<style>"
-            "html, body, #editor { margin:0; padding:0; width:100%%; height:100%%; overflow:hidden; background:#16181d; }"
+            "html, body, #editor { margin:0; padding:0; width:100%%; height:100%%; overflow:hidden; background:%@; }"
             "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
             "::-webkit-scrollbar { display: none; }"
             ".monaco-editor .scrollbar .slider { opacity: 0; transition: opacity 0.3s; }"
@@ -6806,6 +6820,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "  setEditable(editable) {"
             "    window.__tideyPendingEditable = !!editable;"
             "    if (window.__tideyEditor) { window.__tideyEditor.updateOptions({ readOnly: !window.__tideyPendingEditable }); }"
+            "  },"
+            "  setTheme(themeName, backgroundHex) {"
+            "    document.documentElement.style.background = backgroundHex;"
+            "    document.body.style.background = backgroundHex;"
+            "    if (window.__tideyEditor && window.monaco) { monaco.editor.setTheme(themeName); }"
             "  }"
             "};"
             "</script>"
@@ -6814,10 +6833,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "<script>"
             "require.config({ paths: { vs: '%@' } });"
             "require(['vs/editor/editor.main'], function() {"
+            "  %@"
             "  window.__tideyEditor = monaco.editor.create(document.getElementById('editor'), {"
             "    value: '',"
             "    language: 'plaintext',"
-            "    theme: 'vs-dark',"
+            "    theme: '%@',"
             "    readOnly: false,"
             "    automaticLayout: true,"
             "    wordWrap: 'on',"
@@ -6864,10 +6884,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "  }"
             "});"
             "</script></body></html>",
+            pageBackgroundHex,
             baseURLString,
             workerURLString,
             loaderURLString,
-            vsURLString];
+            vsURLString,
+            themeDefinitionScript,
+            monacoThemeName];
 }
 
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
@@ -7004,8 +7027,18 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         ? tokens.rightPanelTabStripBackgroundColor.CGColor
         : NSColor.clearColor.CGColor;
     _tabBarBacking.visualEffectView.hidden = warm || _tideyClassicTabBarVisualEffectHidden;
+    // Define the Warm Monaco theme before selecting it so a page that loaded
+    // under Classic can switch live; Classic's definition script is empty.
+    NSString *editorThemeScript = [NSString stringWithFormat:
+        @"if (window.monaco) { %@ } window.tideyNative && window.tideyNative.setTheme('%@', '%@');",
+        [TideyEditorCanvasPolicy themeDefinitionScriptWithWarmEnabled:warm],
+        [TideyEditorCanvasPolicy monacoThemeNameWithWarmEnabled:warm],
+        [TideyEditorCanvasPolicy pageBackgroundHexWithWarmEnabled:warm]];
     for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
         pane.containerView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
+        if (pane.editorShellLoaded) {
+            [pane.editorWebView evaluateJavaScript:editorThemeScript completionHandler:nil];
+        }
         pane.tabStripView.layer.backgroundColor = (pane == self.activePane
             ? tokens.rightPanelActiveTabStripBackgroundColor
             : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;

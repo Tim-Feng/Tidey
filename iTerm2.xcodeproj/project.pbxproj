@@ -5151,6 +5151,7 @@
 		C48D7AA2E70B019313C401F3 /* WordSelectionAtom.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */; };
 		C553EACADC5ADCED8853BAD9 /* TideyBrowserAutomationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */; };
 		C6675EBC1C4FE96B0041173B /* iTermSelectorSwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = C6675EBB1C4FE96B0041173B /* iTermSelectorSwizzler.m */; };
+		C8951ECCFF64C23E3B1CA8EE /* TideyRightPanelTabComponentParityTests.m in Sources */ = {isa = PBXBuildFile; fileRef = BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */; };
 		CB70AF3C87FF32326EE98992 /* TideyBrowserAutomationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40463B3F406C007568BC50DB /* TideyBrowserAutomationEngine.swift */; };
 		CDCD9FF08FCE42F7A6963859 /* PillBackgroundGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA289FFE2BF4090A65931BA /* PillBackgroundGenerator.swift */; };
 		CE6F5BF4B6C9719F5667CA8D /* TideyBrowserAutomationAdoptionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */; };
@@ -9256,6 +9257,7 @@
 		AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotPreviewOverlay.swift; sourceTree = "<group>"; };
 		AF19E441FF824539A275D8DA /* iTermLayoutCalculator.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculator.m; sourceTree = "<group>"; };
 		B231EDB860248C368A511B42 /* iTermEventTriggerEvaluator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermEventTriggerEvaluator.swift; sourceTree = "<group>"; };
+		BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabComponentParityTests.m; sourceTree = "<group>"; };
 		BC3C36C01A55D7615DFCC054 /* TideySidebarViews.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = TideySidebarViews.h; sourceTree = "<group>"; };
 		BF293383B49E6E491594E918 /* TideySidebarPresentationCharacterizationTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySidebarPresentationCharacterizationTests.m; sourceTree = "<group>"; };
 		C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WordSelectionAtom.swift; sourceTree = "<group>"; };
@@ -10115,6 +10117,7 @@
 				ED06023E9B9B0E7678D32E3F /* TideyBrowserAuthenticatedTransferTests.swift */,
 				9B060E519B9C7F7D84874A62 /* TideyApplicationEnvironmentPolicyTests.swift */,
 				37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */,
+				BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -20534,6 +20537,7 @@
 				A19EB11C6A48D547086BC106 /* TideyBrowserAuthenticatedTransferTests.swift in Sources */,
 				92B3FC50E8D302E881489506 /* TideyApplicationEnvironmentPolicyTests.swift in Sources */,
 				5FDFE8EB3CADAD614FCF6E53 /* TideyInterfaceThemeTests.swift in Sources */,
+				C8951ECCFF64C23E3B1CA8EE /* TideyRightPanelTabComponentParityTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

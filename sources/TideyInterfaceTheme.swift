@@ -133,6 +133,12 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                       blue: 0x13 / 255.0,
                                                       alpha: 1)
 
+    // Shared Warm accent: terminal tab underline, editor tab indicator, running state.
+    static let warmSeaglassColor = NSColor(srgbRed: 0x7A / 255.0,
+                                           green: 0xA8 / 255.0,
+                                           blue: 0x9F / 255.0,
+                                           alpha: 1)
+
     static let warm = TideyInterfaceThemeTokens(
         sidebarBackgroundColor: warmBaseSurfaceColor,
         sidebarSelectionColor: NSColor(srgbRed: 0x2F / 255.0,
@@ -216,7 +222,7 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                    green: 230 / 255.0,
                                                    blue: 210 / 255.0,
                                                    alpha: 0.07),
-        rightPanelTabSelectionIndicatorColor: .clear,
+        rightPanelTabSelectionIndicatorColor: warmSeaglassColor,
         rightPanelTabSeparatorColor: NSColor(srgbRed: 240 / 255.0,
                                              green: 230 / 255.0,
                                              blue: 210 / 255.0,
@@ -279,9 +285,11 @@ final class TideyInterfaceThemeTokens: NSObject {
                                blue: 210 / 255.0,
                                alpha: 0.07),
         usesRaisedSidebarSelection: true,
-        usesRaisedRightPanelTabs: true,
+        // Editor tabs reuse the production flat-tab component; Warm only
+        // recolors it (seaglass indicator line, cream text, base surface).
+        usesRaisedRightPanelTabs: false,
         sidebarSelectionCornerRadius: 8,
-        rightPanelTabCornerRadius: 8)
+        rightPanelTabCornerRadius: 0)
 
     let sidebarBackgroundColor: NSColor
     let sidebarSelectionColor: NSColor
@@ -431,7 +439,7 @@ final class TideyInterfaceThemeTokens: NSObject {
 
 @objcMembers
 final class TideyTerminalPalettePolicy: NSObject {
-    static let warmTabUnderlineColor = color(hex: 0x7AA89F)
+    static let warmTabUnderlineColor = TideyInterfaceThemeTokens.warmSeaglassColor
 
     static let warmColorTable: [NSNumber: NSColor] = {
         let namedColors: [(Int32, Int)] = [
@@ -489,5 +497,103 @@ final class TideyTerminalPalettePolicy: NSObject {
                 green: CGFloat((hex >> 8) & 0xff) / 255,
                 blue: CGFloat(hex & 0xff) / 255,
                 alpha: 1)
+    }
+}
+
+// Editor web canvas (Monaco) theme policy. Classic keeps the historical
+// `vs-dark` + `#16181d` page exactly; Warm defines a Monaco theme whose UI
+// colors come from the Warm tokens and whose syntax rules reuse the accepted
+// Warm terminal palette families.
+@objcMembers
+final class TideyEditorCanvasPolicy: NSObject {
+    static let classicMonacoThemeName = "vs-dark"
+    static let warmMonacoThemeName = "tidey-warm"
+    static let classicPageBackgroundHex = "#16181d"
+
+    @objc(monacoThemeNameWithWarmEnabled:)
+    static func monacoThemeName(warmEnabled: Bool) -> String {
+        warmEnabled ? warmMonacoThemeName : classicMonacoThemeName
+    }
+
+    @objc(pageBackgroundHexWithWarmEnabled:)
+    static func pageBackgroundHex(warmEnabled: Bool) -> String {
+        warmEnabled ? hexString(for: TideyInterfaceThemeTokens.warm.rightPanelBackgroundColor)
+                    : classicPageBackgroundHex
+    }
+
+    /// JavaScript that registers the Warm Monaco theme; empty for Classic so the
+    /// production page stays byte-identical.
+    @objc(themeDefinitionScriptWithWarmEnabled:)
+    static func themeDefinitionScript(warmEnabled: Bool) -> String {
+        guard warmEnabled else {
+            return ""
+        }
+        return "monaco.editor.defineTheme('\(warmMonacoThemeName)', \(warmThemeDefinitionJSON));"
+    }
+
+    static func hexString(for color: NSColor) -> String {
+        let srgb = color.usingColorSpace(.sRGB) ?? color
+        let red = Int((srgb.redComponent * 255).rounded())
+        let green = Int((srgb.greenComponent * 255).rounded())
+        let blue = Int((srgb.blueComponent * 255).rounded())
+        return String(format: "#%02x%02x%02x", red, green, blue)
+    }
+
+    private static var warmThemeDefinitionJSON: String {
+        let tokens = TideyInterfaceThemeTokens.warm
+        let palette = TideyTerminalPalettePolicy.warmColorTable
+        func ansi(_ index: Int32) -> String {
+            hexString(for: palette[NSNumber(value: kColorMap8bitBase + index)] ?? tokens.rightPanelPrimaryTextColor)
+        }
+        let base = hexString(for: tokens.rightPanelBackgroundColor)
+        let text = hexString(for: tokens.rightPanelPrimaryTextColor)
+        let secondary = hexString(for: tokens.rightPanelSecondaryTextColor)
+        let tertiary = hexString(for: tokens.rightPanelTertiaryTextColor)
+        let selection = hexString(for: tokens.sidebarSelectionColor)
+        let hover = hexString(for: tokens.rightPanelTabHoverColor)
+        let raised = hexString(for: tokens.settingsCardBackgroundColor)
+        let seaglass = hexString(for: TideyInterfaceThemeTokens.warmSeaglassColor)
+        let cursor = hexString(for: palette[NSNumber(value: kColorMapCursor)] ?? TideyInterfaceThemeTokens.warmSeaglassColor)
+        let colors: [(String, String)] = [
+            ("editor.background", base),
+            ("editor.foreground", text),
+            ("editorGutter.background", base),
+            ("editorLineNumber.foreground", tertiary),
+            ("editorLineNumber.activeForeground", secondary),
+            ("editorCursor.foreground", cursor),
+            ("editor.selectionBackground", selection),
+            ("editor.inactiveSelectionBackground", ansi(0)),
+            ("editor.lineHighlightBackground", hover),
+            ("editor.lineHighlightBorder", hover),
+            ("editorIndentGuide.background", ansi(0)),
+            ("editorIndentGuide.activeBackground", ansi(8)),
+            ("editorBracketMatch.background", hover),
+            ("editorBracketMatch.border", seaglass),
+            ("editorWidget.background", raised),
+            ("editorWidget.border", raised),
+            ("editorSuggestWidget.background", raised),
+            ("editorHoverWidget.background", raised),
+            ("input.background", base),
+            ("scrollbarSlider.background", ansi(8) + "80"),
+            ("scrollbarSlider.hoverBackground", ansi(8) + "b0"),
+            ("scrollbarSlider.activeBackground", ansi(8) + "b0"),
+            ("editorLink.activeForeground", seaglass),
+            ("minimap.background", base),
+        ]
+        let rules: [(String, String)] = [
+            ("comment", tertiary),
+            ("keyword", ansi(4)),
+            ("string", ansi(2)),
+            ("number", ansi(3)),
+            ("type", ansi(6)),
+            ("variable", text),
+            ("delimiter", secondary),
+            ("operator", secondary),
+            ("tag", ansi(1)),
+            ("attribute.name", ansi(3)),
+        ]
+        let colorEntries = colors.map { "\"\($0.0)\":\"\($0.1)\"" }.joined(separator: ",")
+        let ruleEntries = rules.map { "{\"token\":\"\($0.0)\",\"foreground\":\"\($0.1.dropFirst())\"}" }.joined(separator: ",")
+        return "{\"base\":\"vs-dark\",\"inherit\":true,\"rules\":[\(ruleEntries)],\"colors\":{\(colorEntries)}}"
     }
 }

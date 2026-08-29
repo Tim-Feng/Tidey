@@ -107,9 +107,32 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.fileTreeIconColor, hex: 0xA89F8D)
         assertColor(tokens.fileTreeSelectionColor, hex: 0x2F2C28)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
-        XCTAssertTrue(tokens.usesRaisedRightPanelTabs)
+        // Editor tabs reuse the production flat-tab component: no raised card,
+        // no corner radius, and the selection indicator line carries seaglass.
+        XCTAssertFalse(tokens.usesRaisedRightPanelTabs)
         XCTAssertEqual(tokens.sidebarSelectionCornerRadius, 8)
-        XCTAssertEqual(tokens.rightPanelTabCornerRadius, 8)
+        XCTAssertEqual(tokens.rightPanelTabCornerRadius, 0)
+        assertColor(tokens.rightPanelTabSelectionIndicatorColor, hex: 0x7AA89F)
+        XCTAssertEqual(tokens.rightPanelTabSelectionIndicatorColor,
+                       TideyTerminalPalettePolicy.terminalTabUnderlineColor(warmEnabled: true))
+    }
+
+    func testEditorCanvasPolicyKeepsClassicMonacoAndJoinsWarmBaseSurface() {
+        XCTAssertEqual(TideyEditorCanvasPolicy.monacoThemeName(warmEnabled: false), "vs-dark")
+        XCTAssertEqual(TideyEditorCanvasPolicy.pageBackgroundHex(warmEnabled: false), "#16181d")
+        XCTAssertEqual(TideyEditorCanvasPolicy.themeDefinitionScript(warmEnabled: false), "")
+
+        XCTAssertEqual(TideyEditorCanvasPolicy.monacoThemeName(warmEnabled: true), "tidey-warm")
+        XCTAssertEqual(TideyEditorCanvasPolicy.pageBackgroundHex(warmEnabled: true), "#151413")
+        let script = TideyEditorCanvasPolicy.themeDefinitionScript(warmEnabled: true)
+        XCTAssertTrue(script.hasPrefix("monaco.editor.defineTheme('tidey-warm',"))
+        XCTAssertTrue(script.contains("\"base\":\"vs-dark\""))
+        XCTAssertTrue(script.contains("\"editor.background\":\"#151413\""))
+        XCTAssertTrue(script.contains("\"editor.foreground\":\"#eae4d4\""))
+        XCTAssertTrue(script.contains("\"editorCursor.foreground\":\"#7fb4a3\""))
+        XCTAssertTrue(script.contains("\"editor.selectionBackground\":\"#2f2c28\""))
+        XCTAssertEqual(TideyEditorCanvasPolicy.hexString(for: TideyInterfaceThemeTokens.warm.rightPanelBackgroundColor),
+                       "#151413")
     }
 
     func testWarmBaseSurfacesShareOneColorAndBoundariesComeFromSeparators() {
