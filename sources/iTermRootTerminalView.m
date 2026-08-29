@@ -1175,13 +1175,24 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 // control (the full-height drag handle is a separate, unchanged view).
 @interface TideyPaneBoundaryView : NSView
 @property(nonatomic) TideyPaneBoundaryEdge tideyEdge;
+// Optional: pull-bar midpoint in superview coordinates. When nil the bar is
+// centered in the superview. Used when the arrow control lives in a different
+// (taller) view than this boundary.
+@property(nonatomic, copy) CGFloat (^tideyPullBarMidYProvider)(void);
 @end
 
 @interface iTermRootTerminalView (TideyPaneBoundaryPolicy)
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
                         superviewBounds:(NSRect)bounds
                               warmTheme:(BOOL)warm;
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                           pullBarMidY:(CGFloat)pullBarMidY
+                              warmTheme:(BOOL)warm;
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
++ (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
++ (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
+                                 fileTreeContainerFrame:(NSRect)containerFrame;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1191,8 +1202,12 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     if (!parent) {
         return;
     }
+    const CGFloat midY = self.tideyPullBarMidYProvider
+        ? self.tideyPullBarMidYProvider()
+        : NSMidY(parent.bounds);
     self.frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:self.tideyEdge
                                                       superviewBounds:parent.bounds
+                                                         pullBarMidY:midY
                                                             warmTheme:TideyWarmInterfaceThemeIsActive()];
 }
 
@@ -1278,6 +1293,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 
     NSView *_tideyEditorFileTreeContainerView;
     NSView *_tideyEditorFileTreeTopBoundaryView;
+    TideyPaneBoundaryView *_tideyEditorFileTreeBoundaryView;
     NSScrollView *_tideyEditorFileTreeScrollView;
     NSOutlineView *_tideyEditorFileTreeView;
     TideyEditorFileNode *_tideyEditorFileTreeRootNode;
@@ -1663,10 +1679,36 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
                         superviewBounds:(NSRect)bounds
                               warmTheme:(BOOL)warm {
+    return [self tideyPaneBoundaryFrameForEdge:edge
+                               superviewBounds:bounds
+                                  pullBarMidY:NSMidY(bounds)
+                                     warmTheme:warm];
+}
+
+// Vertical midpoint of a chrome toggle arrow centered in a container of the
+// given height (same formula as updateTideyChromeToggleButtons).
++ (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight {
+    return floor((containerHeight - kTideyChromeToggleButtonHeight) / 2.0) + kTideyChromeToggleButtonHeight / 2.0;
+}
+
+// The file-tree arrow is centered in the whole editor panel (tab strip
+// included) while the file-tree boundary lives inside the shorter file-tree
+// container. Convert the arrow midpoint into container coordinates so the
+// pull bar sits beside the arrow.
++ (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
+                                 fileTreeContainerFrame:(NSRect)containerFrame {
+    return [self tideyChromeToggleButtonMidYForContainerHeight:editorPanelHeight] - NSMinY(containerFrame);
+}
+
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                           pullBarMidY:(CGFloat)pullBarMidY
+                              warmTheme:(BOOL)warm {
     const BOOL pullBar = warm && [self tideyPaneBoundaryEdgeIsResizer:edge];
     const CGFloat width = pullBar ? TideyPaperTabPolicy.pullBarWidth : 1;
     const CGFloat height = pullBar ? MIN(TideyPaperTabPolicy.pullBarLength, NSHeight(bounds)) : NSHeight(bounds);
-    const CGFloat y = pullBar ? floor((NSHeight(bounds) - height) / 2.0) : 0;
+    const CGFloat centeredY = pullBar ? pullBarMidY - height / 2.0 : 0;
+    const CGFloat y = pullBar ? MIN(MAX(0, floor(centeredY)), MAX(0, NSHeight(bounds) - height)) : 0;
     switch (edge) {
         case TideyPaneBoundaryEdgeLeft:
             return NSMakeRect(0, y, width, height);
@@ -2165,8 +2207,19 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                         toView:_tideySidebarView];
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                         toView:_tideyEditorPanelView];
-        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
-                                        toView:_tideyEditorFileTreeContainerView];
+        _tideyEditorFileTreeBoundaryView =
+            [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                            toView:_tideyEditorFileTreeContainerView];
+        __weak __typeof(self) weakSelf = self;
+        _tideyEditorFileTreeBoundaryView.tideyPullBarMidYProvider = ^CGFloat{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return 0;
+            }
+            return [[strongSelf class]
+                tideyFileTreePullBarMidYForEditorPanelHeight:NSHeight(strongSelf->_tideyEditorPanelView.bounds)
+                                      fileTreeContainerFrame:strongSelf->_tideyEditorFileTreeContainerView.frame];
+        };
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
                                         toView:_tideyEditorTabStripView];
         _tideyEditorFileTreeTopBoundaryView = [[NSView alloc] initWithFrame:NSZeroRect];
@@ -7062,9 +7115,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         : tokens.paneBoundaryColor;
 }
 
-- (void)tideyAddPaneBoundaryViewWithEdge:(TideyPaneBoundaryEdge)edge toView:(NSView *)parent {
+- (TideyPaneBoundaryView *)tideyAddPaneBoundaryViewWithEdge:(TideyPaneBoundaryEdge)edge toView:(NSView *)parent {
     if (!parent) {
-        return;
+        return nil;
     }
     TideyPaneBoundaryView *boundaryView = [[TideyPaneBoundaryView alloc] initWithFrame:NSZeroRect];
     boundaryView.tideyEdge = edge;
@@ -7076,6 +7129,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                      tokens:TideyInterfaceThemeController.shared.currentTokens].CGColor;
     [parent addSubview:boundaryView positioned:NSWindowAbove relativeTo:nil];
     [_tideyPaneBoundaryViews addObject:boundaryView];
+    return boundaryView;
 }
 
 - (void)tideyApplyInterfaceThemeTokens {
@@ -7336,6 +7390,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                             fileTreeButtonY,
                                                             kTideyChromeToggleButtonWidth,
                                                             kTideyChromeToggleButtonHeight);
+    [_tideyEditorFileTreeBoundaryView tideyPinToSuperviewEdge];
 }
 
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {
