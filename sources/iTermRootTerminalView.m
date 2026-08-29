@@ -1754,11 +1754,12 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
 }
 
-// Workspace/terminal separator, hosted in the root view so it can never be
-// clipped by the sidebar or covered by the terminal tab view: the 1px column
-// is the sidebar's last column (x = sidebarWidth - 1), which the terminal
-// (starting at x = sidebarWidth) never overlaps. Warm leaves the terminal tab
-// row open so the focused paper tab's leading edge continues into this line.
+// Workspace/terminal separator, hosted in the root view (above _tabView) so it
+// can never be clipped by the sidebar. The 1px column sits on the terminal
+// side at x = sidebarWidth: its center (sidebarWidth + 0.5) is the same
+// coordinate as the focused paper tab's leading outline, which PSM strokes at
+// cell.frame.minX + 0.5 with the first tab starting at sidebarWidth. Warm
+// leaves the terminal tab row open so that outline continues into this line.
 + (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
                                            rootBounds:(NSRect)rootBounds
                                          tabRowHeight:(CGFloat)tabRowHeight
@@ -1766,7 +1767,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     if (sidebarWidth <= 0 || NSHeight(rootBounds) <= 0) {
         return NSZeroRect;
     }
-    const CGFloat x = MIN(NSMaxX(rootBounds) - 1, NSMinX(rootBounds) + sidebarWidth - 1);
+    const CGFloat x = MIN(NSMaxX(rootBounds) - 1, NSMinX(rootBounds) + sidebarWidth);
     const CGFloat height = warm ? MAX(0, NSHeight(rootBounds) - MAX(0, tabRowHeight)) : NSHeight(rootBounds);
     return NSMakeRect(x, NSMinY(rootBounds), 1, height);
 }
