@@ -53,14 +53,14 @@ final class TideyInterfaceThemeTests: XCTestCase {
         let tokens = TideyInterfaceThemeTokens.warm
         let toolbarHeight = TideyBrowserToolbarPolicy.toolbarHeight(warmEnabled: true)
 
-        XCTAssertEqual(toolbarHeight, 40)
-        XCTAssertEqual(TideyBrowserToolbarPolicy.urlFieldHeight(warmEnabled: true), 28)
+        XCTAssertEqual(toolbarHeight, 28)
+        XCTAssertEqual(TideyBrowserToolbarPolicy.urlFieldHeight(warmEnabled: true), 22)
         XCTAssertEqual(
             TideyBrowserToolbarPolicy.urlFieldFrame(
                 toolbarHeight: toolbarHeight,
                 contentWidth: 500,
                 warmEnabled: true),
-            NSRect(x: 92, y: 6, width: 380, height: 28)
+            NSRect(x: 92, y: 3, width: 380, height: 22)
         )
         XCTAssertEqual(
             TideyBrowserToolbarPolicy.toolbarBackgroundColor(

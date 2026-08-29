@@ -668,12 +668,12 @@ final class TideyEditorCanvasPolicy: NSObject {
 final class TideyBrowserToolbarPolicy: NSObject {
     @objc(toolbarHeightWithWarmEnabled:)
     static func toolbarHeight(warmEnabled: Bool) -> CGFloat {
-        warmEnabled ? 40 : 28
+        28
     }
 
     @objc(urlFieldHeightWithWarmEnabled:)
     static func urlFieldHeight(warmEnabled: Bool) -> CGFloat {
-        warmEnabled ? 28 : 22
+        22
     }
 
     @objc(urlFieldFrameForToolbarHeight:contentWidth:warmEnabled:)
