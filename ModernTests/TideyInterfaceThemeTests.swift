@@ -66,7 +66,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
             TideyBrowserToolbarPolicy.urlFieldTextRect(
                 fieldBounds: NSRect(x: 0, y: 0, width: 380, height: 22),
                 warmEnabled: true),
-            NSRect(x: 0, y: 3, width: 380, height: 16)
+            NSRect(x: 4, y: 3, width: 372, height: 16)
         )
         XCTAssertEqual(
             TideyBrowserToolbarPolicy.toolbarBackgroundColor(
