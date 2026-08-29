@@ -1262,6 +1262,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                            rootBounds:(NSRect)rootBounds
                                          tabRowHeight:(CGFloat)tabRowHeight
                                             warmTheme:(BOOL)warm;
++ (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1795,6 +1796,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge {
     return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
+}
+
+// The 1pt row where the focused first tab's leading outline ends: the tab
+// bar's bottom row in root (unflipped) coordinates. The workspace separator
+// must include this row so the outline and the separator share a pixel column
+// with no uncovered row between them.
++ (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame {
+    return NSMakeRect(NSMinX(tabBarFrame), NSMinY(tabBarFrame), NSWidth(tabBarFrame), 1);
 }
 
 // Workspace/terminal separator, hosted in the root view (above _tabView) so it
@@ -3481,6 +3490,15 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
             _divisionView = [[theClass alloc] initWithFrame:divisionViewFrame];
             _divisionView.autoresizingMask = (NSViewWidthSizable | NSViewMinYMargin);
             [self addSubview:_divisionView];
+            // The division view occupies the tab bar's bottom row, which is
+            // also the top row of the Warm workspace/terminal seam and the last
+            // pixel of the focused tab's leading outline. Keep the seam above
+            // it so that join row is never repainted by the division color.
+            if (_tideyWorkspaceSeparatorView) {
+                [self addSubview:_tideyWorkspaceSeparatorView
+                      positioned:NSWindowAbove
+                      relativeTo:_divisionView];
+            }
         }
         iTermPreferencesTabStyle preferredStyle = [iTermPreferences intForKey:kPreferenceKeyTabStyle];
         switch ([self.effectiveAppearance it_tabStyle:preferredStyle]) {

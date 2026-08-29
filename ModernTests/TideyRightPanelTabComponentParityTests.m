@@ -28,6 +28,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                            rootBounds:(NSRect)rootBounds
                                          tabRowHeight:(CGFloat)tabRowHeight
                                             warmTheme:(BOOL)warm;
++ (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -177,6 +178,36 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                                                       tabRowHeight:34
                                                                                          warmTheme:YES],
                                NSMakeRect(260, 0, 1, 466)));
+}
+
+// The focused first tab's leading outline ends on the tab bar's bottom row;
+// the separator's top row must be that same row (no uncovered row between
+// them), in both real layouts: with the 1pt division row reserved under the
+// tab bar (bar bottom = H - 35) and without it (bar bottom = H - 34).
+- (void)testWorkspaceSeparatorTopRowIsTheFocusedTabOutlineBottomRow {
+    const NSRect root = NSMakeRect(0, 0, 1200, 700);
+    const CGFloat sidebarWidth = 200;
+    const CGFloat tabBarHeight = 34;
+    const NSRect separator = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
+                                                                                     rootBounds:root
+                                                                                   tabRowHeight:tabBarHeight
+                                                                                      warmTheme:YES];
+
+    // Layout with the division row: decorationTop = 34 + 1, tab bar at y = 665.
+    const NSRect tabBarWithDivision = NSMakeRect(sidebarWidth, 700 - tabBarHeight - 1, 800, tabBarHeight);
+    const NSRect joinRow = [iTermRootTerminalView tideyWorkspaceSeparatorJoinRowForTabBarFrame:tabBarWithDivision];
+    XCTAssertTrue(NSEqualRects(joinRow, NSMakeRect(200, 665, 800, 1)));
+    // The seam column intersects the join row fully: no uncovered row at the corner.
+    const NSRect seamJoin = NSIntersectionRect(separator, joinRow);
+    XCTAssertEqual(NSHeight(seamJoin), 1);
+    XCTAssertEqual(NSMinX(seamJoin), sidebarWidth);
+    // And the seam does not run further up into the tab row proper.
+    XCTAssertLessThanOrEqual(NSMaxY(separator), NSMinY(tabBarWithDivision) + 1);
+
+    // Layout without the division row: tab bar at y = 666, seam ends exactly there.
+    const NSRect tabBarNoDivision = NSMakeRect(sidebarWidth, 700 - tabBarHeight, 800, tabBarHeight);
+    XCTAssertEqual(NSMaxY(separator), NSMinY(tabBarNoDivision));
+    XCTAssertTrue(NSIsEmptyRect(NSIntersectionRect(separator, tabBarNoDivision)));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {
