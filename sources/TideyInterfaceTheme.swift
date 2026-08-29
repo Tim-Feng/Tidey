@@ -696,9 +696,9 @@ final class TideyBrowserToolbarPolicy: NSObject {
         guard warmEnabled else {
             return fieldBounds
         }
-        return NSRect(x: fieldBounds.minX + 8,
+        return NSRect(x: fieldBounds.minX,
                       y: fieldBounds.minY + 3,
-                      width: max(0, fieldBounds.width - 16),
+                      width: fieldBounds.width,
                       height: max(0, fieldBounds.height - 6))
     }
 

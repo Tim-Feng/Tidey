@@ -754,62 +754,6 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-// A borderless NSTextFieldCell otherwise places text against its upper-left
-// drawing origin. Warm gives the URL one deliberate content box while Classic
-// continues through AppKit's native cell geometry unchanged.
-@interface TideyBrowserURLFieldCell : NSTextFieldCell
-@property(nonatomic) BOOL tideyWarmLayout;
-@end
-
-@implementation TideyBrowserURLFieldCell
-
-- (NSRect)tideyTextRectForBounds:(NSRect)bounds {
-    return [TideyBrowserToolbarPolicy urlFieldTextRectForFieldBounds:bounds
-                                                         warmEnabled:_tideyWarmLayout];
-}
-
-- (NSRect)drawingRectForBounds:(NSRect)bounds {
-    return _tideyWarmLayout
-        ? [self tideyTextRectForBounds:bounds]
-        : [super drawingRectForBounds:bounds];
-}
-
-- (NSRect)titleRectForBounds:(NSRect)bounds {
-    return _tideyWarmLayout
-        ? [self tideyTextRectForBounds:bounds]
-        : [super titleRectForBounds:bounds];
-}
-
-- (void)editWithFrame:(NSRect)frame
-                inView:(NSView *)controlView
-                 editor:(NSText *)textObject
-               delegate:(id)delegate
-                  event:(NSEvent *)event {
-    NSRect editorFrame = _tideyWarmLayout ? [self tideyTextRectForBounds:frame] : frame;
-    [super editWithFrame:editorFrame
-                  inView:controlView
-                   editor:textObject
-                 delegate:delegate
-                    event:event];
-}
-
-- (void)selectWithFrame:(NSRect)frame
-                  inView:(NSView *)controlView
-                   editor:(NSText *)textObject
-                 delegate:(id)delegate
-                    start:(NSInteger)selectionStart
-                   length:(NSInteger)selectionLength {
-    NSRect editorFrame = _tideyWarmLayout ? [self tideyTextRectForBounds:frame] : frame;
-    [super selectWithFrame:editorFrame
-                    inView:controlView
-                     editor:textObject
-                   delegate:delegate
-                      start:selectionStart
-                     length:selectionLength];
-}
-
-@end
-
 // Warm renders a group label as the index tab of the paper-tab stack. Classic
 // keeps the existing filled capsule through the ordinary NSButton path.
 @interface TideyRightPanelGroupButton : NSButton {
@@ -4595,15 +4539,28 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     pane.browserReloadButton.contentTintColor = warm ? tokens.rightPanelTertiaryTextColor : [NSColor secondaryLabelColor];
     [toolbar addSubview:pane.browserReloadButton];
 
-    // URL field
+    // URL field. Warm owns the card chrome in an outer view so the actual
+    // text field can be vertically inset by frame geometry; AppKit ignores a
+    // custom cell drawing rect for this borderless single-line configuration.
+    NSView *urlFieldContainer = [[NSView alloc] initWithFrame:NSMakeRect(92,
+                                                                        3,
+                                                                        100,
+                                                                        [TideyBrowserToolbarPolicy urlFieldHeightWithWarmEnabled:warm])];
+    urlFieldContainer.autoresizingMask = NSViewWidthSizable;
+    urlFieldContainer.wantsLayer = YES;
+    urlFieldContainer.layer.backgroundColor = warm
+        ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05].CGColor
+        : NSColor.clearColor.CGColor;
+    urlFieldContainer.layer.cornerRadius = warm ? 8 : 0;
+    urlFieldContainer.layer.borderWidth = warm ? 1 : 0;
+    urlFieldContainer.layer.borderColor = tokens.hairlineColor.CGColor;
+    urlFieldContainer.layer.masksToBounds = warm;
+    pane.browserURLFieldContainerView = urlFieldContainer;
+    [toolbar addSubview:urlFieldContainer];
+
     pane.browserURLField = [[NSTextField alloc]
-        initWithFrame:NSMakeRect(92,
-                                 3,
-                                 100,
-                                 [TideyBrowserToolbarPolicy urlFieldHeightWithWarmEnabled:warm])];
-    TideyBrowserURLFieldCell *urlFieldCell = [[TideyBrowserURLFieldCell alloc] initTextCell:@""];
-    urlFieldCell.tideyWarmLayout = warm;
-    pane.browserURLField.cell = urlFieldCell;
+        initWithFrame:[TideyBrowserToolbarPolicy urlFieldTextRectForFieldBounds:urlFieldContainer.bounds
+                                                                    warmEnabled:warm]];
     pane.browserURLField.autoresizingMask = NSViewWidthSizable;
     pane.browserURLField.usesSingleLineMode = YES;
     pane.browserURLField.cell.wraps = NO;
@@ -4613,22 +4570,21 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         : [NSFont systemFontOfSize:12];
     pane.browserURLField.textColor = warm ? tokens.rightPanelPrimaryTextColor : [NSColor labelColor];
     pane.browserURLField.backgroundColor = warm
-        ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05]
+        ? NSColor.clearColor
         : [NSColor colorWithWhite:0.22 alpha:1];
-    pane.browserURLField.drawsBackground = YES;
+    pane.browserURLField.drawsBackground = !warm;
     pane.browserURLField.bordered = !warm;
     pane.browserURLField.bezeled = !warm;
     pane.browserURLField.bezelStyle = NSTextFieldSquareBezel;
     pane.browserURLField.wantsLayer = YES;
-    pane.browserURLField.layer.cornerRadius = warm ? 8 : 6;
-    pane.browserURLField.layer.borderWidth = warm ? 1 : 0;
-    pane.browserURLField.layer.borderColor = tokens.hairlineColor.CGColor;
-    pane.browserURLField.layer.masksToBounds = YES;
+    pane.browserURLField.layer.cornerRadius = warm ? 0 : 6;
+    pane.browserURLField.layer.borderWidth = 0;
+    pane.browserURLField.layer.masksToBounds = !warm;
     pane.browserURLField.cell.scrollable = YES;
     pane.browserURLField.cell.lineBreakMode = NSLineBreakByTruncatingTail;
     pane.browserURLField.target = self;
     pane.browserURLField.action = @selector(tideyBrowserURLFieldAction:);
-    [toolbar addSubview:pane.browserURLField];
+    [urlFieldContainer addSubview:pane.browserURLField];
 
     // Loading indicator
     pane.browserLoadingIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 16, 16)];
@@ -4801,10 +4757,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, toolbarHeight);
 
     // URL field fills remaining width after buttons
-    pane.browserURLField.frame =
+    pane.browserURLFieldContainerView.frame =
         [TideyBrowserToolbarPolicy urlFieldFrameForToolbarHeight:toolbarHeight
                                                     contentWidth:contentWidth
                                                      warmEnabled:warm];
+    pane.browserURLField.frame =
+        [TideyBrowserToolbarPolicy urlFieldTextRectForFieldBounds:pane.browserURLFieldContainerView.bounds
+                                                      warmEnabled:warm];
 
     // Loading indicator at right of toolbar
     const CGFloat indicatorSize = 16;
@@ -7784,16 +7743,21 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             : [NSFont systemFontOfSize:12];
         pane.browserURLField.textColor = warm ? tokens.rightPanelPrimaryTextColor : NSColor.labelColor;
         pane.browserURLField.backgroundColor = warm
-            ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05]
+            ? NSColor.clearColor
             : [NSColor colorWithWhite:0.22 alpha:1];
+        pane.browserURLField.drawsBackground = !warm;
         pane.browserURLField.bordered = !warm;
         pane.browserURLField.bezeled = !warm;
-        pane.browserURLField.layer.cornerRadius = warm ? 8 : 6;
-        pane.browserURLField.layer.borderWidth = warm ? 1 : 0;
-        pane.browserURLField.layer.borderColor = tokens.hairlineColor.CGColor;
-        if ([pane.browserURLField.cell isKindOfClass:[TideyBrowserURLFieldCell class]]) {
-            ((TideyBrowserURLFieldCell *)pane.browserURLField.cell).tideyWarmLayout = warm;
-        }
+        pane.browserURLField.layer.cornerRadius = warm ? 0 : 6;
+        pane.browserURLField.layer.borderWidth = 0;
+        pane.browserURLField.layer.masksToBounds = !warm;
+        pane.browserURLFieldContainerView.layer.backgroundColor = warm
+            ? [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05].CGColor
+            : NSColor.clearColor.CGColor;
+        pane.browserURLFieldContainerView.layer.cornerRadius = warm ? 8 : 0;
+        pane.browserURLFieldContainerView.layer.borderWidth = warm ? 1 : 0;
+        pane.browserURLFieldContainerView.layer.borderColor = tokens.hairlineColor.CGColor;
+        pane.browserURLFieldContainerView.layer.masksToBounds = warm;
         [pane.browserURLField setNeedsDisplay:YES];
         [self tideyLayoutBrowserContainerForPane:pane];
     }
