@@ -155,6 +155,15 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 }
 
 - (NSColor *)backgroundColorSelected:(BOOL)selected highlightAmount:(CGFloat)highlightAmount {
+    if (selected && [self paperTabOutlineColor]) {
+        // Paper tabs: the front sheet is filled with its content surface, not
+        // the darker desk behind the tabs.
+        NSColor *fill = [self.tabBar.delegate tabView:self.tabBar
+                                        valueOfOption:PSMTabBarControlOptionPaperTabSelectedFillColor];
+        if (fill) {
+            return fill;
+        }
+    }
     if (selected || highlightAmount <= 0) {
         return self.tabBarColor;
     }

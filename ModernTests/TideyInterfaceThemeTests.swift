@@ -98,7 +98,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.sidebarRunningColor, hex: 0x7FB4A3)
         assertColor(tokens.sidebarUnreadColor, hex: 0xD19A66)
         assertColor(tokens.rightPanelBackgroundColor, hex: 0x151413)
-        assertColor(tokens.rightPanelTabStripBackgroundColor, hex: 0x151413)
+        assertColor(tokens.rightPanelTabStripBackgroundColor, hex: 0x100F0E)
         assertColor(tokens.rightPanelTabSelectionColor, hex: 0x232120)
         assertColor(tokens.terminalSurroundColor, hex: 0x151413)
         assertColor(tokens.paneBoundaryColor,
@@ -182,14 +182,18 @@ final class TideyInterfaceThemeTests: XCTestCase {
     func testWarmBaseSurfacesShareOneColorAndBoundariesComeFromSeparators() {
         let tokens = TideyInterfaceThemeTokens.warm
         let base = tokens.rightPanelBackgroundColor
-        // Tim's constraint: no base-surface color difference between the workspace
-        // column, tab strips, canvas surroundings, and file tree. Structure comes
-        // from separator lines, not background shades.
+        // Workspace column, canvas surroundings, and file tree share one base
+        // surface. The tab strips are the one deliberate exception (Tim
+        // 2026-08-29): a darker "desk" behind the paper tabs, so the focused tab
+        // filled with the base color reads as the front sheet.
         XCTAssertEqual(tokens.sidebarBackgroundColor, base)
-        XCTAssertEqual(tokens.rightPanelTabStripBackgroundColor, base)
-        XCTAssertEqual(tokens.rightPanelActiveTabStripBackgroundColor, base)
-        XCTAssertEqual(tokens.rightPanelInactiveTabStripBackgroundColor, base)
         XCTAssertEqual(tokens.rightPanelFileTreeBackgroundColor, base)
+        let desk = tokens.rightPanelTabStripBackgroundColor
+        XCTAssertEqual(tokens.rightPanelActiveTabStripBackgroundColor, desk)
+        XCTAssertEqual(tokens.rightPanelInactiveTabStripBackgroundColor, desk)
+        XCTAssertLessThan(desk.usingColorSpace(.sRGB)!.redComponent, base.usingColorSpace(.sRGB)!.redComponent)
+        XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabSelectedFillColor(warmEnabled: true), base)
+        XCTAssertNil(TideyTerminalPalettePolicy.terminalTabSelectedFillColor(warmEnabled: false))
         XCTAssertEqual(tokens.terminalSurroundColor, base)
         assertColor(TideyTerminalPalettePolicy.warmColorTable[NSNumber(value: kColorMapBackground)]!,
                     hex: 0x151413)
@@ -203,7 +207,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
                     green: 0.108,
                     blue: 0.135)
         let warmColor = TideyTerminalPalettePolicy.terminalTabStripBackgroundColor(warmEnabled: true)
-        assertColor(warmColor, hex: 0x151413)
+        assertColor(warmColor, hex: 0x100F0E)
         XCTAssertEqual(warmColor, TideyInterfaceThemeTokens.warm.rightPanelTabStripBackgroundColor)
     }
 

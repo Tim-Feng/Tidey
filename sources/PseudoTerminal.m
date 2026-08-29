@@ -13531,6 +13531,10 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
         const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
             isEqualToString:@"warm"];
         return [TideyTerminalPalettePolicy terminalTabSelectedOutlineColorWithWarmEnabled:warm];
+    } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabSelectedFillColor]) {
+        const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
+            isEqualToString:@"warm"];
+        return [TideyTerminalPalettePolicy terminalTabSelectedFillColorWithWarmEnabled:warm];
     } else if ([option isEqualToString:PSMTabBarControlOptionFontSizeOverride]) {
         if (![iTermAdvancedSettingsModel useCustomTabBarFontSize]) {
             return nil;

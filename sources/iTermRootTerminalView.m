@@ -813,7 +813,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:self.bounds selected:_tideySelected];
     if (_tideySelected) {
-        [tokens.rightPanelTabStripBackgroundColor setFill];
+        // Front sheet: filled with the content surface, not the darker desk.
+        [tokens.rightPanelBackgroundColor setFill];
         NSRectFill(self.bounds);
     }
     [(_tideySelected ? tokens.tabSelectedOutlineColor : tokens.tabOutlineColor) setStroke];

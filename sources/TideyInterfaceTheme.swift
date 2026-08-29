@@ -136,6 +136,14 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                       blue: 0x13 / 255.0,
                                                       alpha: 1)
 
+    // Tim 2026-08-29: the tab strips are the "desk" behind the paper tabs — one
+    // step darker than the base surface so the focused tab (filled with the base
+    // canvas color) reads as the front sheet.
+    private static let warmTabStripDeskColor = NSColor(srgbRed: 0x10 / 255.0,
+                                                       green: 0x0F / 255.0,
+                                                       blue: 0x0E / 255.0,
+                                                       alpha: 1)
+
     // Shared Warm accent: terminal tab underline, editor tab indicator, running state.
     static let warmSeaglassColor = NSColor(srgbRed: 0x7A / 255.0,
                                            green: 0xA8 / 255.0,
@@ -189,9 +197,9 @@ final class TideyInterfaceThemeTokens: NSObject {
                                    blue: 0x60 / 255.0,
                                    alpha: 1),
         rightPanelBackgroundColor: warmBaseSurfaceColor,
-        rightPanelTabStripBackgroundColor: warmBaseSurfaceColor,
-        rightPanelActiveTabStripBackgroundColor: warmBaseSurfaceColor,
-        rightPanelInactiveTabStripBackgroundColor: warmBaseSurfaceColor,
+        rightPanelTabStripBackgroundColor: warmTabStripDeskColor,
+        rightPanelActiveTabStripBackgroundColor: warmTabStripDeskColor,
+        rightPanelInactiveTabStripBackgroundColor: warmTabStripDeskColor,
         rightPanelFileTreeBackgroundColor: warmBaseSurfaceColor,
         fileTreeTextColor: NSColor(srgbRed: 0xEA / 255.0,
                                    green: 0xE4 / 255.0,
@@ -515,6 +523,13 @@ final class TideyTerminalPalettePolicy: NSObject {
     @objc(terminalTabOutlineColorWithWarmEnabled:)
     static func terminalTabOutlineColor(warmEnabled: Bool) -> NSColor? {
         warmEnabled ? TideyInterfaceThemeTokens.warm.tabOutlineColor : nil
+    }
+
+    /// Fill for the focused paper tab: the canvas base surface, so the front
+    /// sheet joins its content. nil in Classic.
+    @objc(terminalTabSelectedFillColorWithWarmEnabled:)
+    static func terminalTabSelectedFillColor(warmEnabled: Bool) -> NSColor? {
+        warmEnabled ? TideyInterfaceThemeTokens.warm.rightPanelBackgroundColor : nil
     }
 
     @objc(terminalTabSelectedOutlineColorWithWarmEnabled:)
