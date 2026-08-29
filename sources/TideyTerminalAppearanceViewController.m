@@ -122,6 +122,11 @@ static const CGFloat kAnsiLabelHeight = 14;
     y += [self buildInterfaceThemeCardInView:documentView atY:y width:contentWidth];
     y += kSectionGap;
 
+    // ===== BROWSER section =====
+    y += [self addSectionHeader:@"BROWSER" toView:documentView atY:y width:contentWidth];
+    y += [self buildBrowserCardInView:documentView atY:y width:contentWidth];
+    y += kSectionGap;
+
     // ===== FONT section =====
     y += [self addSectionHeader:@"FONT" toView:documentView atY:y width:contentWidth];
     y += [self buildFontCardInView:documentView atY:y width:contentWidth];
@@ -135,11 +140,6 @@ static const CGFloat kAnsiLabelHeight = 14;
     // ===== ANSI PALETTE section =====
     y += [self addSectionHeader:@"ANSI PALETTE" toView:documentView atY:y width:contentWidth];
     y += [self buildANSICardInView:documentView atY:y width:contentWidth];
-    y += kSectionGap;
-
-    // ===== BROWSER section =====
-    y += [self addSectionHeader:@"BROWSER" toView:documentView atY:y width:contentWidth];
-    y += [self buildBrowserCardInView:documentView atY:y width:contentWidth];
     y += 24; // bottom padding
 
     // Set document view height to fit content
