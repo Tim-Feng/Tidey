@@ -8969,7 +8969,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                          presentation:(TideySidebarRowPresentation *)presentation {
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
+    const NSAutoresizingMaskOptions warmTopAnchor = warm ? NSViewMinYMargin : 0;
     NSView *badgeView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarBadgeViewIdentifier);
+    badgeView.autoresizingMask = warmTopAnchor;
     NSTextField *badgeLabel = (NSTextField *)[badgeView viewWithTag:1006];
     badgeView.hidden = (presentation.unreadCount <= 0);
     if (presentation.unreadCount > 0) {
@@ -8977,10 +8979,12 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         badgeLabel.stringValue = @"";
     }
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
+    pinView.autoresizingMask = NSViewMaxXMargin | warmTopAnchor;
     pinView.hidden = !presentation.pinned;
     pinView.contentTintColor = warm ? tokens.sidebarSecondaryTextColor : [NSColor colorWithWhite:0.90 alpha:1];
     cellView.textField.font = [NSFont systemFontOfSize:(warm ? 13 : 12.5)
                                                weight:NSFontWeightSemibold];
+    cellView.textField.autoresizingMask = NSViewWidthSizable | warmTopAnchor;
     cellView.textField.textColor = presentation.selected
         ? tokens.sidebarSelectedPrimaryTextColor
         : tokens.sidebarPrimaryTextColor;
@@ -9002,6 +9006,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
+    NSView *subtitleView = [cellView viewWithTag:1002];
+    subtitleView.autoresizingMask = NSViewWidthSizable | warmTopAnchor;
+    bodyField.autoresizingMask = NSViewWidthSizable | warmTopAnchor;
 
     if (hasBody) {
         // Expanded layout:
@@ -9215,6 +9222,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     // Configure shortcut hint overlay (⌘1 .. ⌘9).
     NSView *hintView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarHintViewIdentifier);
     if (hintView) {
+        hintView.autoresizingMask = NSViewMinXMargin | warmTopAnchor;
         NSTextField *hintLabel = (NSTextField *)[hintView viewWithTag:1009];
         if (presentation.shortcutHint) {
             hintLabel.stringValue = presentation.shortcutHint;

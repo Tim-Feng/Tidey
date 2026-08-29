@@ -414,6 +414,72 @@ static void TideyAssertColor(NSColor *actual, NSColor *expected, NSAppearance *a
                      appearance);
 }
 
+- (void)testWarmWorkspaceContentTracksFinalRowHeightAfterStatusArrives {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Workspace" ], @[ @"~/project" ], @[ @NO ]);
+    TideyCharacterizationSidebarTableView *tableView =
+        TideyInstallPresentationTable(view, 200, 90, -1);
+    NSString *workspaceID = view.testWorkspaceIDs[0];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:workspaceID
+                                                       key:@"shell"
+                                                     value:@"Idle"
+                                                      icon:@"pause.circle.fill"
+                                                  colorHex:nil];
+
+    // AppKit can ask for the reused cell while it still has the old 72pt
+    // no-status height, then resize it to the final 90pt status height.
+    NSTableCellView *cellView = [view newTideySidebarCellView];
+    cellView.frame = NSMakeRect(0, 0, 200, 72);
+    tableView.cellsByRow[@0] = cellView;
+    [view configureTideySidebarCellView:cellView row:0];
+    cellView.frame = NSMakeRect(0, 0, 200, 90);
+    [cellView layoutSubtreeIfNeeded];
+
+    NSTextField *subtitleField = TideyPresentationTextField(cellView, 1002);
+    NSTextField *statusField = TideyPresentationTextField(cellView, 1008);
+    NSView *badgeView = TideyPresentationSubview(cellView, @"TideySidebarBadgeView");
+    NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
+    TideyAssertRect(cellView.textField.frame, NSMakeRect(12, 56, 176, 16));
+    TideyAssertRect(subtitleField.frame, NSMakeRect(12, 36, 176, 14));
+    TideyAssertRect(statusField.frame, NSMakeRect(12, 18, 176, 14));
+    TideyAssertRect(badgeView.frame, NSMakeRect(1, 61, 6, 6));
+    TideyAssertRect(pinView.frame, NSMakeRect(158, 58, 12, 12));
+}
+
+- (void)testClassicWorkspaceContentKeepsTargetGeometryWhenStatusChangesRowHeight {
+    TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+    TideySidebarPresentationTestRootView *view =
+        TideyNewPresentationRootView(@[ @"Workspace" ], @[ @"~/project" ], @[ @NO ]);
+    TideyCharacterizationSidebarTableView *tableView =
+        TideyInstallPresentationTable(view, 200, 82, -1);
+    NSString *workspaceID = view.testWorkspaceIDs[0];
+    [[TideyNotificationStore sharedStore] addNotificationForWorkspaceID:workspaceID
+                                                                  title:@"Notice"
+                                                               subtitle:nil
+                                                                   body:@"A two-line summary belongs here"];
+    [[TideyStatusStore sharedStore] setStatusForWorkspaceID:workspaceID
+                                                       key:@"shell"
+                                                     value:@"Idle"
+                                                      icon:@"pause.circle.fill"
+                                                  colorHex:nil];
+
+    NSTableCellView *cellView = [view newTideySidebarCellView];
+    cellView.frame = NSMakeRect(0, 0, 200, 68);
+    tableView.cellsByRow[@0] = cellView;
+    [view configureTideySidebarCellView:cellView row:0];
+    cellView.frame = NSMakeRect(0, 0, 200, 82);
+    [cellView layoutSubtreeIfNeeded];
+
+    NSTextField *subtitleField = TideyPresentationTextField(cellView, 1002);
+    NSTextField *bodyField = TideyPresentationTextField(cellView, 1007);
+    NSTextField *statusField = TideyPresentationTextField(cellView, 1008);
+    TideyAssertRect(cellView.textField.frame, NSMakeRect(8, 65, 144, 14));
+    TideyAssertRect(bodyField.frame, NSMakeRect(8, 30, 184, 28));
+    TideyAssertRect(subtitleField.frame, NSMakeRect(8, 16, 184, 14));
+    TideyAssertRect(statusField.frame, NSMakeRect(8, 2, 184, 12));
+}
+
 - (void)testWarmSelectedRowUsesSharpFocusTextHierarchyWithoutChangingStatusSemantics {
     TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
     TideySidebarPresentationTestRootView *view =
