@@ -1184,6 +1184,10 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 // coordinates, unflipped). Used so the line between the terminal tab list and
 // the editor tab list disappears and the two strips read as one row.
 @property(nonatomic, copy) CGFloat (^tideyTopInsetProvider)(void);
+// Optional: complete frame in superview coordinates. When set, edge pinning is
+// bypassed. Used by the root-hosted workspace/terminal separator, whose
+// geometry comes from the live sidebar width rather than a superview edge.
+@property(nonatomic, copy) NSRect (^tideyFrameProvider)(void);
 // Warm-only appearance used where a pane separator continues from the
 // leading edge of a paper tab below the tab row.
 @property(nonatomic) BOOL tideyUsesPaperTabJoinGradient;
@@ -1211,6 +1215,10 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
                                  fileTreeContainerFrame:(NSRect)containerFrame;
++ (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
+                                           rootBounds:(NSRect)rootBounds
+                                         tabRowHeight:(CGFloat)tabRowHeight
+                                            warmTheme:(BOOL)warm;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1256,6 +1264,13 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 - (void)tideyPinToSuperviewEdge {
     NSView *parent = self.superview;
     if (!parent) {
+        return;
+    }
+    if (self.tideyFrameProvider) {
+        const NSRect providedFrame = self.tideyFrameProvider();
+        self.hidden = NSIsEmptyRect(providedFrame);
+        self.frame = providedFrame;
+        [self tideyUpdateLineAppearance];
         return;
     }
     const CGFloat midY = self.tideyPullBarMidYProvider
@@ -1357,6 +1372,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 
     NSView *_tideyEditorFileTreeContainerView;
     NSView *_tideyEditorFileTreeTopBoundaryView;
+    TideyPaneBoundaryView *_tideyWorkspaceSeparatorView;  // root-hosted workspace/terminal line
     NSView *_tideyEditorFileTreeHeaderView;  // strip-height row above the file tree (desk color)
     TideyPaneBoundaryView *_tideyEditorFileTreeBoundaryView;
     NSScrollView *_tideyEditorFileTreeScrollView;
@@ -1736,6 +1752,23 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge {
     return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
+}
+
+// Workspace/terminal separator, hosted in the root view so it can never be
+// clipped by the sidebar or covered by the terminal tab view: the 1px column
+// is the sidebar's last column (x = sidebarWidth - 1), which the terminal
+// (starting at x = sidebarWidth) never overlaps. Warm leaves the terminal tab
+// row open so the focused paper tab's leading edge continues into this line.
++ (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
+                                           rootBounds:(NSRect)rootBounds
+                                         tabRowHeight:(CGFloat)tabRowHeight
+                                            warmTheme:(BOOL)warm {
+    if (sidebarWidth <= 0 || NSHeight(rootBounds) <= 0) {
+        return NSZeroRect;
+    }
+    const CGFloat x = MIN(NSMaxX(rootBounds) - 1, NSMinX(rootBounds) + sidebarWidth - 1);
+    const CGFloat height = warm ? MAX(0, NSHeight(rootBounds) - MAX(0, tabRowHeight)) : NSHeight(rootBounds);
+    return NSMakeRect(x, NSMinY(rootBounds), 1, height);
 }
 
 // Shortens a vertical boundary so it stops `topInset` below the superview's
@@ -2291,19 +2324,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         [self reloadTideyEditorFileTree];
 
         _tideyPaneBoundaryViews = [NSHashTable weakObjectsHashTable];
-        TideyPaneBoundaryView *sidebarBoundaryView =
-            [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
-                                            toView:_tideySidebarView];
-        __weak __typeof(self) weakSelfForSidebarBoundary = self;
-        sidebarBoundaryView.tideyTopInsetProvider = ^CGFloat{
-            __strong __typeof(weakSelfForSidebarBoundary) strongSelf = weakSelfForSidebarBoundary;
-            if (!strongSelf || strongSelf.tabBarControl.hidden) {
-                return 0;
-            }
-            const CGFloat height = NSHeight(strongSelf.tabBarControl.frame);
-            return height > 0 ? height : kTideyEditorTabStripHeight;
-        };
-        sidebarBoundaryView.tideyUsesPaperTabJoinGradient = YES;
+        // The workspace/terminal separator is created after _tabView below so it
+        // is hosted in the root view above the terminal.
         TideyPaneBoundaryView *editorBoundaryView =
             [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                             toView:_tideyEditorPanelView];
@@ -2400,6 +2422,21 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tabView.tabViewType = NSNoTabsNoBorder;
         _tabView.swipeHandler = delegate;
         [self addSubview:_tabView];
+        _tideyWorkspaceSeparatorView = [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
+                                                                       toView:self];
+        __weak __typeof(self) weakSelfForWorkspaceSeparator = self;
+        _tideyWorkspaceSeparatorView.tideyFrameProvider = ^NSRect{
+            __strong __typeof(weakSelfForWorkspaceSeparator) strongSelf = weakSelfForWorkspaceSeparator;
+            if (!strongSelf) {
+                return NSZeroRect;
+            }
+            return [[strongSelf class] tideyWorkspaceSeparatorFrameForSidebarWidth:strongSelf.tideySidebarWidth
+                                                                        rootBounds:strongSelf.bounds
+                                                                      tabRowHeight:[strongSelf tideyTerminalTabRowHeight]
+                                                                         warmTheme:TideyWarmInterfaceThemeIsActive()];
+        };
+        _tideyWorkspaceSeparatorView.tideyUsesPaperTabJoinGradient = YES;
+        [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
         [self addSubview:self.tideySidebarDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideyEditorDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideySidebarToggleButton positioned:NSWindowAbove relativeTo:_tabView];
@@ -7239,9 +7276,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     boundaryView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     boundaryView.wantsLayer = YES;
     boundaryView.layer.cornerRadius = TideyPaperTabPolicy.pullBarWidth / 2.0;
-    boundaryView.layer.backgroundColor =
-        [self tideyPaneBoundaryColorForEdge:edge
-                                     tokens:TideyInterfaceThemeController.shared.currentTokens].CGColor;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    // Colors are applied before the first pin so no layout pass runs with a
+    // nil boundary color.
+    [boundaryView tideyApplyBoundaryColor:[self tideyPaneBoundaryColorForEdge:edge tokens:tokens]
+                             tabJoinColor:tokens.tabSelectedOutlineColor
+                                warmTheme:TideyWarmInterfaceThemeIsActive()];
     [parent addSubview:boundaryView positioned:NSWindowAbove relativeTo:nil];
     [_tideyPaneBoundaryViews addObject:boundaryView];
     return boundaryView;
@@ -7381,6 +7421,14 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
            tableColumnCount > 0;
 }
 
+- (CGFloat)tideyTerminalTabRowHeight {
+    if (self.tabBarControl.hidden) {
+        return 0;
+    }
+    const CGFloat height = NSHeight(self.tabBarControl.frame);
+    return height > 0 ? height : kTideyEditorTabStripHeight;
+}
+
 - (void)layoutTideySidebar {
     const CGFloat width = self.tideySidebarWidth;
     _tideySidebarView.hidden = (width <= 0);
@@ -7389,6 +7437,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         CGFloat sidebarHeight = NSHeight(_tideySidebarView.bounds);
         _tideySidebarScrollView.frame = NSMakeRect(0, 0, width, sidebarHeight);
     }
+    [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
     [self updateTideyChromeToggleButtons];
 }
 
@@ -7434,6 +7483,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                        kTideyDragHandleWidth,
                                                        NSHeight(self.bounds));
     }
+
+    [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
 
     const CGFloat editorWidth = self.tideyEditorPanelWidth;
     self.tideyEditorDragHandle.hidden = (editorWidth <= 0 || _tideyEditorPanelView.hidden || !self.shouldShowTideyTerminal);

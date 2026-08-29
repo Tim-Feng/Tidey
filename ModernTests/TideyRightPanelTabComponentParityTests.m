@@ -24,6 +24,10 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
                                    fileTreeContainerFrame:(NSRect)containerFrame;
++ (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
+                                           rootBounds:(NSRect)rootBounds
+                                         tabRowHeight:(CGFloat)tabRowHeight
+                                            warmTheme:(BOOL)warm;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -111,6 +115,63 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                         byExcludingTopHeight:0
                                                              superviewBounds:bounds],
                                full));
+}
+
+// Regression for 798ce69eb: the workspace/terminal separator was shifted to
+// x = sidebarWidth, outside the sidebar and under the terminal view. The
+// root-hosted seam must stay inside the sidebar column and inside the root.
+- (void)testWorkspaceSeparatorStaysInsideTheSidebarColumnAndBelowTheTabRow {
+    const NSRect root = NSMakeRect(0, 0, 1200, 700);
+    const CGFloat sidebarWidth = 200;
+    const NSRect warm = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
+                                                                                rootBounds:root
+                                                                              tabRowHeight:34
+                                                                                 warmTheme:YES];
+    XCTAssertTrue(NSEqualRects(warm, NSMakeRect(199, 0, 1, 666)));
+    XCTAssertTrue(NSContainsRect(root, warm));
+    // The terminal begins at x == sidebarWidth; the line must end before it.
+    XCTAssertLessThanOrEqual(NSMaxX(warm), sidebarWidth);
+    XCTAssertFalse(NSEqualRects(warm, NSMakeRect(200, 0, 1, 666)), @"798ce69eb geometry must not come back");
+
+    const NSRect classic = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
+                                                                                   rootBounds:root
+                                                                                 tabRowHeight:34
+                                                                                    warmTheme:NO];
+    XCTAssertTrue(NSEqualRects(classic, NSMakeRect(199, 0, 1, 700)));
+}
+
+- (void)testWorkspaceSeparatorFollowsTabRowVisibilityAndDegenerateSizes {
+    const NSRect root = NSMakeRect(0, 0, 1200, 700);
+    // Hidden tab bar (height 0): the line runs full height.
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:200
+                                                                                        rootBounds:root
+                                                                                      tabRowHeight:0
+                                                                                         warmTheme:YES],
+                               NSMakeRect(199, 0, 1, 700)));
+    // Root shorter than the tab row: zero-height line, never negative.
+    const NSRect tiny = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:200
+                                                                                 rootBounds:NSMakeRect(0, 0, 1200, 20)
+                                                                               tabRowHeight:34
+                                                                                  warmTheme:YES];
+    XCTAssertEqual(NSHeight(tiny), 0);
+    XCTAssertEqual(NSMinX(tiny), 199);
+    // No sidebar: no line.
+    XCTAssertTrue(NSIsEmptyRect([iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:0
+                                                                                         rootBounds:root
+                                                                                       tabRowHeight:34
+                                                                                          warmTheme:YES]));
+    // Sidebar wider than the root (mid-resize): clamped to the last root column.
+    const NSRect clamped = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:5000
+                                                                                    rootBounds:root
+                                                                                  tabRowHeight:34
+                                                                                     warmTheme:YES];
+    XCTAssertTrue(NSContainsRect(root, clamped));
+    // Re-pin after a resize is a pure function of the new inputs.
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:260
+                                                                                        rootBounds:NSMakeRect(0, 0, 900, 500)
+                                                                                      tabRowHeight:34
+                                                                                         warmTheme:YES],
+                               NSMakeRect(259, 0, 1, 466)));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {
