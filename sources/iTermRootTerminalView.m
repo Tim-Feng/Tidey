@@ -1307,6 +1307,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 
     NSView *_tideyEditorFileTreeContainerView;
     NSView *_tideyEditorFileTreeTopBoundaryView;
+    NSView *_tideyEditorFileTreeHeaderView;  // strip-height row above the file tree (desk color)
     TideyPaneBoundaryView *_tideyEditorFileTreeBoundaryView;
     NSScrollView *_tideyEditorFileTreeScrollView;
     NSOutlineView *_tideyEditorFileTreeView;
@@ -2188,6 +2189,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorFileTreeContainerView.wantsLayer = YES;
         _tideyEditorFileTreeContainerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelFileTreeBackgroundColor.CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
+
+        // The tab strip stops at the file tree; this row keeps the strip's desk
+        // color running under the chrome icon buttons above the file tree.
+        _tideyEditorFileTreeHeaderView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeHeaderView.wantsLayer = YES;
+        _tideyEditorFileTreeHeaderView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelTabStripBackgroundColor.CGColor;
+        _tideyEditorFileTreeHeaderView.hidden = YES;
+        [_tideyEditorPanelView addSubview:_tideyEditorFileTreeHeaderView];
 
         _tideyEditorFileTreeScrollView = [[TideyVerticalOnlyScrollView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -4923,6 +4932,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         self.tideyEditorSplitToggleButton.hidden = YES;
         self.tideyEditorChromeGradientMaskView.hidden = YES;
         self.tideyEditorSplitDividerView.hidden = YES;
+        _tideyEditorFileTreeHeaderView.hidden = YES;
         [self tideySyncEditorFileTreeWatcher];
         [self updateTideyChromeToggleButtons];
         return;
@@ -5021,6 +5031,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(contentWidth, 0, fileTreeWidth, contentHeight);
+    _tideyEditorFileTreeHeaderView.hidden = !self.shouldShowTideyEditorFileTree;
+    _tideyEditorFileTreeHeaderView.frame = NSMakeRect(contentWidth, contentHeight, fileTreeWidth, tabStripHeight);
     _tideyEditorFileTreeTopBoundaryView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeTopBoundaryView.frame = NSMakeRect(contentWidth,
                                                            contentHeight,
@@ -7182,6 +7194,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [boundaryView tideyPinToSuperviewEdge];
     }
     _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
+    _tideyEditorFileTreeHeaderView.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
     if (@available(macOS 11.0, *)) {
         _tideySidebarTableView.style = [[self class] tideySidebarTableStyleForWarmTheme:warm];
     }
