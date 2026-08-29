@@ -66,6 +66,7 @@
 - paper tab 與 workspace separator 的銜接取決於目前選中的 tab
   - 第一個 tab 被選取時，左側 focus outline 才能延續到 workspace separator；選中後續 tab 時，workspace separator 要恢復普通分隔線，該 tab 的左右垂直邊則各自漸層接回 tab strip baseline
   - tab selection callback 要在 PSM cell state 更新後重新計算 join 狀態；render regression 必須同時覆蓋第一個與後續 tab 被選取的畫面
+  - 共用 `TideyPaperTabPolicy` 不代表兩個 host 都已接上 renderer；terminal PSM 與 editor custom tab 必須各自把 selected tab 的 leading／trailing leg 交給 overlay，host regression 要釘住 overlay frame 與首位 tab 的例外
 - `autoresizingMask` 會製造中間態
   - 先分清楚最終 frame 錯，還是中間一拍錯
 - `NSOutlineView` / `NSTableView` / `NSScrollView` 的行為先查 API

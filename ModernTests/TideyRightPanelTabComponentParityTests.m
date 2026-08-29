@@ -32,6 +32,8 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
 + (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
                                                           tabBarBounds:(NSRect)tabBarBounds;
++ (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                        tabStripBounds:(NSRect)tabStripBounds;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -239,6 +241,24 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                                                                    tabBarBounds:bounds]);
     XCTAssertFalse([iTermRootTerminalView tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:NSZeroRect
                                                                                            tabBarBounds:bounds]);
+}
+
+- (void)testEditorSelectedPaperTabAddsLeadingCornerOverlayOnlyAwayFromTheStripBoundary {
+    const NSRect bounds = NSMakeRect(0, 0, 700, 30);
+    XCTAssertTrue(NSEqualRects(
+        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:
+            NSMakeRect(146, 0, 478, 30)
+                                                                         tabStripBounds:bounds],
+        NSMakeRect(122, 0, 25, 30)));
+    XCTAssertTrue(NSEqualRects(
+        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:
+            NSMakeRect(6, 0, 120, 30)
+                                                                         tabStripBounds:bounds],
+        NSMakeRect(0, 0, 7, 30)));
+    XCTAssertTrue(NSIsEmptyRect(
+        [iTermRootTerminalView tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:
+            NSMakeRect(0, 0, 120, 30)
+                                                                         tabStripBounds:bounds]));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {
