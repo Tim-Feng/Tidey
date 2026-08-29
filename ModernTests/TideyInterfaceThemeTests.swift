@@ -39,6 +39,8 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.sidebarSelectedPrimaryTextColor, white: 1.0)
         assertColor(tokens.sidebarSelectedIdleColor, white: 1.0, alpha: 0.8)
         XCTAssertEqual(tokens.paneBoundaryColor, .clear)
+        XCTAssertEqual(tokens.paneResizerPullBarColor, .clear)
+        XCTAssertEqual(tokens.tabOutlineColor, .clear)
         assertColor(tokens.fileTreeTextColor, white: 0.92)
         assertColor(tokens.fileTreeIconColor, white: 0.78)
         XCTAssertEqual(tokens.fileTreeSelectionColor, .clear)
@@ -106,6 +108,16 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.fileTreeTextColor, hex: 0xEAE4D4)
         assertColor(tokens.fileTreeIconColor, hex: 0xA89F8D)
         assertColor(tokens.fileTreeSelectionColor, hex: 0x2F2C28)
+        assertColor(tokens.paneResizerPullBarColor,
+                    red: 240.0 / 255.0,
+                    green: 230.0 / 255.0,
+                    blue: 210.0 / 255.0,
+                    alpha: 0.35)
+        assertColor(tokens.tabOutlineColor,
+                    red: 240.0 / 255.0,
+                    green: 230.0 / 255.0,
+                    blue: 210.0 / 255.0,
+                    alpha: 0.16)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
         // Editor tabs reuse the production flat-tab component: no raised card,
         // no corner radius, and the selection indicator line carries seaglass.
@@ -115,6 +127,32 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.rightPanelTabSelectionIndicatorColor, hex: 0x7AA89F)
         XCTAssertEqual(tokens.rightPanelTabSelectionIndicatorColor,
                        TideyTerminalPalettePolicy.terminalTabUnderlineColor(warmEnabled: true))
+    }
+
+    func testPaperTabPolicyIsSharedByTerminalAndEditorTabs() {
+        XCTAssertEqual(TideyPaperTabPolicy.outlineWidth, 1)
+        XCTAssertEqual(TideyPaperTabPolicy.topCornerRadius, 4)
+        XCTAssertEqual(TideyPaperTabPolicy.unselectedTopInset, 2)
+        XCTAssertEqual(TideyPaperTabPolicy.selectionIndicatorHeight, 2)
+        XCTAssertEqual(TideyPaperTabPolicy.pullBarWidth, 2)
+        XCTAssertEqual(TideyPaperTabPolicy.pullBarLength, 34)
+
+        let bounds = NSRect(x: 10, y: 0, width: 120, height: 30)
+        // Selected tab: full height, in front, open at the bottom.
+        XCTAssertEqual(TideyPaperTabPolicy.outlineRect(forTabBounds: bounds, selected: true), bounds)
+        // Unselected tab: set back by the top inset (flipped coordinates).
+        XCTAssertEqual(TideyPaperTabPolicy.outlineRect(forTabBounds: bounds, selected: false),
+                       NSRect(x: 10, y: 2, width: 120, height: 28))
+
+        let path = TideyPaperTabPolicy.outlinePath(for: bounds)
+        XCTAssertEqual(path.lineWidth, 1)
+        XCTAssertEqual(path.currentPoint, NSPoint(x: bounds.maxX - 0.5, y: bounds.maxY))
+        XCTAssertFalse(path.isEmpty)
+
+        // Terminal tab bar receives the same outline color; Classic gets nil.
+        XCTAssertNil(TideyTerminalPalettePolicy.terminalTabOutlineColor(warmEnabled: false))
+        XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabOutlineColor(warmEnabled: true),
+                       TideyInterfaceThemeTokens.warm.tabOutlineColor)
     }
 
     func testEditorCanvasPolicyKeepsClassicMonacoAndJoinsWarmBaseSurface() {

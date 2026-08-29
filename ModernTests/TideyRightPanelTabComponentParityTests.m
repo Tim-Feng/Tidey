@@ -2,8 +2,18 @@
 
 #import "iTermRootTerminalView.h"
 
+typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
+    TideyPaneBoundaryEdgeLeft,
+    TideyPaneBoundaryEdgeRight,
+    TideyPaneBoundaryEdgeBottom,
+};
+
 @interface iTermRootTerminalView (TideyRightPanelTabComponentParityTests)
 + (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetricsForWarmTheme:(BOOL)warm;
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                              warmTheme:(BOOL)warm;
++ (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -27,6 +37,50 @@
     XCTAssertEqualObjects(metrics[@"closeButtonWidth"], @20);
     XCTAssertEqualObjects(metrics[@"closeButtonTrailingInset"], @2);
     XCTAssertEqualObjects(metrics[@"addButtonSize"], @22);
+}
+
+- (void)testClassicPaneBoundariesStayFullLength {
+    const NSRect bounds = NSMakeRect(0, 0, 240, 600);
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
+                                                                   superviewBounds:bounds
+                                                                         warmTheme:NO],
+                               NSMakeRect(0, 0, 1, 600)));
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeRight
+                                                                   superviewBounds:bounds
+                                                                         warmTheme:NO],
+                               NSMakeRect(239, 0, 1, 600)));
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeBottom
+                                                                   superviewBounds:bounds
+                                                                         warmTheme:NO],
+                               NSMakeRect(0, 0, 240, 1)));
+}
+
+- (void)testWarmResizerBoundariesBecomeShortPullBarsCenteredOnTheArrow {
+    const NSRect bounds = NSMakeRect(0, 0, 240, 600);
+    // Arrow controls are 34pt tall and vertically centered; the pull bar matches.
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
+                                                                   superviewBounds:bounds
+                                                                         warmTheme:YES],
+                               NSMakeRect(0, 283, 2, 34)));
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeRight
+                                                                   superviewBounds:bounds
+                                                                         warmTheme:YES],
+                               NSMakeRect(238, 283, 2, 34)));
+    // Horizontal strip baselines are not resizers and keep their full width.
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeBottom
+                                                                   superviewBounds:bounds
+                                                                         warmTheme:YES],
+                               NSMakeRect(0, 0, 240, 1)));
+    XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeLeft]);
+    XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeRight]);
+    XCTAssertFalse([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeBottom]);
+}
+
+- (void)testWarmPullBarShrinksToShortSuperviews {
+    const NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
+                                                              superviewBounds:NSMakeRect(0, 0, 100, 20)
+                                                                    warmTheme:YES];
+    XCTAssertTrue(NSEqualRects(frame, NSMakeRect(0, 0, 2, 20)));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {

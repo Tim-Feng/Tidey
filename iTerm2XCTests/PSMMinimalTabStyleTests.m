@@ -14,6 +14,11 @@
 
 @end
 
+@interface PSMMinimalTabStyle (TideyPaperTabTests)
+- (NSColor *)paperTabOutlineColor;
+- (NSColor *)verticalLineColorSelected:(BOOL)selected;
+@end
+
 @interface PSMMinimalTabStyleTests : XCTestCase
 @end
 
@@ -30,6 +35,13 @@
     style.delegate = delegate;
 
     XCTAssertEqualObjects(style.tabBarColor, expected);
+}
+
+- (void)testPaperTabOutlineIsOffWithoutDelegateOptionAndKeepsFlatDivider {
+    PSMMinimalTabStyle *style = [[PSMMinimalTabStyle alloc] init];
+
+    XCTAssertNil([style paperTabOutlineColor]);
+    XCTAssertEqualObjects([style verticalLineColorSelected:NO], [NSColor colorWithWhite:0.25 alpha:1]);
 }
 
 @end

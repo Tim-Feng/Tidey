@@ -81,6 +81,8 @@ final class TideyInterfaceThemeTokens: NSObject {
         fileTreeIconColor: NSColor(white: 0.78, alpha: 1),
         fileTreeSelectionColor: .clear,
         paneBoundaryColor: .clear,
+        paneResizerPullBarColor: .clear,
+        tabOutlineColor: .clear,
         rightPanelSplitDividerColor: NSColor(white: 0.24, alpha: 1),
         rightPanelTabHoverColor: NSColor(white: 1, alpha: 0.06),
         rightPanelTabSelectionColor: .clear,
@@ -206,6 +208,14 @@ final class TideyInterfaceThemeTokens: NSObject {
                                    green: 230 / 255.0,
                                    blue: 210 / 255.0,
                                    alpha: 0.12),
+        paneResizerPullBarColor: NSColor(srgbRed: 240 / 255.0,
+                                         green: 230 / 255.0,
+                                         blue: 210 / 255.0,
+                                         alpha: 0.35),
+        tabOutlineColor: NSColor(srgbRed: 240 / 255.0,
+                                 green: 230 / 255.0,
+                                 blue: 210 / 255.0,
+                                 alpha: 0.16),
         rightPanelSplitDividerColor: NSColor(srgbRed: 240 / 255.0,
                                              green: 230 / 255.0,
                                              blue: 210 / 255.0,
@@ -313,6 +323,8 @@ final class TideyInterfaceThemeTokens: NSObject {
     let fileTreeIconColor: NSColor
     let fileTreeSelectionColor: NSColor
     let paneBoundaryColor: NSColor
+    let paneResizerPullBarColor: NSColor
+    let tabOutlineColor: NSColor
     let rightPanelSplitDividerColor: NSColor
     let rightPanelTabHoverColor: NSColor
     let rightPanelTabSelectionColor: NSColor
@@ -362,6 +374,8 @@ final class TideyInterfaceThemeTokens: NSObject {
                  fileTreeIconColor: NSColor,
                  fileTreeSelectionColor: NSColor,
                  paneBoundaryColor: NSColor,
+                 paneResizerPullBarColor: NSColor,
+                 tabOutlineColor: NSColor,
                  rightPanelSplitDividerColor: NSColor,
                  rightPanelTabHoverColor: NSColor,
                  rightPanelTabSelectionColor: NSColor,
@@ -408,6 +422,8 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.fileTreeIconColor = fileTreeIconColor
         self.fileTreeSelectionColor = fileTreeSelectionColor
         self.paneBoundaryColor = paneBoundaryColor
+        self.paneResizerPullBarColor = paneResizerPullBarColor
+        self.tabOutlineColor = tabOutlineColor
         self.rightPanelSplitDividerColor = rightPanelSplitDividerColor
         self.rightPanelTabHoverColor = rightPanelTabHoverColor
         self.rightPanelTabSelectionColor = rightPanelTabSelectionColor
@@ -483,6 +499,13 @@ final class TideyTerminalPalettePolicy: NSObject {
     @objc(terminalTabUnderlineColorWithWarmEnabled:)
     static func terminalTabUnderlineColor(warmEnabled: Bool) -> NSColor? {
         warmEnabled ? warmTabUnderlineColor : nil
+    }
+
+    /// Paper-tab outline for the terminal tab bar. nil keeps the production
+    /// minimal style untouched (Classic).
+    @objc(terminalTabOutlineColorWithWarmEnabled:)
+    static func terminalTabOutlineColor(warmEnabled: Bool) -> NSColor? {
+        warmEnabled ? TideyInterfaceThemeTokens.warm.tabOutlineColor : nil
     }
 
     @objc(terminalTabStripBackgroundColorWithWarmEnabled:)
@@ -595,5 +618,62 @@ final class TideyEditorCanvasPolicy: NSObject {
         let colorEntries = colors.map { "\"\($0.0)\":\"\($0.1)\"" }.joined(separator: ",")
         let ruleEntries = rules.map { "{\"token\":\"\($0.0)\",\"foreground\":\"\($0.1.dropFirst())\"}" }.joined(separator: ",")
         return "{\"base\":\"vs-dark\",\"inherit\":true,\"rules\":[\(ruleEntries)],\"colors\":{\(colorEntries)}}"
+    }
+}
+
+// Shared Warm paper-tab contract. Both the terminal tab bar (PSMMinimalTabStyle)
+// and the right-panel tab strip (TideyEditorTabItemView) render this silhouette:
+// a hairline outline with small top corners, the selected tab full height and
+// open at the bottom so it joins its content, unselected tabs set back behind
+// it by `unselectedTopInset`. Coordinates are flipped (minY is the top edge).
+@objcMembers
+final class TideyPaperTabPolicy: NSObject {
+    static let outlineWidth: CGFloat = 1
+    static let topCornerRadius: CGFloat = 4
+    static let unselectedTopInset: CGFloat = 2
+    static let selectionIndicatorHeight: CGFloat = 2
+
+    /// Short pull bar shown at each resizable vertical boundary in Warm.
+    static let pullBarWidth: CGFloat = 2
+    static let pullBarLength: CGFloat = 34
+
+    @objc(outlineRectForTabBounds:selected:)
+    static func outlineRect(forTabBounds bounds: NSRect, selected: Bool) -> NSRect {
+        guard !selected else {
+            return bounds
+        }
+        return NSRect(x: bounds.minX,
+                      y: bounds.minY + unselectedTopInset,
+                      width: bounds.width,
+                      height: max(0, bounds.height - unselectedTopInset))
+    }
+
+    /// Outline path in flipped coordinates: left side, rounded top corners,
+    /// right side. Bottom is intentionally open.
+    @objc(outlinePathForRect:)
+    static func outlinePath(for rect: NSRect) -> NSBezierPath {
+        let inset = outlineWidth / 2
+        let left = rect.minX + inset
+        let right = rect.maxX - inset
+        let top = rect.minY + inset
+        let bottom = rect.maxY
+        let radius = min(topCornerRadius, (right - left) / 2)
+        let path = NSBezierPath()
+        path.lineWidth = outlineWidth
+        path.move(to: NSPoint(x: left, y: bottom))
+        path.line(to: NSPoint(x: left, y: top + radius))
+        path.appendArc(withCenter: NSPoint(x: left + radius, y: top + radius),
+                       radius: radius,
+                       startAngle: 180,
+                       endAngle: 270,
+                       clockwise: false)
+        path.line(to: NSPoint(x: right - radius, y: top))
+        path.appendArc(withCenter: NSPoint(x: right - radius, y: top + radius),
+                       radius: radius,
+                       startAngle: 270,
+                       endAngle: 360,
+                       clockwise: false)
+        path.line(to: NSPoint(x: right, y: bottom))
+        return path
     }
 }

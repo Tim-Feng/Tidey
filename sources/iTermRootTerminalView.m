@@ -681,6 +681,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @property(nonatomic, copy) NSString *tideyDragTitle;
 @property(nonatomic) BOOL tideySelected;
 @property(nonatomic) BOOL tideyHovered;
+@property(nonatomic) BOOL tideyLastInGroup;
 @property(nonatomic, strong) NSView *tideyHoverView;
 @property(nonatomic, strong) NSView *tideySelectionLineView;
 @property(nonatomic, strong) NSView *tideySeparatorView;
@@ -779,11 +780,70 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
+- (BOOL)tideyDrawsPaperTab {
+    return TideyInterfaceThemeController.shared.currentTokens.tabOutlineColor.alphaComponent > 0;
+}
+
 - (void)layout {
     [super layout];
     _tideyHoverView.frame = self.bounds;
-    _tideySelectionLineView.frame = NSMakeRect(0, 0, NSWidth(self.bounds), 2);
+    if ([self tideyDrawsPaperTab]) {
+        // Keep the indicator inside the rounded top corners of the page.
+        const CGFloat radius = TideyPaperTabPolicy.topCornerRadius;
+        _tideySelectionLineView.frame = NSMakeRect(radius,
+                                                   TideyPaperTabPolicy.outlineWidth,
+                                                   MAX(0, NSWidth(self.bounds) - radius * 2),
+                                                   TideyPaperTabPolicy.selectionIndicatorHeight);
+    } else {
+        _tideySelectionLineView.frame = NSMakeRect(0, 0, NSWidth(self.bounds), 2);
+    }
     _tideySeparatorView.frame = NSMakeRect(NSWidth(self.bounds) - 1, 6, 1, MAX(0, NSHeight(self.bounds) - 12));
+}
+
+// Warm paper tab (same contract as PSMMinimalTabStyle): hairline outline with
+// rounded top corners, open at the bottom. Selected: full height, filled with
+// the base surface so it covers the strip baseline and joins its content.
+// Unselected: set back by unselectedTopInset; right edge only on the last tab
+// of a group so adjacent outlines never double-draw.
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (![self tideyDrawsPaperTab]) {
+        return;
+    }
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:self.bounds selected:_tideySelected];
+    if (_tideySelected) {
+        [tokens.rightPanelTabStripBackgroundColor setFill];
+        NSRectFill(self.bounds);
+    }
+    [tokens.tabOutlineColor setStroke];
+    if (_tideySelected || _tideyLastInGroup) {
+        [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
+        return;
+    }
+    NSBezierPath *path = [TideyPaperTabPolicy outlinePathForRect:outlineRect];
+    // Drop the trailing vertical segment: the neighbour's left edge draws it.
+    NSBezierPath *leftAndTop = [NSBezierPath bezierPath];
+    leftAndTop.lineWidth = path.lineWidth;
+    const NSInteger elements = path.elementCount;
+    NSPoint points[3];
+    for (NSInteger i = 0; i < elements - 1; i++) {
+        NSBezierPathElement element = [path elementAtIndex:i associatedPoints:points];
+        switch (element) {
+            case NSBezierPathElementMoveTo:
+                [leftAndTop moveToPoint:points[0]];
+                break;
+            case NSBezierPathElementLineTo:
+                [leftAndTop lineToPoint:points[0]];
+                break;
+            case NSBezierPathElementCurveTo:
+                [leftAndTop curveToPoint:points[2] controlPoint1:points[0] controlPoint2:points[1]];
+                break;
+            default:
+                break;
+        }
+    }
+    [leftAndTop stroke];
 }
 
 - (void)tideyUpdateAppearance {
@@ -799,8 +859,10 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideySelectionLineView.layer.backgroundColor = tokens.rightPanelTabSelectionIndicatorColor.CGColor;
     _tideySeparatorView.layer.backgroundColor = tokens.rightPanelTabSeparatorColor.CGColor;
     _tideySelectionLineView.hidden = (tokens.usesRaisedRightPanelTabs || !_tideySelected);
+    _tideySeparatorView.hidden = _tideyLastInGroup || [self tideyDrawsPaperTab];
     _tideyHoverView.hidden = (_tideySelected || !_tideyHovered);
     _tideyHoverView.alphaValue = _tideyHoverView.hidden ? 0 : 1;
+    [self setNeedsDisplay:YES];
 }
 
 @end
@@ -1106,11 +1168,20 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     TideyPaneBoundaryEdgeBottom,
 };
 
-// 1px separator pinned to one edge of its superview. Warm derives structural
-// separation from these lines because all base surfaces share a single fill;
-// Classic keeps them invisible via a clear paneBoundaryColor token.
+// Separator pinned to one edge of its superview. Warm derives structural
+// separation from these because all base surfaces share a single fill; Classic
+// keeps them invisible via clear tokens. Vertical edges are the three resizable
+// boundaries: in Warm they show only a short pull bar centered on the arrow
+// control (the full-height drag handle is a separate, unchanged view).
 @interface TideyPaneBoundaryView : NSView
 @property(nonatomic) TideyPaneBoundaryEdge tideyEdge;
+@end
+
+@interface iTermRootTerminalView (TideyPaneBoundaryPolicy)
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                              warmTheme:(BOOL)warm;
++ (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1120,18 +1191,9 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     if (!parent) {
         return;
     }
-    const NSRect bounds = parent.bounds;
-    switch (self.tideyEdge) {
-        case TideyPaneBoundaryEdgeLeft:
-            self.frame = NSMakeRect(0, 0, 1, NSHeight(bounds));
-            break;
-        case TideyPaneBoundaryEdgeRight:
-            self.frame = NSMakeRect(MAX(0, NSWidth(bounds) - 1), 0, 1, NSHeight(bounds));
-            break;
-        case TideyPaneBoundaryEdgeBottom:
-            self.frame = NSMakeRect(0, 0, NSWidth(bounds), 1);
-            break;
-    }
+    self.frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:self.tideyEdge
+                                                      superviewBounds:parent.bounds
+                                                            warmTheme:TideyWarmInterfaceThemeIsActive()];
 }
 
 - (void)viewDidMoveToSuperview {
@@ -1589,6 +1651,31 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         @"closeButtonTrailingInset": @2,
         @"addButtonSize": @22,
     };
+}
+
++ (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge {
+    return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
+}
+
+// Classic: full-height (or full-width) 1px line. Warm resizer edges: a short
+// pull bar, kTideyChromeToggleButtonHeight tall and vertically centered so it
+// sits beside the arrow control. Warm bottom edges stay full-width hairlines.
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                              warmTheme:(BOOL)warm {
+    const BOOL pullBar = warm && [self tideyPaneBoundaryEdgeIsResizer:edge];
+    const CGFloat width = pullBar ? TideyPaperTabPolicy.pullBarWidth : 1;
+    const CGFloat height = pullBar ? MIN(TideyPaperTabPolicy.pullBarLength, NSHeight(bounds)) : NSHeight(bounds);
+    const CGFloat y = pullBar ? floor((NSHeight(bounds) - height) / 2.0) : 0;
+    switch (edge) {
+        case TideyPaneBoundaryEdgeLeft:
+            return NSMakeRect(0, y, width, height);
+        case TideyPaneBoundaryEdgeRight:
+            return NSMakeRect(MAX(0, NSWidth(bounds) - width), y, width, height);
+        case TideyPaneBoundaryEdgeBottom:
+            return NSMakeRect(0, 0, NSWidth(bounds), 1);
+    }
+    return NSZeroRect;
 }
 
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {
@@ -2216,8 +2303,6 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         }
         [self addSubview:_tabBarBacking];
         [_tabBarBacking addSubview:_tabBarControl];
-        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
-                                        toView:_tabBarBacking];
         _tideyTerminalPanelHintOverlayView = [[TideyPassthroughView alloc] initWithFrame:NSZeroRect];
         _tideyTerminalPanelHintOverlayView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
         [_tabBarControl addSubview:_tideyTerminalPanelHintOverlayView];
@@ -5381,9 +5466,14 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             }
 
             BOOL isLastInGroup = (groupIndex == (NSInteger)group.visibleTabs.count - 1);
-            tabView.tideySeparatorView.hidden = isLastInGroup;
+            tabView.tideyLastInGroup = isLastInGroup;
+            [tabView tideyUpdateAppearance];
 
             [tabStripView addSubview:tabView];
+            if (selected) {
+                // Front sheet: the selected tab sits above its neighbours.
+                [tabStripView addSubview:tabView positioned:NSWindowAbove relativeTo:nil];
+            }
             x += tabWidth;
         }
 
@@ -6965,6 +7055,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self tideyApplyInterfaceThemeTokens];
 }
 
+- (NSColor *)tideyPaneBoundaryColorForEdge:(TideyPaneBoundaryEdge)edge
+                                     tokens:(TideyInterfaceThemeTokens *)tokens {
+    return [[self class] tideyPaneBoundaryEdgeIsResizer:edge]
+        ? tokens.paneResizerPullBarColor
+        : tokens.paneBoundaryColor;
+}
+
 - (void)tideyAddPaneBoundaryViewWithEdge:(TideyPaneBoundaryEdge)edge toView:(NSView *)parent {
     if (!parent) {
         return;
@@ -6973,8 +7070,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     boundaryView.tideyEdge = edge;
     boundaryView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     boundaryView.wantsLayer = YES;
+    boundaryView.layer.cornerRadius = TideyPaperTabPolicy.pullBarWidth / 2.0;
     boundaryView.layer.backgroundColor =
-        TideyInterfaceThemeController.shared.currentTokens.paneBoundaryColor.CGColor;
+        [self tideyPaneBoundaryColorForEdge:edge
+                                     tokens:TideyInterfaceThemeController.shared.currentTokens].CGColor;
     [parent addSubview:boundaryView positioned:NSWindowAbove relativeTo:nil];
     [_tideyPaneBoundaryViews addObject:boundaryView];
 }
@@ -6983,7 +7082,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     BOOL warm = TideyWarmInterfaceThemeIsActive();
     for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
-        boundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
+        boundaryView.layer.backgroundColor =
+            [self tideyPaneBoundaryColorForEdge:boundaryView.tideyEdge tokens:tokens].CGColor;
+        [boundaryView tideyPinToSuperviewEdge];
     }
     _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
     if (@available(macOS 11.0, *)) {

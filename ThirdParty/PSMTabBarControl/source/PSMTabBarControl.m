@@ -75,6 +75,7 @@ PSMTabBarControlOptionKey PSMTabBarControlOptionFontSizeOverride =
     @"PSMTabBarControlOptionFontSizeOverride";
 PSMTabBarControlOptionKey PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence = @"PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence";
 PSMTabBarControlOptionKey PSMTabBarControlOptionSelectedUnderlineColor = @"PSMTabBarControlOptionSelectedUnderlineColor";
+PSMTabBarControlOptionKey PSMTabBarControlOptionPaperTabOutlineColor = @"PSMTabBarControlOptionPaperTabOutlineColor";
 PSMTabBarControlOptionKey PSMTabBarControlOptionDragEdgeHeight = @"PSMTabBarControlOptionDragEdgeHeight";
 PSMTabBarControlOptionKey PSMTabBarControlOptionAttachedToTitleBar = @"PSMTabBarControlOptionAttachedToTitleBar";
 PSMTabBarControlOptionKey PSMTabBarControlOptionHTMLTabTitles = @"PSMTabBarControlOptionHTMLTabTitles";

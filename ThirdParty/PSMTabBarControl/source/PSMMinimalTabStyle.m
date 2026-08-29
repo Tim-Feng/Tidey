@@ -6,6 +6,7 @@
 //
 
 #import "PSMMinimalTabStyle.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "PSMOverflowPopUpButton.h"
 
 @implementation NSColor(PSMMinimalTabStyle)
@@ -121,7 +122,16 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     return [NSColor clearColor];
 }
 
+- (NSColor *)paperTabOutlineColor {
+    return [self.tabBar.delegate tabView:self.tabBar
+                           valueOfOption:PSMTabBarControlOptionPaperTabOutlineColor];
+}
+
 - (NSColor *)verticalLineColorSelected:(BOOL)selected {
+    if ([self paperTabOutlineColor]) {
+        // Paper tabs carry their own outlines; the flat divider would double-draw.
+        return [NSColor clearColor];
+    }
     return [NSColor colorWithWhite:0.25 alpha:1];
 }
 
@@ -416,6 +426,57 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
         horizontal:(BOOL)horizontal
       withOverflow:(BOOL)withOverflow {
     [super drawTabBar:bar inRect:rect clipRect:clipRect horizontal:horizontal withOverflow:withOverflow];
+    [self drawPaperTabsInTabBar:bar clipRect:clipRect];
+}
+
+// Tidey Warm paper tabs: every visible tab gets a hairline page outline with
+// rounded top corners; the selected tab is drawn last, full height and open at
+// the bottom so it joins the terminal, while a baseline runs under the
+// unselected tabs on either side of it. Only active when the delegate supplies
+// PSMTabBarControlOptionPaperTabOutlineColor.
+- (void)drawPaperTabsInTabBar:(PSMTabBarControl *)bar clipRect:(NSRect)clipRect {
+    NSColor *outlineColor = [self paperTabOutlineColor];
+    if (!outlineColor || bar.orientation != PSMTabBarHorizontalOrientation || ![bar tabView]) {
+        return;
+    }
+    [NSGraphicsContext saveGraphicsState];
+    [outlineColor set];
+
+    PSMTabBarCell *selectedCell = nil;
+    for (PSMTabBarCell *cell in [bar cells]) {
+        if (cell.isInOverflowMenu) {
+            continue;
+        }
+        if (cell.state == NSControlStateValueOn) {
+            selectedCell = cell;
+            continue;
+        }
+        if (!NSIntersectsRect(NSInsetRect(cell.frame, -1, -1), clipRect)) {
+            continue;
+        }
+        NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:cell.frame selected:NO];
+        [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
+    }
+
+    // Baseline under everything except the selected tab.
+    const CGFloat baselineY = NSMaxY(bar.bounds) - 0.5;
+    if (selectedCell && !selectedCell.isInOverflowMenu) {
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
+                                  toPoint:NSMakePoint(NSMinX(selectedCell.frame) + 0.5, baselineY)];
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMaxX(selectedCell.frame) - 0.5, baselineY)
+                                  toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
+        // Front sheet: redraw the selected cell over neighbouring outlines,
+        // then draw its own outline once and its indicator on top.
+        [selectedCell drawWithFrame:selectedCell.frame inView:bar];
+        [outlineColor set];
+        NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:selectedCell.frame selected:YES];
+        [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
+        [selectedCell drawPostHocDecorationsOnSelectedCell:selectedCell tabBarControl:bar];
+    } else {
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
+                                  toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
+    }
+    [NSGraphicsContext restoreGraphicsState];
 }
 
 - (void)drawDividerBetweenTabBarAndContent:(NSRect)rect bar:(PSMTabBarControl *)bar {
