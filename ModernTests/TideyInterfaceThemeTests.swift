@@ -49,6 +49,50 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertFalse(tokens.usesRaisedRightPanelTabs)
     }
 
+    func testWarmBrowserToolbarUsesOneExactContentRow() {
+        let tokens = TideyInterfaceThemeTokens.warm
+        let toolbarHeight = TideyBrowserToolbarPolicy.toolbarHeight(warmEnabled: true)
+
+        XCTAssertEqual(toolbarHeight, 40)
+        XCTAssertEqual(TideyBrowserToolbarPolicy.urlFieldHeight(warmEnabled: true), 28)
+        XCTAssertEqual(
+            TideyBrowserToolbarPolicy.urlFieldFrame(
+                toolbarHeight: toolbarHeight,
+                contentWidth: 500,
+                warmEnabled: true),
+            NSRect(x: 92, y: 6, width: 380, height: 28)
+        )
+        XCTAssertEqual(
+            TideyBrowserToolbarPolicy.toolbarBackgroundColor(
+                tokens: tokens,
+                warmEnabled: true),
+            tokens.rightPanelBackgroundColor
+        )
+        XCTAssertNotEqual(tokens.rightPanelBackgroundColor,
+                          tokens.rightPanelTabStripBackgroundColor)
+    }
+
+    func testClassicBrowserToolbarGeometryAndColorRemainUnchanged() {
+        let tokens = TideyInterfaceThemeTokens.classic
+        let toolbarHeight = TideyBrowserToolbarPolicy.toolbarHeight(warmEnabled: false)
+
+        XCTAssertEqual(toolbarHeight, 28)
+        XCTAssertEqual(TideyBrowserToolbarPolicy.urlFieldHeight(warmEnabled: false), 22)
+        XCTAssertEqual(
+            TideyBrowserToolbarPolicy.urlFieldFrame(
+                toolbarHeight: toolbarHeight,
+                contentWidth: 500,
+                warmEnabled: false),
+            NSRect(x: 92, y: 3, width: 380, height: 22)
+        )
+        assertColor(
+            TideyBrowserToolbarPolicy.toolbarBackgroundColor(
+                tokens: tokens,
+                warmEnabled: false),
+            white: 0.15
+        )
+    }
+
     func testControllerReapplyPostsOneNotificationWithoutChangingClassicTheme() {
         let suiteName = "TideyInterfaceThemeTests.\(UUID().uuidString)"
         let defaults = UserDefaults(suiteName: suiteName)!
