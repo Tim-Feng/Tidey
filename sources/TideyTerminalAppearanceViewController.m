@@ -87,6 +87,7 @@ static const CGFloat kCardRowHeight = 40;
 static const CGFloat kSectionGap = 20;
 static const CGFloat kSectionHeaderHeight = 16;
 static const CGFloat kSectionHeaderToCardGap = 8;
+static const CGFloat kDocumentBottomPadding = 48;
 static const CGFloat kAnsiWellSize = 28;
 static const CGFloat kAnsiLabelHeight = 14;
 
@@ -140,7 +141,7 @@ static const CGFloat kAnsiLabelHeight = 14;
     // ===== ANSI PALETTE section =====
     y += [self addSectionHeader:@"ANSI PALETTE" toView:documentView atY:y width:contentWidth];
     y += [self buildANSICardInView:documentView atY:y width:contentWidth];
-    y += 24; // bottom padding
+    y += kDocumentBottomPadding;
 
     // Set document view height to fit content
     NSRect docFrame = documentView.frame;

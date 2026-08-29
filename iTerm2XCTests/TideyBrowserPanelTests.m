@@ -5,6 +5,7 @@
 
 #import <XCTest/XCTest.h>
 #import "iTermRootTerminalView.h"
+#import "TideyTerminalAppearanceViewController.h"
 
 typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
     TideyRightPanelTabKindEditor = 0,
@@ -37,6 +38,21 @@ typedef NS_ENUM(NSInteger, TideyRightPanelTabKind) {
 @end
 
 @implementation TideyBrowserPanelTests
+
+- (void)testAppearanceDocumentKeepsLastSectionFullyScrollable {
+    TideyTerminalAppearanceViewController *controller =
+        [[TideyTerminalAppearanceViewController alloc] init];
+    NSScrollView *scrollView = (NSScrollView *)controller.view;
+    XCTAssertTrue([scrollView isKindOfClass:NSScrollView.class]);
+    NSView *documentView = scrollView.documentView;
+    XCTAssertNotNil(documentView);
+
+    CGFloat contentBottom = 0;
+    for (NSView *subview in documentView.subviews) {
+        contentBottom = MAX(contentBottom, NSMaxY(subview.frame));
+    }
+    XCTAssertGreaterThanOrEqual(NSHeight(documentView.frame) - contentBottom, 48);
+}
 
 #pragma mark - URL Normalization
 
