@@ -29,6 +29,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                          tabRowHeight:(CGFloat)tabRowHeight
                                             warmTheme:(BOOL)warm;
 + (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
++ (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
 @end
 
 // The Warm editor strip must reuse the production tab/group component geometry;
@@ -208,6 +209,22 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     const NSRect tabBarNoDivision = NSMakeRect(sidebarWidth, 700 - tabBarHeight, 800, tabBarHeight);
     XCTAssertEqual(NSMaxY(separator), NSMinY(tabBarNoDivision));
     XCTAssertTrue(NSIsEmptyRect(NSIntersectionRect(separator, tabBarNoDivision)));
+}
+
+// Regression for afd0165d4: the workspace seam layer still carried the
+// parked pull-bar corner radius (1pt on a 1pt-wide layer), which rounded its
+// top end and left the join row only partially painted. A 1pt line gets no
+// radius; only a wider bar does.
+- (void)testOnePointBoundaryLinesHaveNoCornerRadiusSoTheJoinRowIsFullyPainted {
+    const NSRect seam = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:200
+                                                                               rootBounds:NSMakeRect(0, 0, 1200, 700)
+                                                                             tabRowHeight:34
+                                                                                warmTheme:YES];
+    XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:seam], 0);
+    XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 0, 1, 566)], 0);
+    XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 0, 400, 1)], 0);
+    // The parked 2pt pull bar keeps rounded ends.
+    XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 283, 2, 34)], 1);
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {

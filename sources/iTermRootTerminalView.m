@@ -1263,6 +1263,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                          tabRowHeight:(CGFloat)tabRowHeight
                                             warmTheme:(BOOL)warm;
 + (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
++ (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1314,6 +1315,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
         const NSRect providedFrame = self.tideyFrameProvider();
         self.hidden = NSIsEmptyRect(providedFrame);
         self.frame = providedFrame;
+        self.layer.cornerRadius = [iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:providedFrame];
         [self tideyUpdateLineAppearance];
         return;
     }
@@ -1331,6 +1333,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                               superviewBounds:parent.bounds];
     }
     self.frame = frame;
+    self.layer.cornerRadius = [iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:frame];
     [self tideyUpdateLineAppearance];
 }
 
@@ -1796,6 +1799,16 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge {
     return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
+}
+
+// Corner radius for a boundary layer. A 1pt line must have none: a radius on
+// a 1pt-wide layer rounds its end caps, which leaves the top device rows of
+// the workspace seam only partially covered (measured 40%/80% on Retina) and
+// reads as a break where the focused tab's leading outline should join it.
+// Only a bar wider than 1pt (the parked pull-bar experiment) gets a radius.
++ (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame {
+    const CGFloat thickness = MIN(NSWidth(frame), NSHeight(frame));
+    return thickness > 1 ? floor(thickness / 2.0) : 0;
 }
 
 // The 1pt row where the focused first tab's leading outline ends: the tab
@@ -7360,7 +7373,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     boundaryView.tideyEdge = edge;
     boundaryView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
     boundaryView.wantsLayer = YES;
-    boundaryView.layer.cornerRadius = TideyPaperTabPolicy.pullBarWidth / 2.0;
+    boundaryView.layer.masksToBounds = NO;
+    boundaryView.layer.cornerRadius = 0;  // set per frame in tideyPinToSuperviewEdge
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     // Colors are applied before the first pin so no layout pass runs with a
     // nil boundary color.
