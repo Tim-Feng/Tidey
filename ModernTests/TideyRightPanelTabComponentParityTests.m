@@ -62,78 +62,36 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                NSMakeRect(0, 0, 240, 1)));
 }
 
-- (void)testWarmResizerBoundariesBecomeShortPullBarsCenteredOnTheArrow {
+- (void)testWarmResizerBoundariesAreFullHeightLinesLikeClassic {
+    // Tim parked the short pull-bar experiment: Warm resizer edges are the same
+    // full-height 1px lines as Classic; only the color token differs.
     const NSRect bounds = NSMakeRect(0, 0, 240, 600);
-    // Arrow controls are 34pt tall and vertically centered; the pull bar matches.
+    for (NSNumber *edgeNumber in @[ @(TideyPaneBoundaryEdgeLeft), @(TideyPaneBoundaryEdgeRight), @(TideyPaneBoundaryEdgeBottom) ]) {
+        const TideyPaneBoundaryEdge edge = edgeNumber.integerValue;
+        const NSRect classic = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:edge
+                                                                    superviewBounds:bounds
+                                                                          warmTheme:NO];
+        const NSRect warm = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:edge
+                                                                 superviewBounds:bounds
+                                                                    pullBarMidY:317
+                                                                       warmTheme:YES];
+        XCTAssertTrue(NSEqualRects(classic, warm), @"edge %ld", (long)edge);
+    }
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
                                                                    superviewBounds:bounds
                                                                          warmTheme:YES],
-                               NSMakeRect(0, 283, 2, 34)));
-    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeRight
-                                                                   superviewBounds:bounds
-                                                                         warmTheme:YES],
-                               NSMakeRect(238, 283, 2, 34)));
-    // Horizontal strip baselines are not resizers and keep their full width.
-    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeBottom
-                                                                   superviewBounds:bounds
-                                                                         warmTheme:YES],
-                               NSMakeRect(0, 0, 240, 1)));
+                               NSMakeRect(0, 0, 1, 600)));
     XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeLeft]);
     XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeRight]);
     XCTAssertFalse([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeBottom]);
 }
 
-- (void)testWarmPullBarShrinksToShortSuperviews {
-    const NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                              superviewBounds:NSMakeRect(0, 0, 100, 20)
-                                                                    warmTheme:YES];
-    XCTAssertTrue(NSEqualRects(frame, NSMakeRect(0, 0, 2, 20)));
-}
-
-// The file-tree boundary lives inside the file-tree container, which excludes
-// the editor tab strip, while its arrow is centered in the whole editor panel.
-// The pull bar must follow the arrow's midpoint after coordinate conversion,
-// not center itself in its own (shorter) superview.
-- (void)testWarmFileTreePullBarFollowsArrowMidpointAcrossUnequalHeights {
-    const CGFloat editorPanelHeight = 634;   // includes a 34pt tab strip
-    const NSRect containerFrame = NSMakeRect(400, 0, 200, 600);
-
-    const CGFloat arrowMidY = [iTermRootTerminalView tideyChromeToggleButtonMidYForContainerHeight:editorPanelHeight];
-    XCTAssertEqual(arrowMidY, 317);   // floor((634 - 34) / 2) + 17
-
-    const CGFloat pullBarMidY = [iTermRootTerminalView tideyFileTreePullBarMidYForEditorPanelHeight:editorPanelHeight
-                                                                            fileTreeContainerFrame:containerFrame];
-    XCTAssertEqual(pullBarMidY, arrowMidY - NSMinY(containerFrame));
-
-    const NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                              superviewBounds:NSMakeRect(0, 0, 200, 600)
-                                                                 pullBarMidY:pullBarMidY
-                                                                    warmTheme:YES];
-    XCTAssertTrue(NSEqualRects(frame, NSMakeRect(0, 300, 2, 34)));
-    XCTAssertEqual(NSMidY(frame), arrowMidY);
-    // Independent centering in the container would have landed 17pt lower.
-    XCTAssertNotEqual(NSMidY(frame), 300);
-}
-
-- (void)testWarmFileTreePullBarConvertsContainerOrigin {
-    const NSRect containerFrame = NSMakeRect(400, 40, 200, 560);
-    const CGFloat arrowMidY = [iTermRootTerminalView tideyChromeToggleButtonMidYForContainerHeight:634];
-    const CGFloat pullBarMidY = [iTermRootTerminalView tideyFileTreePullBarMidYForEditorPanelHeight:634
-                                                                            fileTreeContainerFrame:containerFrame];
-    XCTAssertEqual(pullBarMidY, arrowMidY - 40);
-    const NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                              superviewBounds:NSMakeRect(0, 0, 200, 560)
-                                                                 pullBarMidY:pullBarMidY
-                                                                    warmTheme:YES];
-    XCTAssertEqual(NSMidY(frame) + NSMinY(containerFrame), arrowMidY);
-}
-
-- (void)testClassicIgnoresPullBarMidpoint {
-    const NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                              superviewBounds:NSMakeRect(0, 0, 200, 600)
-                                                                 pullBarMidY:317
-                                                                    warmTheme:NO];
-    XCTAssertTrue(NSEqualRects(frame, NSMakeRect(0, 0, 1, 600)));
+- (void)testFileTreeArrowMidpointSeamStillConvertsContainerOrigin {
+    // Pure midpoint helpers stay available for re-enabling the pull-bar experiment.
+    XCTAssertEqual([iTermRootTerminalView tideyChromeToggleButtonMidYForContainerHeight:634], 317);
+    XCTAssertEqual([iTermRootTerminalView tideyFileTreePullBarMidYForEditorPanelHeight:634
+                                                              fileTreeContainerFrame:NSMakeRect(400, 40, 200, 560)],
+                   277);
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {

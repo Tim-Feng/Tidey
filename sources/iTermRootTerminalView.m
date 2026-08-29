@@ -1673,9 +1673,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
 }
 
-// Classic: full-height (or full-width) 1px line. Warm resizer edges: a short
-// pull bar, kTideyChromeToggleButtonHeight tall and vertically centered so it
-// sits beside the arrow control. Warm bottom edges stay full-width hairlines.
+// Full-height (or full-width) 1px line in both themes; Warm resizer edges use
+// the fainter paneResizerPullBarColor token.
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
                         superviewBounds:(NSRect)bounds
                               warmTheme:(BOOL)warm {
@@ -1700,15 +1699,19 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     return [self tideyChromeToggleButtonMidYForContainerHeight:editorPanelHeight] - NSMinY(containerFrame);
 }
 
+// Tim 2026-08-29: the short pull-bar experiment is parked; resizer edges are
+// full-height 1px lines again in both themes (Warm just draws them fainter via
+// paneResizerPullBarColor). pullBarMidY is kept in the signature so the
+// experiment can be re-enabled without touching callers.
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
                         superviewBounds:(NSRect)bounds
                            pullBarMidY:(CGFloat)pullBarMidY
                               warmTheme:(BOOL)warm {
-    const BOOL pullBar = warm && [self tideyPaneBoundaryEdgeIsResizer:edge];
-    const CGFloat width = pullBar ? TideyPaperTabPolicy.pullBarWidth : 1;
-    const CGFloat height = pullBar ? MIN(TideyPaperTabPolicy.pullBarLength, NSHeight(bounds)) : NSHeight(bounds);
-    const CGFloat centeredY = pullBar ? pullBarMidY - height / 2.0 : 0;
-    const CGFloat y = pullBar ? MIN(MAX(0, floor(centeredY)), MAX(0, NSHeight(bounds) - height)) : 0;
+    (void)pullBarMidY;
+    (void)warm;
+    const CGFloat width = 1;
+    const CGFloat height = NSHeight(bounds);
+    const CGFloat y = 0;
     switch (edge) {
         case TideyPaneBoundaryEdgeLeft:
             return NSMakeRect(0, y, width, height);

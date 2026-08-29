@@ -112,7 +112,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
                     red: 240.0 / 255.0,
                     green: 230.0 / 255.0,
                     blue: 210.0 / 255.0,
-                    alpha: 0.35)
+                    alpha: 0.06)
         assertColor(tokens.tabOutlineColor,
                     red: 240.0 / 255.0,
                     green: 230.0 / 255.0,

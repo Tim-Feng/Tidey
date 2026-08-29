@@ -211,7 +211,7 @@ final class TideyInterfaceThemeTokens: NSObject {
         paneResizerPullBarColor: NSColor(srgbRed: 240 / 255.0,
                                          green: 230 / 255.0,
                                          blue: 210 / 255.0,
-                                         alpha: 0.35),
+                                         alpha: 0.06),
         tabOutlineColor: NSColor(srgbRed: 240 / 255.0,
                                  green: 230 / 255.0,
                                  blue: 210 / 255.0,
