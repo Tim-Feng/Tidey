@@ -527,6 +527,14 @@ final class TideyTerminalPalettePolicy: NSObject {
 
     /// Fill for the focused paper tab: the canvas base surface, so the front
     /// sheet joins its content. nil in Classic.
+    /// Color of the tab's new-output/idle dot. Warm reuses the workspace
+    /// unread accent so the tab and the sidebar card speak the same language;
+    /// nil keeps the production asset (Classic).
+    @objc(terminalTabNewOutputDotColorWithWarmEnabled:)
+    static func terminalTabNewOutputDotColor(warmEnabled: Bool) -> NSColor? {
+        warmEnabled ? TideyInterfaceThemeTokens.warm.sidebarUnreadColor : nil
+    }
+
     @objc(terminalTabSelectedFillColorWithWarmEnabled:)
     static func terminalTabSelectedFillColor(warmEnabled: Bool) -> NSColor? {
         warmEnabled ? TideyInterfaceThemeTokens.warm.rightPanelBackgroundColor : nil

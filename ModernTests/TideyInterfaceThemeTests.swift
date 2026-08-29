@@ -157,6 +157,10 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabOutlineColor(warmEnabled: true),
                        TideyInterfaceThemeTokens.warm.tabOutlineColor)
         XCTAssertNil(TideyTerminalPalettePolicy.terminalTabSelectedOutlineColor(warmEnabled: false))
+        // Tab new-output dot shares the workspace unread accent in Warm.
+        XCTAssertNil(TideyTerminalPalettePolicy.terminalTabNewOutputDotColor(warmEnabled: false))
+        XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabNewOutputDotColor(warmEnabled: true),
+                       TideyInterfaceThemeTokens.warm.sidebarUnreadColor)
         XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabSelectedOutlineColor(warmEnabled: true),
                        TideyInterfaceThemeTokens.warm.sidebarSelectionBorderColor)
     }
