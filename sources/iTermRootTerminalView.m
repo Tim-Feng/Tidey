@@ -1314,7 +1314,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
                                                           tabBarBounds:(NSRect)tabBarBounds;
 + (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
-                                                        tabStripBounds:(NSRect)tabStripBounds;
+                                                 precedingFileTabsSpan:(CGFloat)precedingFileTabsSpan;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1868,15 +1868,19 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                                                               stripBounds:tabBarBounds];
 }
 
+// Editor strips lead with group chrome (the `Code` pill), so "leading" cannot
+// be read from absolute x. `precedingFileTabsSpan` is the width of the file
+// tabs that precede the selected tab inside its own group: 0 means the
+// selected tab is the group's first file tab and keeps a hard leading outline
+// (matching the accepted first terminal tab); > 0 means a file tab sits before
+// it and its leading leg fades into the baseline over those tabs, mirroring
+// the accepted second-terminal-tab behavior.
 + (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
-                                                        tabStripBounds:(NSRect)tabStripBounds {
-    if (NSIsEmptyRect(selectedTabFrame) ||
-        NSIsEmptyRect(tabStripBounds) ||
-        [TideyPaperTabPolicy selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:selectedTabFrame
-                                                                           stripBounds:tabStripBounds]) {
+                                                 precedingFileTabsSpan:(CGFloat)precedingFileTabsSpan {
+    if (NSIsEmptyRect(selectedTabFrame) || precedingFileTabsSpan < TideyPaperTabPolicy.outlineWidth) {
         return NSZeroRect;
     }
-    const CGFloat availableLeadingWidth = MAX(0, NSMinX(selectedTabFrame) - NSMinX(tabStripBounds));
+    const CGFloat availableLeadingWidth = precedingFileTabsSpan;
     const NSRect localTabRect = NSMakeRect(0,
                                            0,
                                            NSWidth(selectedTabFrame),
@@ -5709,6 +5713,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     NSUInteger effectiveWidthIndex = 0;
     TideyEditorTabItemView *selectedPaperTabView = nil;
     NSRect selectedPaperTabLeadingCornerFrame = NSZeroRect;
+    CGFloat groupFirstFileTabX = 0;
     BOOL isFirstGroup = YES;
     for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
@@ -5776,10 +5781,18 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             tabView.tideyDragTitle = title;
             BOOL selected = (originalIndex == pane.selectedTabIndex);
             tabView.tideySelected = selected;
+            if (groupIndex == 0) {
+                groupFirstFileTabX = NSMinX(tabView.frame);
+            }
             if (warm && selected) {
+                // Group order, not strip x, decides whether a file tab precedes
+                // the selected one (the group pill is chrome, not a tab).
+                const CGFloat precedingFileTabsSpan = groupIndex == 0
+                    ? 0
+                    : MAX(0, NSMinX(tabView.frame) - groupFirstFileTabX);
                 selectedPaperTabLeadingCornerFrame =
                     [[self class] tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:tabView.frame
-                                                                               tabStripBounds:tabStripView.bounds];
+                                                                        precedingFileTabsSpan:precedingFileTabsSpan];
                 tabView.tideyUsesLeadingCornerRenderer =
                     !NSIsEmptyRect(selectedPaperTabLeadingCornerFrame);
             }
