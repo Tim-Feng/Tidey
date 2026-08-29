@@ -83,6 +83,7 @@ final class TideyInterfaceThemeTokens: NSObject {
         paneBoundaryColor: .clear,
         paneResizerPullBarColor: .clear,
         tabOutlineColor: .clear,
+        tabSelectedOutlineColor: .clear,
         rightPanelSplitDividerColor: NSColor(white: 0.24, alpha: 1),
         rightPanelTabHoverColor: NSColor(white: 1, alpha: 0.06),
         rightPanelTabSelectionColor: .clear,
@@ -215,7 +216,12 @@ final class TideyInterfaceThemeTokens: NSObject {
         tabOutlineColor: NSColor(srgbRed: 240 / 255.0,
                                  green: 230 / 255.0,
                                  blue: 210 / 255.0,
-                                 alpha: 0.16),
+                                 alpha: 0.08),
+        // Focused tab outline = the workspace focus card edge.
+        tabSelectedOutlineColor: NSColor(srgbRed: 240 / 255.0,
+                                         green: 230 / 255.0,
+                                         blue: 210 / 255.0,
+                                         alpha: 0.16),
         rightPanelSplitDividerColor: NSColor(srgbRed: 240 / 255.0,
                                              green: 230 / 255.0,
                                              blue: 210 / 255.0,
@@ -325,6 +331,7 @@ final class TideyInterfaceThemeTokens: NSObject {
     let paneBoundaryColor: NSColor
     let paneResizerPullBarColor: NSColor
     let tabOutlineColor: NSColor
+    let tabSelectedOutlineColor: NSColor
     let rightPanelSplitDividerColor: NSColor
     let rightPanelTabHoverColor: NSColor
     let rightPanelTabSelectionColor: NSColor
@@ -376,6 +383,7 @@ final class TideyInterfaceThemeTokens: NSObject {
                  paneBoundaryColor: NSColor,
                  paneResizerPullBarColor: NSColor,
                  tabOutlineColor: NSColor,
+                 tabSelectedOutlineColor: NSColor,
                  rightPanelSplitDividerColor: NSColor,
                  rightPanelTabHoverColor: NSColor,
                  rightPanelTabSelectionColor: NSColor,
@@ -424,6 +432,7 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.paneBoundaryColor = paneBoundaryColor
         self.paneResizerPullBarColor = paneResizerPullBarColor
         self.tabOutlineColor = tabOutlineColor
+        self.tabSelectedOutlineColor = tabSelectedOutlineColor
         self.rightPanelSplitDividerColor = rightPanelSplitDividerColor
         self.rightPanelTabHoverColor = rightPanelTabHoverColor
         self.rightPanelTabSelectionColor = rightPanelTabSelectionColor
@@ -506,6 +515,11 @@ final class TideyTerminalPalettePolicy: NSObject {
     @objc(terminalTabOutlineColorWithWarmEnabled:)
     static func terminalTabOutlineColor(warmEnabled: Bool) -> NSColor? {
         warmEnabled ? TideyInterfaceThemeTokens.warm.tabOutlineColor : nil
+    }
+
+    @objc(terminalTabSelectedOutlineColorWithWarmEnabled:)
+    static func terminalTabSelectedOutlineColor(warmEnabled: Bool) -> NSColor? {
+        warmEnabled ? TideyInterfaceThemeTokens.warm.tabSelectedOutlineColor : nil
     }
 
     @objc(terminalTabStripBackgroundColorWithWarmEnabled:)

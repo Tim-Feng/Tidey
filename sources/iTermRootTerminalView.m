@@ -816,7 +816,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [tokens.rightPanelTabStripBackgroundColor setFill];
         NSRectFill(self.bounds);
     }
-    [tokens.tabOutlineColor setStroke];
+    [(_tideySelected ? tokens.tabSelectedOutlineColor : tokens.tabOutlineColor) setStroke];
     if (_tideySelected || _tideyLastInGroup) {
         [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
         return;
@@ -858,7 +858,7 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     _tideyHoverView.layer.cornerRadius = tokens.rightPanelTabCornerRadius;
     _tideySelectionLineView.layer.backgroundColor = tokens.rightPanelTabSelectionIndicatorColor.CGColor;
     _tideySeparatorView.layer.backgroundColor = tokens.rightPanelTabSeparatorColor.CGColor;
-    _tideySelectionLineView.hidden = (tokens.usesRaisedRightPanelTabs || !_tideySelected);
+    _tideySelectionLineView.hidden = (tokens.usesRaisedRightPanelTabs || !_tideySelected || [self tideyDrawsPaperTab]);
     _tideySeparatorView.hidden = _tideyLastInGroup || [self tideyDrawsPaperTab];
     _tideyHoverView.hidden = (_tideySelected || !_tideyHovered);
     _tideyHoverView.alphaValue = _tideyHoverView.hidden ? 0 : 1;

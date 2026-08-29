@@ -199,6 +199,10 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     if (bar.orientation != PSMTabBarHorizontalOrientation) {
         return;
     }
+    if ([self paperTabOutlineColor]) {
+        // Paper tabs mark focus with the selected outline, not an underline.
+        return;
+    }
     NSColor *underlineColor = [bar.delegate tabView:bar
                                       valueOfOption:PSMTabBarControlOptionSelectedUnderlineColor];
     [(underlineColor ?: NSColor.controlAccentColor) set];
@@ -466,12 +470,14 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
         [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMaxX(selectedCell.frame) - 0.5, baselineY)
                                   toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
         // Front sheet: redraw the selected cell over neighbouring outlines,
-        // then draw its own outline once and its indicator on top.
+        // then draw its own outline once in the focus color.
         [selectedCell drawWithFrame:selectedCell.frame inView:bar];
-        [outlineColor set];
+        NSColor *selectedOutlineColor = [self.tabBar.delegate tabView:self.tabBar
+                                                        valueOfOption:PSMTabBarControlOptionPaperTabSelectedOutlineColor]
+            ?: outlineColor;
+        [selectedOutlineColor set];
         NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:selectedCell.frame selected:YES];
         [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
-        [selectedCell drawPostHocDecorationsOnSelectedCell:selectedCell tabBarControl:bar];
     } else {
         [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
                                   toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];

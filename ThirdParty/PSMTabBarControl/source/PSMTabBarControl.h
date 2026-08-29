@@ -61,6 +61,7 @@ extern PSMTabBarControlOptionKey PSMTabBarControlOptionFontSizeOverride;  // NSN
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence;  // NSNumber double in 0-1
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionSelectedUnderlineColor;  // NSColor, nil preserves the system accent color
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionPaperTabOutlineColor;  // NSColor, nil keeps the flat minimal style
+extern PSMTabBarControlOptionKey PSMTabBarControlOptionPaperTabSelectedOutlineColor;  // NSColor for the selected paper tab outline
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionDragEdgeHeight;  // NSNumber CGFloat
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionAttachedToTitleBar;  // NSNumber bool, 10.16+
 extern PSMTabBarControlOptionKey PSMTabBarControlOptionHTMLTabTitles;  // NSNumber bool

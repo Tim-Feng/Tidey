@@ -41,6 +41,7 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertEqual(tokens.paneBoundaryColor, .clear)
         XCTAssertEqual(tokens.paneResizerPullBarColor, .clear)
         XCTAssertEqual(tokens.tabOutlineColor, .clear)
+        XCTAssertEqual(tokens.tabSelectedOutlineColor, .clear)
         assertColor(tokens.fileTreeTextColor, white: 0.92)
         assertColor(tokens.fileTreeIconColor, white: 0.78)
         XCTAssertEqual(tokens.fileTreeSelectionColor, .clear)
@@ -117,7 +118,9 @@ final class TideyInterfaceThemeTests: XCTestCase {
                     red: 240.0 / 255.0,
                     green: 230.0 / 255.0,
                     blue: 210.0 / 255.0,
-                    alpha: 0.16)
+                    alpha: 0.08)
+        // Focused tab outline shares the workspace focus card edge color.
+        XCTAssertEqual(tokens.tabSelectedOutlineColor, tokens.sidebarSelectionBorderColor)
         XCTAssertTrue(tokens.usesRaisedSidebarSelection)
         // Editor tabs reuse the production flat-tab component: no raised card,
         // no corner radius, and the selection indicator line carries seaglass.
@@ -153,6 +156,9 @@ final class TideyInterfaceThemeTests: XCTestCase {
         XCTAssertNil(TideyTerminalPalettePolicy.terminalTabOutlineColor(warmEnabled: false))
         XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabOutlineColor(warmEnabled: true),
                        TideyInterfaceThemeTokens.warm.tabOutlineColor)
+        XCTAssertNil(TideyTerminalPalettePolicy.terminalTabSelectedOutlineColor(warmEnabled: false))
+        XCTAssertEqual(TideyTerminalPalettePolicy.terminalTabSelectedOutlineColor(warmEnabled: true),
+                       TideyInterfaceThemeTokens.warm.sidebarSelectionBorderColor)
     }
 
     func testEditorCanvasPolicyKeepsClassicMonacoAndJoinsWarmBaseSurface() {
