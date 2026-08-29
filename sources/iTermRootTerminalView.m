@@ -139,7 +139,7 @@ static BOOL TideyWarmInterfaceThemeIsActive(void) {
 }
 
 static CGFloat TideyBrowserToolbarHeight(void) {
-    return TideyWarmInterfaceThemeIsActive() ? 54 : 28;
+    return [TideyBrowserToolbarPolicy toolbarHeightWithWarmEnabled:TideyWarmInterfaceThemeIsActive()];
 }
 
 static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
@@ -754,6 +754,14 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
+// Dedicated group-button type. It is behavior-neutral for now; the Warm paper
+// index renderer can be introduced behind this seam without changing Classic.
+@interface TideyRightPanelGroupButton : NSButton
+@end
+
+@implementation TideyRightPanelGroupButton
+@end
+
 @interface TideyEditorTabItemView : NSView {
     NSTrackingArea *_trackingArea;
 }
@@ -1320,6 +1328,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (BOOL)tideyEditorPaneBoundaryUsesPaperTabJoinGradient;
 + (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
                                                         tabStripBounds:(NSRect)tabStripBounds;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetricsForWarmTheme:(BOOL)warm;
 @end
 
 @implementation TideyPaneBoundaryView
@@ -1850,6 +1859,15 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         @"closeButtonWidth": @20,
         @"closeButtonTrailingInset": @2,
         @"addButtonSize": @22,
+    };
+}
+
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetricsForWarmTheme:(BOOL)warm {
+    (void)warm;
+    return @{
+        @"horizontalPadding": @(kTideyRightPanelGroupLabelHorizontalPadding),
+        @"tabsGap": @(kTideyRightPanelGroupTabsGap),
+        @"usesPaperIndexStyle": @NO,
     };
 }
 
@@ -4387,9 +4405,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, toolbarHeight)];
     toolbar.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     toolbar.wantsLayer = YES;
-    toolbar.layer.backgroundColor = (warm
-        ? tokens.rightPanelTabStripBackgroundColor
-        : [NSColor colorWithWhite:0.15 alpha:1]).CGColor;
+    toolbar.layer.backgroundColor =
+        [TideyBrowserToolbarPolicy toolbarBackgroundColorWithTokens:tokens
+                                                       warmEnabled:warm].CGColor;
     pane.browserToolbarView = toolbar;
 
     // Back button
@@ -4420,7 +4438,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [toolbar addSubview:pane.browserReloadButton];
 
     // URL field
-    pane.browserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 3, 100, warm ? 32 : 22)];
+    pane.browserURLField = [[NSTextField alloc]
+        initWithFrame:NSMakeRect(92,
+                                 3,
+                                 100,
+                                 [TideyBrowserToolbarPolicy urlFieldHeightWithWarmEnabled:warm])];
     pane.browserURLField.autoresizingMask = NSViewWidthSizable;
     pane.browserURLField.usesSingleLineMode = YES;
     pane.browserURLField.cell.wraps = NO;
@@ -4618,14 +4640,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, toolbarHeight);
 
     // URL field fills remaining width after buttons
-    const CGFloat urlFieldX = 92;
-    const CGFloat urlFieldRight = 28;
-    const CGFloat urlFieldHeight = warm ? 32 : 22;
-    const CGFloat urlFieldY = floor((toolbarHeight - urlFieldHeight) / 2.0);
-    pane.browserURLField.frame = NSMakeRect(urlFieldX,
-                                            urlFieldY,
-                                            MAX(50, contentWidth - urlFieldX - urlFieldRight),
-                                            urlFieldHeight);
+    pane.browserURLField.frame =
+        [TideyBrowserToolbarPolicy urlFieldFrameForToolbarHeight:toolbarHeight
+                                                    contentWidth:contentWidth
+                                                     warmEnabled:warm];
 
     // Loading indicator at right of toolbar
     const CGFloat indicatorSize = 16;
@@ -5671,6 +5689,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     BOOL warm = TideyWarmInterfaceThemeIsActive();
     NSDictionary<NSString *, NSNumber *> *metrics =
         [[self class] tideyRightPanelTabComponentMetricsForWarmTheme:warm];
+    NSDictionary<NSString *, NSNumber *> *groupMetrics =
+        [[self class] tideyRightPanelGroupMetricsForWarmTheme:warm];
     tabStripView.layer.backgroundColor = (activePane
         ? tokens.rightPanelActiveTabStripBackgroundColor
         : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
@@ -5702,11 +5722,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         isFirstMeasuredGroup = NO;
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
-        fixedChromeWidth += labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
+        fixedChromeWidth += labelTextWidth + groupMetrics[@"horizontalPadding"].doubleValue * 2;
         if (!group.expanded || group.visibleTabs.count == 0) {
             continue;
         }
-        fixedChromeWidth += kTideyRightPanelGroupTabsGap;
+        fixedChromeWidth += groupMetrics[@"tabsGap"].doubleValue;
         fixedChromeWidth += addButtonSize + 4 + kTideyRightPanelAddButtonTrailingPadding;
         for (TideyEditorTab *tab in group.visibleTabs) {
             NSString *title = tab.dirty
@@ -5734,13 +5754,14 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
-        CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
+        CGFloat labelWidth = labelTextWidth + groupMetrics[@"horizontalPadding"].doubleValue * 2;
         CGFloat groupButtonHeight = metrics[@"groupButtonHeight"].doubleValue;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
-        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
-                                                                           groupButtonY,
-                                                                           labelWidth,
-                                                                           groupButtonHeight)];
+        TideyRightPanelGroupButton *groupButton =
+            [[TideyRightPanelGroupButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
+                                                                         groupButtonY,
+                                                                         labelWidth,
+                                                                         groupButtonHeight)];
         groupButton.bordered = NO;
         groupButton.buttonType = NSButtonTypeMomentaryChange;
         groupButton.title = groupLabel;
@@ -5768,7 +5789,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             continue;
         }
 
-        x += kTideyRightPanelGroupTabsGap;
+        x += groupMetrics[@"tabsGap"].doubleValue;
         for (NSInteger groupIndex = 0; groupIndex < (NSInteger)group.visibleTabs.count; groupIndex++) {
             TideyEditorTab *tab = group.visibleTabs[groupIndex];
             NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
@@ -7577,9 +7598,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         if (!pane.browserToolbarView) {
             continue;
         }
-        pane.browserToolbarView.layer.backgroundColor = (warm
-            ? tokens.rightPanelTabStripBackgroundColor
-            : [NSColor colorWithWhite:0.15 alpha:1]).CGColor;
+        pane.browserToolbarView.layer.backgroundColor =
+            [TideyBrowserToolbarPolicy toolbarBackgroundColorWithTokens:tokens
+                                                           warmEnabled:warm].CGColor;
         NSColor *toolbarTint = warm ? tokens.rightPanelTertiaryTextColor : NSColor.secondaryLabelColor;
         pane.browserBackButton.contentTintColor = toolbarTint;
         pane.browserForwardButton.contentTintColor = toolbarTint;

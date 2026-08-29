@@ -660,6 +660,45 @@ final class TideyEditorCanvasPolicy: NSObject {
     }
 }
 
+// Browser toolbar geometry and color stay behind a pure policy so AppKit frame
+// wiring can be characterized without constructing the root terminal view.
+// These values intentionally preserve the current behavior until a behavioral
+// test changes the Warm branch.
+@objcMembers
+final class TideyBrowserToolbarPolicy: NSObject {
+    @objc(toolbarHeightWithWarmEnabled:)
+    static func toolbarHeight(warmEnabled: Bool) -> CGFloat {
+        warmEnabled ? 54 : 28
+    }
+
+    @objc(urlFieldHeightWithWarmEnabled:)
+    static func urlFieldHeight(warmEnabled: Bool) -> CGFloat {
+        warmEnabled ? 32 : 22
+    }
+
+    @objc(urlFieldFrameForToolbarHeight:contentWidth:warmEnabled:)
+    static func urlFieldFrame(toolbarHeight: CGFloat,
+                              contentWidth: CGFloat,
+                              warmEnabled: Bool) -> NSRect {
+        let fieldX: CGFloat = 92
+        let fieldRight: CGFloat = 28
+        let fieldHeight = urlFieldHeight(warmEnabled: warmEnabled)
+        let fieldY = floor((toolbarHeight - fieldHeight) / 2)
+        return NSRect(x: fieldX,
+                      y: fieldY,
+                      width: max(50, contentWidth - fieldX - fieldRight),
+                      height: fieldHeight)
+    }
+
+    @objc(toolbarBackgroundColorWithTokens:warmEnabled:)
+    static func toolbarBackgroundColor(tokens: TideyInterfaceThemeTokens,
+                                       warmEnabled: Bool) -> NSColor {
+        warmEnabled
+            ? tokens.rightPanelTabStripBackgroundColor
+            : NSColor(white: 0.15, alpha: 1)
+    }
+}
+
 // Shared Warm paper-tab contract. Both the terminal tab bar (PSMMinimalTabStyle)
 // and the right-panel tab strip (TideyEditorTabItemView) render this silhouette:
 // a hairline outline with small top corners, the selected tab full height and
