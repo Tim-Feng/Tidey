@@ -21,8 +21,6 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
       byExcludingTopHeight:(CGFloat)topInset
            superviewBounds:(NSRect)bounds;
-+ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
-                byOffsettingX:(CGFloat)xOffset;
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
                                    fileTreeContainerFrame:(NSRect)containerFrame;
@@ -113,16 +111,6 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                         byExcludingTopHeight:0
                                                              superviewBounds:bounds],
                                full));
-}
-
-- (void)testWorkspaceBoundaryMovesOntoTheFirstTabLeadingStrokeColumn {
-    const NSRect sidebarBoundary = NSMakeRect(199, 0, 1, 566);
-    const NSRect aligned = [iTermRootTerminalView tideyPaneBoundaryFrame:sidebarBoundary
-                                                          byOffsettingX:1];
-    XCTAssertTrue(NSEqualRects(aligned, NSMakeRect(200, 0, 1, 566)));
-    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrame:sidebarBoundary
-                                                              byOffsettingX:0],
-                               sidebarBoundary));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {

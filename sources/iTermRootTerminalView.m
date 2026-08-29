@@ -1184,9 +1184,8 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 // coordinates, unflipped). Used so the line between the terminal tab list and
 // the editor tab list disappears and the two strips read as one row.
 @property(nonatomic, copy) CGFloat (^tideyTopInsetProvider)(void);
-// Warm-only alignment and appearance used where a pane separator continues
-// from the leading edge of a paper tab below the tab row.
-@property(nonatomic) CGFloat tideyWarmHorizontalOffset;
+// Warm-only appearance used where a pane separator continues from the
+// leading edge of a paper tab below the tab row.
 @property(nonatomic) BOOL tideyUsesPaperTabJoinGradient;
 @property(nonatomic, strong) NSColor *tideyBoundaryColor;
 @property(nonatomic, strong) NSColor *tideyTabJoinColor;
@@ -1208,8 +1207,6 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 + (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
       byExcludingTopHeight:(CGFloat)topInset
            superviewBounds:(NSRect)bounds;
-+ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
-                byOffsettingX:(CGFloat)xOffset;
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
@@ -1273,10 +1270,6 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
         frame = [iTermRootTerminalView tideyPaneBoundaryFrame:frame
                                          byExcludingTopHeight:self.tideyTopInsetProvider()
                                               superviewBounds:parent.bounds];
-    }
-    if (warm && self.tideyWarmHorizontalOffset != 0) {
-        frame = [iTermRootTerminalView tideyPaneBoundaryFrame:frame
-                                               byOffsettingX:self.tideyWarmHorizontalOffset];
     }
     self.frame = frame;
     [self tideyUpdateLineAppearance];
@@ -1755,12 +1748,6 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     }
     const CGFloat maxY = MIN(NSMaxY(frame), NSMaxY(bounds) - topInset);
     return NSMakeRect(NSMinX(frame), NSMinY(frame), NSWidth(frame), MAX(0, maxY - NSMinY(frame)));
-}
-
-+ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
-                byOffsettingX:(CGFloat)xOffset {
-    frame.origin.x += xOffset;
-    return frame;
 }
 
 // Full-height (or full-width) 1px line in both themes; Warm resizer edges use
@@ -2316,9 +2303,6 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
             const CGFloat height = NSHeight(strongSelf.tabBarControl.frame);
             return height > 0 ? height : kTideyEditorTabStripHeight;
         };
-        // The sidebar separator is hosted inside the sidebar. Move its Warm
-        // stroke onto the adjacent tab's leading stroke column.
-        sidebarBoundaryView.tideyWarmHorizontalOffset = 1;
         sidebarBoundaryView.tideyUsesPaperTabJoinGradient = YES;
         TideyPaneBoundaryView *editorBoundaryView =
             [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
