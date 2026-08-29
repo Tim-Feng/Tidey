@@ -1179,6 +1179,10 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 // centered in the superview. Used when the arrow control lives in a different
 // (taller) view than this boundary.
 @property(nonatomic, copy) CGFloat (^tideyPullBarMidYProvider)(void);
+// Optional: height to leave open at the top of a vertical boundary (superview
+// coordinates, unflipped). Used so the line between the terminal tab list and
+// the editor tab list disappears and the two strips read as one row.
+@property(nonatomic, copy) CGFloat (^tideyTopInsetProvider)(void);
 @end
 
 @interface iTermRootTerminalView (TideyPaneBoundaryPolicy)
@@ -1189,6 +1193,9 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                         superviewBounds:(NSRect)bounds
                            pullBarMidY:(CGFloat)pullBarMidY
                               warmTheme:(BOOL)warm;
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+      byExcludingTopHeight:(CGFloat)topInset
+           superviewBounds:(NSRect)bounds;
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
@@ -1205,10 +1212,16 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     const CGFloat midY = self.tideyPullBarMidYProvider
         ? self.tideyPullBarMidYProvider()
         : NSMidY(parent.bounds);
-    self.frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:self.tideyEdge
-                                                      superviewBounds:parent.bounds
-                                                         pullBarMidY:midY
-                                                            warmTheme:TideyWarmInterfaceThemeIsActive()];
+    NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:self.tideyEdge
+                                                        superviewBounds:parent.bounds
+                                                           pullBarMidY:midY
+                                                              warmTheme:TideyWarmInterfaceThemeIsActive()];
+    if (self.tideyTopInsetProvider && [iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:self.tideyEdge]) {
+        frame = [iTermRootTerminalView tideyPaneBoundaryFrame:frame
+                                         byExcludingTopHeight:self.tideyTopInsetProvider()
+                                              superviewBounds:parent.bounds];
+    }
+    self.frame = frame;
 }
 
 - (void)viewDidMoveToSuperview {
@@ -1671,6 +1684,18 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge {
     return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
+}
+
+// Shortens a vertical boundary so it stops `topInset` below the superview's
+// top edge (unflipped coordinates). Non-positive insets leave it untouched.
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+      byExcludingTopHeight:(CGFloat)topInset
+           superviewBounds:(NSRect)bounds {
+    if (topInset <= 0) {
+        return frame;
+    }
+    const CGFloat maxY = MIN(NSMaxY(frame), NSMaxY(bounds) - topInset);
+    return NSMakeRect(NSMinX(frame), NSMinY(frame), NSWidth(frame), MAX(0, maxY - NSMinY(frame)));
 }
 
 // Full-height (or full-width) 1px line in both themes; Warm resizer edges use
@@ -2208,8 +2233,16 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyPaneBoundaryViews = [NSHashTable weakObjectsHashTable];
         [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
                                         toView:_tideySidebarView];
-        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
-                                        toView:_tideyEditorPanelView];
+        TideyPaneBoundaryView *editorBoundaryView =
+            [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                            toView:_tideyEditorPanelView];
+        __weak __typeof(self) weakSelfForEditorBoundary = self;
+        // Tim 2026-08-29: no line between the terminal tab list and the editor
+        // tab list; the boundary starts below the editor tab strip.
+        editorBoundaryView.tideyTopInsetProvider = ^CGFloat{
+            __strong __typeof(weakSelfForEditorBoundary) strongSelf = weakSelfForEditorBoundary;
+            return strongSelf ? NSHeight(strongSelf->_tideyEditorTabStripView.frame) : 0;
+        };
         _tideyEditorFileTreeBoundaryView =
             [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
                                             toView:_tideyEditorFileTreeContainerView];
@@ -4992,6 +5025,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                            contentHeight,
                                                            fileTreeWidth,
                                                            1);
+    // Strip/container frames were just set; re-pin boundaries that depend on them.
+    for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
+        [boundaryView tideyPinToSuperviewEdge];
+    }
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
     [self tideySyncEditorFileTreeWatcher];
     [self constrainTideyEditorFileTreeToVisibleWidth];

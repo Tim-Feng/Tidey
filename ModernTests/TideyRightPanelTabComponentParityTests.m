@@ -18,6 +18,9 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                         superviewBounds:(NSRect)bounds
                            pullBarMidY:(CGFloat)pullBarMidY
                               warmTheme:(BOOL)warm;
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+      byExcludingTopHeight:(CGFloat)topInset
+           superviewBounds:(NSRect)bounds;
 + (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
 + (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
                                    fileTreeContainerFrame:(NSRect)containerFrame;
@@ -92,6 +95,22 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     XCTAssertEqual([iTermRootTerminalView tideyFileTreePullBarMidYForEditorPanelHeight:634
                                                               fileTreeContainerFrame:NSMakeRect(400, 40, 200, 560)],
                    277);
+}
+
+- (void)testEditorBoundaryStopsBelowTabStripSoTabListsReadAsOneRow {
+    const NSRect bounds = NSMakeRect(0, 0, 400, 600);
+    const NSRect full = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
+                                                             superviewBounds:bounds
+                                                                   warmTheme:YES];
+    const NSRect shortened = [iTermRootTerminalView tideyPaneBoundaryFrame:full
+                                                      byExcludingTopHeight:34
+                                                           superviewBounds:bounds];
+    XCTAssertTrue(NSEqualRects(shortened, NSMakeRect(0, 0, 1, 566)));
+    // No inset leaves the line untouched.
+    XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrame:full
+                                                        byExcludingTopHeight:0
+                                                             superviewBounds:bounds],
+                               full));
 }
 
 - (void)testWarmMetricsAreIdenticalToClassicMetrics {
