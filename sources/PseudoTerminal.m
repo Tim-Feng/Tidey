@@ -12083,6 +12083,7 @@ hidingToolbeltShouldResizeWindow:(BOOL)hidingToolbeltShouldResizeWindow
 - (void)tabView:(NSTabView *)tabView didSelectTabViewItem:(NSTabViewItem *)tabViewItem {
     DLog(@"Did select tab view %@", tabViewItem);
     [_contentView.tabBarControl setFlashing:YES];
+    [_contentView tideyTerminalTabSelectionDidChange];
 
     if (self.autoCommandHistorySessionGuid) {
         [self hideAutoCommandHistory];
@@ -13519,6 +13520,14 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
         return @([iTermAdvancedSettingsModel drawBottomLineForHorizontalTabBar]);
     } else if ([option isEqualToString:PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence]) {
         return @([iTermAdvancedSettingsModel minimalSelectedTabUnderlineProminence]);
+    } else if ([option isEqualToString:PSMTabBarControlOptionSelectedUnderlineColor]) {
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabUnderlineColor;
+    } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabOutlineColor]) {
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabOutlineColor;
+    } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabSelectedOutlineColor]) {
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabSelectedOutlineColor;
+    } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabSelectedFillColor]) {
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabSelectedFillColor;
     } else if ([option isEqualToString:PSMTabBarControlOptionFontSizeOverride]) {
         if (![iTermAdvancedSettingsModel useCustomTabBarFontSize]) {
             return nil;
@@ -19334,8 +19343,7 @@ backgroundColor:(NSColor *)backgroundColor {
 #pragma mark - PSMMinimalTabStyleDelegate
 
 - (NSColor *)minimalTabStyleBackgroundColor {
-    DLog(@"Getting bg color for session %@, colormap %@", self.currentSession, self.currentSession.screen.colorMap);
-    return self.currentSession.effectiveUnprocessedBackgroundColor;
+    return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabStripBackgroundColor;
 }
 
 #pragma mark - iTermBroadcastInputHelperDelegate

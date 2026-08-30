@@ -665,6 +665,7 @@
 		289021114B126DAD12FA9EDA /* TideyBrowserAutomationStoreTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = F4ED0C4AF3AE475286D75846 /* TideyBrowserAutomationStoreTests.swift */; };
 		29C503BA29752DF6A4DB2A02 /* iTermBlurRowBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19537E68A2ADEB03B3086882 /* iTermBlurRowBuffer.swift */; };
 		2AB0AC886DE3F1F616F92D2F /* CharacterAtomIterator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02CF16386D8605E6BC44ED81 /* CharacterAtomIterator.swift */; };
+		3157D8ABBEF7A0F04A98783D /* PSMMinimalTabStyleTests.m in Sources */ = {isa = PBXBuildFile; fileRef = ADB243DDA021CE90C5EC7CE4 /* PSMMinimalTabStyleTests.m */; };
 		3538DE1D25D0E62BBD3612E3 /* TideyBrowserNavigationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */; };
 		4705C05130977E2C81FD75E8 /* iTermUnicodeNormalization.h in Sources */ = {isa = PBXBuildFile; fileRef = 3335AD96138BA74CC79D25A8 /* iTermUnicodeNormalization.h */; };
 		4887C7B3CAB5465296225860 /* MenuTips.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 904AE312A0E0489899D9ECB8 /* MenuTips.xcassets */; };
@@ -933,10 +934,12 @@
 		53FF982B2093C823008688D7 /* iTermSignatureVerifier.m in Sources */ = {isa = PBXBuildFile; fileRef = 53FF98292093C823008688D7 /* iTermSignatureVerifier.m */; };
 		53FF984B20967806008688D7 /* iTermMetalDeviceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 53FF984920967805008688D7 /* iTermMetalDeviceProvider.h */; };
 		53FF984C20967806008688D7 /* iTermMetalDeviceProvider.m in Sources */ = {isa = PBXBuildFile; fileRef = 53FF984A20967805008688D7 /* iTermMetalDeviceProvider.m */; };
+		551519642B90B2D5B0207FD3 /* TideySidebarRowPresentation.m in Sources */ = {isa = PBXBuildFile; fileRef = 22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */; };
 		564EA2FD15A05A60A95ABBB9 /* PrivateIPChecker.swift in Sources */ = {isa = PBXBuildFile; fileRef = 625C956DD832F4FD0D8F9715 /* PrivateIPChecker.swift */; };
 		56C476620E56B783B8972219 /* iTermCharacterSourceTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = E188B891EEA2947C8B12466D /* iTermCharacterSourceTests.swift */; };
 		5E671E2FA838E668A33564BC /* TideyBrowserAutomationController.swift in Sources */ = {isa = PBXBuildFile; fileRef = 90362344F8A25D11886CA79B /* TideyBrowserAutomationController.swift */; };
 		5ECE005F1454E59B004861E9 /* PseudoTerminalRestorer.h in Headers */ = {isa = PBXBuildFile; fileRef = 5ECE005D1454E59B004861E9 /* PseudoTerminalRestorer.h */; };
+		5FDFE8EB3CADAD614FCF6E53 /* TideyInterfaceThemeTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */; };
 		63784809C4F1C06074729416 /* IntervalTreeForwardLocationEnumeratorTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 110B6BC5FB568BC2E0CCADB2 /* IntervalTreeForwardLocationEnumeratorTests.swift */; };
 		6998793AE8C54A0EAE7D5D0F /* PillBackgroundRenderer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7F3AA921DF1744D7BA890104 /* PillBackgroundRenderer.swift */; };
 		6B0AA05F4218D8AEC31BCB30 /* AppIcon.icns in Resources */ = {isa = PBXBuildFile; fileRef = 00213A5956211FBDEDEAEF96 /* AppIcon.icns */; };
@@ -956,6 +959,7 @@
 		82FAE5CD376B4D65172ECCF2 /* NSStringQuotedStringForPasteTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = D78783C5E320CF711E81627F /* NSStringQuotedStringForPasteTests.swift */; };
 		83138F878F9B77504B17CA69 /* TideyApplicationEnvironmentPolicy.swift in Sources */ = {isa = PBXBuildFile; fileRef = 43285D54833977B282AAB709 /* TideyApplicationEnvironmentPolicy.swift */; };
 		84914ABAD880FC4B174DFAF5 /* iTermTouchIDHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = 207C83644F1E850C9F1E918A /* iTermTouchIDHelper.swift */; };
+		84D0E4A7C563506B0880B189 /* TideySidebarViews.m in Sources */ = {isa = PBXBuildFile; fileRef = D59E7D50AE471A083EEA7B45 /* TideySidebarViews.m */; };
 		874206490564169600CFC3F1 /* iTermApplicationDelegate.h in Headers */ = {isa = PBXBuildFile; fileRef = 20D5CC6304E7AA0500000106 /* iTermApplicationDelegate.h */; };
 		874206530564169600CFC3F1 /* AppKit.framework in Frameworks */ = {isa = PBXBuildFile; fileRef = 0464AB2F006CD2EC7F000001 /* AppKit.framework */; };
 		8773EDCC5D6FB0E9C4CE2202 /* iTermScreenshotOnDemandPreview.swift in Sources */ = {isa = PBXBuildFile; fileRef = 28AF992AB875E6786421227B /* iTermScreenshotOnDemandPreview.swift */; };
@@ -5147,12 +5151,14 @@
 		C48D7AA2E70B019313C401F3 /* WordSelectionAtom.swift in Sources */ = {isa = PBXBuildFile; fileRef = C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */; };
 		C553EACADC5ADCED8853BAD9 /* TideyBrowserAutomationState.swift in Sources */ = {isa = PBXBuildFile; fileRef = 426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */; };
 		C6675EBC1C4FE96B0041173B /* iTermSelectorSwizzler.m in Sources */ = {isa = PBXBuildFile; fileRef = C6675EBB1C4FE96B0041173B /* iTermSelectorSwizzler.m */; };
+		C8951ECCFF64C23E3B1CA8EE /* TideyRightPanelTabComponentParityTests.m in Sources */ = {isa = PBXBuildFile; fileRef = BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */; };
 		CB70AF3C87FF32326EE98992 /* TideyBrowserAutomationEngine.swift in Sources */ = {isa = PBXBuildFile; fileRef = 40463B3F406C007568BC50DB /* TideyBrowserAutomationEngine.swift */; };
 		CDCD9FF08FCE42F7A6963859 /* PillBackgroundGenerator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7EA289FFE2BF4090A65931BA /* PillBackgroundGenerator.swift */; };
 		CE6F5BF4B6C9719F5667CA8D /* TideyBrowserAutomationAdoptionTests.m in Sources */ = {isa = PBXBuildFile; fileRef = F1E7C87AC8B19C3454EA4F17 /* TideyBrowserAutomationAdoptionTests.m */; };
 		CFB74E789E61AA2F8D004482 /* TideyBrowserAuthenticatedTransfer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 9FF05EF621D98B3E01E958E0 /* TideyBrowserAuthenticatedTransfer.swift */; };
 		D3CE2D4E1A00936F0098ED99 /* PSMDarkTabStyle.h in Headers */ = {isa = PBXBuildFile; fileRef = D3CE2D4C1A00936F0098ED99 /* PSMDarkTabStyle.h */; };
 		D5EF7F4036204859817200E0 /* iTermLayoutCalculator.h in Headers */ = {isa = PBXBuildFile; fileRef = 93EDFB853885460AA504C6B9 /* iTermLayoutCalculator.h */; };
+		D922FE28535D3755ADC629FD /* TideyInterfaceTheme.swift in Sources */ = {isa = PBXBuildFile; fileRef = 41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */; };
 		D9A2368683D7DDB73A826821 /* iTermStreamingPNGWriter.m in Sources */ = {isa = PBXBuildFile; fileRef = 11C735CA9A1AF5E864EC718E /* iTermStreamingPNGWriter.m */; };
 		DCE63F57A37160221DC5B939 /* iTermScreenshotPreviewOverlay.swift in Sources */ = {isa = PBXBuildFile; fileRef = AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */; };
 		DDF0FD65062916F70080EF74 /* iTermApplication.h in Headers */ = {isa = PBXBuildFile; fileRef = DDF0FD63062916F70080EF74 /* iTermApplication.h */; };
@@ -5210,6 +5216,7 @@
 		F0C30D1E3A6E000100000008 /* TideyRestorableStateDirtyTracker.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000007 /* TideyRestorableStateDirtyTracker.swift */; };
 		F0C30D1E3A6E00010000000A /* TideyRuntimeResumeDescriptor.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E000100000009 /* TideyRuntimeResumeDescriptor.swift */; };
 		F0C30D1E3A6E00010000000C /* TideyRuntimeRehydrationStateMachine.swift in Sources */ = {isa = PBXBuildFile; fileRef = F0C30D1E3A6E00010000000B /* TideyRuntimeRehydrationStateMachine.swift */; };
+		F2D21B813C495A040C17BFD9 /* TideySidebarPresentationCharacterizationTests.m in Sources */ = {isa = PBXBuildFile; fileRef = BF293383B49E6E491594E918 /* TideySidebarPresentationCharacterizationTests.m */; };
 		F7C626F9C65F19A1BEE800DA /* iTermWordExtractor.swift in Sources */ = {isa = PBXBuildFile; fileRef = 7BF1E9C79C30008CC546F987 /* iTermWordExtractor.swift */; };
 		FB4CEC973C7E9235362E3F26 /* iTermRemotePreferences.h in Headers */ = {isa = PBXBuildFile; fileRef = FB4CECF4AC4392B21E87A07B /* iTermRemotePreferences.h */; };
 		FF77847D9D838865BB1E1327 /* TideySidebarStatusRefreshPolicyTests.m in Sources */ = {isa = PBXBuildFile; fileRef = E2373E98F2FAB30D5EE949AA /* TideySidebarStatusRefreshPolicyTests.m */; };
@@ -6037,13 +6044,16 @@
 		20E74F4804E9089700000106 /* ITAddressBookMgr.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = ITAddressBookMgr.h; sourceTree = "<group>"; tabWidth = 4; };
 		20E74F4904E9089700000106 /* ITAddressBookMgr.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = ITAddressBookMgr.m; sourceTree = "<group>"; tabWidth = 4; };
 		2205C1FAE857001EC8A263E4 /* PerformanceTests.xctest */ = {isa = PBXFileReference; explicitFileType = wrapper.cfbundle; includeInIndex = 0; path = PerformanceTests.xctest; sourceTree = BUILT_PRODUCTS_DIR; };
+		22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySidebarRowPresentation.m; sourceTree = "<group>"; };
 		2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = iTermCharacterSourceTestHelper.h; sourceTree = "<group>"; };
 		28AF992AB875E6786421227B /* iTermScreenshotOnDemandPreview.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotOnDemandPreview.swift; sourceTree = "<group>"; };
 		2B9A9D7BB06953CE9297F1FC /* iTermStreamingScreenshotEncoder.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermStreamingScreenshotEncoder.swift; sourceTree = "<group>"; };
 		31039BDCA3000FF0DB6B6D7C /* IntervalTreeSmallestLocationBugTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = IntervalTreeSmallestLocationBugTests.swift; sourceTree = "<group>"; };
 		3335AD96138BA74CC79D25A8 /* iTermUnicodeNormalization.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = iTermUnicodeNormalization.h; sourceTree = "<group>"; };
+		37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyInterfaceThemeTests.swift; sourceTree = "<group>"; };
 		38BC6E4FFFBFF4AEEA99EDEB /* TideyBrowserNavigationGate.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserNavigationGate.swift; sourceTree = "<group>"; };
 		40463B3F406C007568BC50DB /* TideyBrowserAutomationEngine.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationEngine.swift; sourceTree = "<group>"; };
+		41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyInterfaceTheme.swift; sourceTree = "<group>"; };
 		424FA2350959ED4159AA0568 /* FIFOQueueTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = FIFOQueueTests.swift; sourceTree = "<group>"; };
 		426420E1C2D6F3672C6B1C16 /* TideyBrowserAutomationState.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationState.swift; sourceTree = "<group>"; };
 		43285D54833977B282AAB709 /* TideyApplicationEnvironmentPolicy.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyApplicationEnvironmentPolicy.swift; sourceTree = "<group>"; };
@@ -6367,6 +6377,7 @@
 		9FF05EF621D98B3E01E958E0 /* TideyBrowserAuthenticatedTransfer.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAuthenticatedTransfer.swift; sourceTree = "<group>"; };
 		A073973D14C768E400786414 /* ColorsMenuItemView.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = ColorsMenuItemView.h; sourceTree = "<group>"; tabWidth = 4; };
 		A073973F14C7694600786414 /* ColorsMenuItemView.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = ColorsMenuItemView.m; sourceTree = "<group>"; tabWidth = 4; };
+		A19ACAEE2C87340ED56E653E /* TideySidebarRowPresentation.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = TideySidebarRowPresentation.h; sourceTree = "<group>"; };
 		A59DFDD38D8F83A4A94B3F51 /* monaco-editor */ = {isa = PBXFileReference; lastKnownFileType = folder; path = "monaco-editor"; sourceTree = "<group>"; };
 		A60014F418550F3900CE38D8 /* NSMutableAttributedString+iTerm.h */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.h; path = "NSMutableAttributedString+iTerm.h"; sourceTree = "<group>"; tabWidth = 4; };
 		A60014F518550F3900CE38D8 /* NSMutableAttributedString+iTerm.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = "NSMutableAttributedString+iTerm.m"; sourceTree = "<group>"; tabWidth = 4; };
@@ -9242,9 +9253,13 @@
 		A7B100062F0A000100000001 /* TideySocketServer.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideySocketServer.m; sourceTree = "<group>"; };
 		A7B100072F0A000100000001 /* TideyEditorExternalChangeWatcher.h */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.h; path = TideyEditorExternalChangeWatcher.h; sourceTree = "<group>"; };
 		A7B100082F0A000100000001 /* TideyEditorExternalChangeWatcher.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = TideyEditorExternalChangeWatcher.m; sourceTree = "<group>"; };
+		ADB243DDA021CE90C5EC7CE4 /* PSMMinimalTabStyleTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = PSMMinimalTabStyleTests.m; sourceTree = "<group>"; };
 		AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotPreviewOverlay.swift; sourceTree = "<group>"; };
 		AF19E441FF824539A275D8DA /* iTermLayoutCalculator.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculator.m; sourceTree = "<group>"; };
 		B231EDB860248C368A511B42 /* iTermEventTriggerEvaluator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermEventTriggerEvaluator.swift; sourceTree = "<group>"; };
+		BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabComponentParityTests.m; sourceTree = "<group>"; };
+		BC3C36C01A55D7615DFCC054 /* TideySidebarViews.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = TideySidebarViews.h; sourceTree = "<group>"; };
+		BF293383B49E6E491594E918 /* TideySidebarPresentationCharacterizationTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySidebarPresentationCharacterizationTests.m; sourceTree = "<group>"; };
 		C08AA4008946722C3F4C67C1 /* WordSelectionAtom.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = WordSelectionAtom.swift; sourceTree = "<group>"; };
 		C604B2C8CF6F324C8E3E8C3C /* TideyBrowserAutomationControllerTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyBrowserAutomationControllerTests.swift; sourceTree = "<group>"; };
 		C6675EBA1C4FE96B0041173B /* iTermSelectorSwizzler.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = iTermSelectorSwizzler.h; sourceTree = "<group>"; };
@@ -9252,6 +9267,7 @@
 		CB2F48F836C5732146BCEDD9 /* iTermStreamingPNGWriter.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = iTermStreamingPNGWriter.h; sourceTree = "<group>"; };
 		D3CE2D4C1A00936F0098ED99 /* PSMDarkTabStyle.h */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.h; path = PSMDarkTabStyle.h; sourceTree = "<group>"; };
 		D3CE2D4D1A00936F0098ED99 /* PSMDarkTabStyle.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = PSMDarkTabStyle.m; sourceTree = "<group>"; };
+		D59E7D50AE471A083EEA7B45 /* TideySidebarViews.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySidebarViews.m; sourceTree = "<group>"; };
 		D78783C5E320CF711E81627F /* NSStringQuotedStringForPasteTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = NSStringQuotedStringForPasteTests.swift; sourceTree = "<group>"; };
 		DD02572609CB9398008F320C /* PSMYosemiteTabStyle.h */ = {isa = PBXFileReference; fileEncoding = 30; lastKnownFileType = sourcecode.c.h; path = PSMYosemiteTabStyle.h; sourceTree = "<group>"; };
 		DD02572709CB9398008F320C /* PSMYosemiteTabStyle.m */ = {isa = PBXFileReference; fileEncoding = 4; indentWidth = 4; lastKnownFileType = sourcecode.c.objc; path = PSMYosemiteTabStyle.m; sourceTree = "<group>"; tabWidth = 4; };
@@ -9689,6 +9705,11 @@
 				20065710A2FC0BE95B224445 /* FIFOQueue.swift */,
 				F10731A1F54B9BF72FBAC682 /* Box.swift */,
 				43285D54833977B282AAB709 /* TideyApplicationEnvironmentPolicy.swift */,
+				BC3C36C01A55D7615DFCC054 /* TideySidebarViews.h */,
+				D59E7D50AE471A083EEA7B45 /* TideySidebarViews.m */,
+				A19ACAEE2C87340ED56E653E /* TideySidebarRowPresentation.h */,
+				22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */,
+				41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */,
 			);
 			name = Classes;
 			path = sources/;
@@ -10095,6 +10116,8 @@
 				5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */,
 				ED06023E9B9B0E7678D32E3F /* TideyBrowserAuthenticatedTransferTests.swift */,
 				9B060E519B9C7F7D84874A62 /* TideyApplicationEnvironmentPolicyTests.swift */,
+				37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */,
+				BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -13841,6 +13864,8 @@
 				F0A10D1E3A36000100000000 /* TideySessionFactoryLaunchCommandTests.m */,
 				E2373E98F2FAB30D5EE949AA /* TideySidebarStatusRefreshPolicyTests.m */,
 				51E45EA5078C7CA32BE9EA3B /* TideySessionViewRedrawTests.m */,
+				BF293383B49E6E491594E918 /* TideySidebarPresentationCharacterizationTests.m */,
+				ADB243DDA021CE90C5EC7CE4 /* PSMMinimalTabStyleTests.m */,
 			);
 			path = iTerm2XCTests;
 			sourceTree = "<group>";
@@ -20432,6 +20457,9 @@
 				99BFD576CA7D163127793811 /* TideyBrowserNavigationGate.swift in Sources */,
 				CFB74E789E61AA2F8D004482 /* TideyBrowserAuthenticatedTransfer.swift in Sources */,
 				83138F878F9B77504B17CA69 /* TideyApplicationEnvironmentPolicy.swift in Sources */,
+				84D0E4A7C563506B0880B189 /* TideySidebarViews.m in Sources */,
+				551519642B90B2D5B0207FD3 /* TideySidebarRowPresentation.m in Sources */,
+				D922FE28535D3755ADC629FD /* TideyInterfaceTheme.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20508,6 +20536,8 @@
 				3538DE1D25D0E62BBD3612E3 /* TideyBrowserNavigationGateTests.swift in Sources */,
 				A19EB11C6A48D547086BC106 /* TideyBrowserAuthenticatedTransferTests.swift in Sources */,
 				92B3FC50E8D302E881489506 /* TideyApplicationEnvironmentPolicyTests.swift in Sources */,
+				5FDFE8EB3CADAD614FCF6E53 /* TideyInterfaceThemeTests.swift in Sources */,
+				C8951ECCFF64C23E3B1CA8EE /* TideyRightPanelTabComponentParityTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20808,6 +20838,8 @@
 				A608CD06214DE7C1007A7B87 /* iTermRuleTest.m in Sources */,
 				A60F6FEC270B7F640017A003 /* iTermModifyOtherKeys1Test.m in Sources */,
 				A608CD27214E09E1007A7B87 /* Model.xcdatamodeld in Sources */,
+				F2D21B813C495A040C17BFD9 /* TideySidebarPresentationCharacterizationTests.m in Sources */,
+				3157D8ABBEF7A0F04A98783D /* PSMMinimalTabStyleTests.m in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

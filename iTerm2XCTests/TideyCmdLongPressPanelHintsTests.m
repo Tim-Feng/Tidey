@@ -3,6 +3,8 @@
 #import "iTermRootTerminalView.h"
 #import "PSMTabBarControl.h"
 #import "PSMTabBarCell.h"
+#import "TideyRightPanelPane.h"
+#import "iTerm2SharedARC-Swift.h"
 
 @interface TideyShortcutHintDescriptor : NSObject
 @property(nonatomic, readonly, copy) NSString *text;
@@ -41,11 +43,25 @@ static NSString *TideyHintLabelText(NSView *hintView) {
 
 static iTermRootTerminalView *TideyNewPanelHintRootView(void) {
     iTermRootTerminalView *view = [[[iTermRootTerminalView alloc] initWithFrame:NSZeroRect
-                                                                          color:[NSColor blackColor]] autorelease];
-    [view setValue:[NSMutableArray array] forKey:@"tideyEditorTabs"];
+                                                                          color:[NSColor blackColor]
+                                                                 tabBarDelegate:nil
+                                                                       delegate:nil] autorelease];
+    // These roots replace production chrome with narrow test doubles. Keep
+    // them subscribed to app-activation events, but do not re-theme the
+    // substituted controls after the test that owns them has finished.
+    [[NSNotificationCenter defaultCenter]
+        removeObserver:view
+                  name:TideyInterfaceThemeController.didChangeNotification
+                object:TideyInterfaceThemeController.shared];
     [view setValue:[NSMutableArray array] forKey:@"tideyEditorPanelHintViews"];
     [view setValue:[NSMutableArray array] forKey:@"tideyTerminalPanelHintViews"];
     return view;
+}
+
+static id TideyNewPanelHintTab(void) {
+    Class tabClass = NSClassFromString(@"TideyEditorTab");
+    NSCAssert(tabClass != Nil, @"TideyEditorTab must be available to the test host");
+    return [[[tabClass alloc] init] autorelease];
 }
 
 @interface TideyCmdLongPressPanelHintsTests : XCTestCase
@@ -165,7 +181,8 @@ static iTermRootTerminalView *TideyNewPanelHintRootView(void) {
 
     [view setValue:tabStripView forKey:@"tideyEditorTabStripView"];
     [view setValue:overlayView forKey:@"tideyEditorPanelHintOverlayView"];
-    [view setValue:[NSMutableArray arrayWithObjects:@"one", @"two", nil] forKey:@"tideyEditorTabs"];
+    TideyRightPanelPane *primaryPane = [view valueForKey:@"primaryPane"];
+    [primaryPane.tabs addObjectsFromArray:@[ TideyNewPanelHintTab(), TideyNewPanelHintTab() ]];
     [view setValue:@YES forKey:@"shouldShowTideyEditorPanel"];
     [view setValue:@YES forKey:@"tideyShowingShortcutHints"];
 
@@ -231,7 +248,8 @@ static iTermRootTerminalView *TideyNewPanelHintRootView(void) {
 
     [view setValue:tabStripView forKey:@"tideyEditorTabStripView"];
     [view setValue:editorOverlayView forKey:@"tideyEditorPanelHintOverlayView"];
-    [view setValue:[NSMutableArray arrayWithObjects:@"one", @"two", nil] forKey:@"tideyEditorTabs"];
+    TideyRightPanelPane *primaryPane = [view valueForKey:@"primaryPane"];
+    [primaryPane.tabs addObjectsFromArray:@[ TideyNewPanelHintTab(), TideyNewPanelHintTab() ]];
     [view setValue:@YES forKey:@"shouldShowTideyEditorPanel"];
     [view setValue:tabBarControl forKey:@"tabBarControl"];
     [view setValue:terminalOverlayView forKey:@"tideyTerminalPanelHintOverlayView"];
@@ -250,6 +268,17 @@ static iTermRootTerminalView *TideyNewPanelHintRootView(void) {
     XCTAssertTrue(editorHintViews[1].hidden);
     XCTAssertTrue(terminalHintViews[0].hidden);
     XCTAssertTrue(terminalHintViews[1].hidden);
+    XCTAssertEqualObjects([view valueForKey:@"tideyShowingShortcutHints"], @NO);
+}
+
+- (void)testApplicationResignActiveDismissesShortcutHints {
+    iTermRootTerminalView *view = TideyNewPanelHintRootView();
+    [view setValue:@YES forKey:@"tideyShowingShortcutHints"];
+
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:NSApplicationDidResignActiveNotification
+                      object:NSApp];
+
     XCTAssertEqualObjects([view valueForKey:@"tideyShowingShortcutHints"], @NO);
 }
 

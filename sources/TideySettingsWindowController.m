@@ -19,22 +19,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @implementation TideySettingsTabButton
 
 - (void)drawRect:(NSRect)dirtyRect {
+    TideySettingsThemeAdapter *settings =
+        TideyInterfaceThemeController.shared.currentTheme.settingsAdapter;
     if (self.isActiveTab) {
-        // Accent dim background: rgba(88,178,220,0.12)
-        NSColor *accentDim = [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:0.12];
         NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:6 yRadius:6];
-        [accentDim setFill];
+        [settings.tabSelectionBackgroundColor setFill];
         [path fill];
     }
     // Draw title
     NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
     style.alignment = NSTextAlignmentCenter;
-    NSColor *textColor;
-    if (self.isActiveTab) {
-        textColor = [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:1.0]; // accent #58B2DC
-    } else {
-        textColor = [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0]; // secondary
-    }
+    NSColor *textColor = self.isActiveTab ? settings.tabSelectionTextColor : settings.tabTextColor;
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightMedium],
         NSForegroundColorAttributeName: textColor,
@@ -299,35 +294,35 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (NSColor *)windowBackgroundColor {
-    return [NSColor colorWithSRGBRed:0x1e/255.0 green:0x1e/255.0 blue:0x1e/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.panelBackgroundColor;
 }
 
 - (NSColor *)cardBackgroundColor {
-    return [NSColor colorWithSRGBRed:0x2a/255.0 green:0x2a/255.0 blue:0x2c/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.cardBackgroundColor;
 }
 
 - (NSColor *)cardBorderColor {
-    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.cardBorderColor;
 }
 
 - (NSColor *)dividerColor {
-    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.07];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.dividerColor;
 }
 
 - (NSColor *)primaryTextColor {
-    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.92];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.primaryTextColor;
 }
 
 - (NSColor *)secondaryTextColor {
-    return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.55];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.secondaryTextColor;
 }
 
 - (NSColor *)tertiaryTextColor {
-    return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.28];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.tertiaryTextColor;
 }
 
 - (NSColor *)accentColor {
-    return [NSColor colorWithSRGBRed:0x0a/255.0 green:0x84/255.0 blue:0xff/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.accentColor;
 }
 
 - (NSColor *)destructiveColor {
@@ -1045,9 +1040,45 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
         _remoteViewController = [[TideyRemoteSettingsViewController alloc] init];
 
         [self buildUI];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyInterfaceThemeDidChange:)
+                                                     name:TideyInterfaceThemeController.didChangeNotification
+                                                   object:TideyInterfaceThemeController.shared];
+        [self applyCurrentInterfaceTheme];
         [self selectPage:TideySettingsPageAppearance];
     }
     return self;
+}
+
+- (void)dealloc {
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyInterfaceThemeController.didChangeNotification
+                                                  object:TideyInterfaceThemeController.shared];
+}
+
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self applyCurrentInterfaceTheme];
+
+    // The theme picker lives on Appearance, so Remote is not visible while the
+    // user changes this value. Recreate its lazy view controller to ensure the
+    // next visit is painted entirely from the new token set without starting
+    // or restarting any production integration.
+    if (self.currentViewController != self.remoteViewController) {
+        [self.remoteViewController remotePageDidBecomeHidden];
+        self.remoteViewController = [[TideyRemoteSettingsViewController alloc] init];
+    }
+    if (self.currentViewController != self.shortcutsViewController) {
+        self.shortcutsViewController = [[TideyKeyboardShortcutsViewController alloc] init];
+    }
+}
+
+- (void)applyCurrentInterfaceTheme {
+    self.window.backgroundColor =
+        TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.mainWindowBackgroundColor;
+    [self.appearanceTabButton setNeedsDisplay:YES];
+    [self.shortcutsTabButton setNeedsDisplay:YES];
+    [self.remoteTabButton setNeedsDisplay:YES];
 }
 
 - (void)showWindowSelectingAppearance {

@@ -31,6 +31,8 @@
 #import "TideyEditorDocumentStore.h"
 #import "TideyEditorExternalChangeWatcher.h"
 #import "TideyRightPanelPane.h"
+#import "TideySidebarRowPresentation.h"
+#import "TideySidebarViews.h"
 #import "iTerm2SharedARC-Swift.h"
 #import "iTermFakeWindowTitleLabel.h"
 #import "iTermGenericStatusBarContainer.h"
@@ -70,6 +72,11 @@ static const CGFloat kMaximumToolbeltSizeAsFractionOfWindow = 0.5;
 static const CGFloat kTideySidebarWidth = 200;
 static const CGFloat kTideyEditorFileTreeWidth = 200;
 static const CGFloat kTideyMinimumSidebarWidth = 160;
+// Reserve the complete title/body/path/status hierarchy for every workspace.
+// A stable row metric prevents asynchronous status and notification updates
+// from resizing the table and shifting neighboring workspaces.
+static const CGFloat kTideySidebarRowHeight = 64;
+static const CGFloat kTideySidebarWarmTextInset = 12;
 static const CGFloat kTideyMinimumTerminalWidth = 200;
 static const CGFloat kTideyMinimumEditorPanelWidth = 280;
 static const CGFloat kTideyMinimumEditorContentWidth = 160;
@@ -79,11 +86,6 @@ static const CGFloat kTideyEditorTabStripHeight = 34;
 static const CGFloat kTideyDragHandleWidth = 4;
 static const CGFloat kTideyChromeToggleButtonWidth = 18;
 static const CGFloat kTideyChromeToggleButtonHeight = 34;
-static const CGFloat kTideySidebarBadgeSize = 6;
-static const CGFloat kTideySidebarBadgeLeadingInset = 1;
-static const CGFloat kTideySidebarCloseButtonTopInset = 10;
-static const CGFloat kTideySidebarCloseButtonTrailingInset = 4;
-static const CGFloat kTideySidebarCloseButtonSize = 16;
 static const CGFloat kTideyPanelShortcutHintWidth = 28;
 static const CGFloat kTideyPanelShortcutHintHeight = 18;
 static const CGFloat kTideyPanelShortcutHintTrailingInset = 8;
@@ -104,8 +106,6 @@ static NSString *const kTideySidebarVisibleDefaultsKey = @"TideySidebarVisible";
 static NSString *const kTideyEditorPanelVisibleDefaultsKey = @"TideyEditorPanelVisible";
 static NSString *const kTideyEditorFileTreeVisibleDefaultsKey = @"TideyEditorFileTreeVisible";
 static NSString *const kTideyTerminalVisibleDefaultsKey = @"TideyTerminalVisible";
-static NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
-static NSUserInterfaceItemIdentifier const kTideySidebarBadgeViewIdentifier = @"TideySidebarBadgeView";
 static NSUserInterfaceItemIdentifier const kTideySidebarHintViewIdentifier = @"TideySidebarHintView";
 static NSUserInterfaceItemIdentifier const kTideyPanelHintViewIdentifier = @"TideyPanelHintView";
 static NSPasteboardType const iTermRootTerminalViewTideySidebarWorkspacePasteboardType =
@@ -117,15 +117,6 @@ typedef struct {
     CGFloat top;
     CGFloat bottom;
 } iTermDecorationHeights;
-
-static NSView *TideyFindCloseView(NSView *container) {
-    for (NSView *subview in container.subviews) {
-        if ([subview.identifier isEqualToString:kTideySidebarCloseViewIdentifier]) {
-            return subview;
-        }
-    }
-    return nil;
-}
 
 static NSView *TideyFindSubviewWithIdentifier(NSView *container, NSUserInterfaceItemIdentifier identifier) {
     for (NSView *subview in container.subviews) {
@@ -141,6 +132,10 @@ static CGFloat TideyEditorEffectiveTabStripHeight(CGFloat terminalTabBarHeight) 
         return round(terminalTabBarHeight);
     }
     return kTideyEditorTabStripHeight;
+}
+
+static CGFloat TideyBrowserToolbarHeight(void) {
+    return [TideyBrowserToolbarPolicy toolbarHeight];
 }
 
 static NSRect TideyPanelShortcutHintFrameForAnchorRect(NSRect anchorRect) {
@@ -368,6 +363,7 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (iTermLayoutOutputs)layoutOutputsByApplyingTideyChromeOffsets:(iTermLayoutOutputs)outputs;
 - (void)updateTideyChromeDragHandles;
 - (void)updateTideyChromeToggleButtons;
+- (void)tideyUpdateWorkspaceSeparatorJoinGradientState;
 - (void)syncTideyEditorFileTreeRootIfNeeded;
 - (void)constrainTideyEditorFileTreeToVisibleWidth;
 - (void)tideyHandleMouseDownEvent:(NSEvent *)event;
@@ -526,11 +522,16 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 - (NSInteger)tideySidebarSelectedWorkspaceIndex;
 - (void)syncTideySidebarSelection;
 - (void)tideyNotificationStoreDidChange:(NSNotification *)notification;
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification;
+- (void)tideyApplyInterfaceThemeTokens;
 - (NSInteger)tideySidebarWorkspaceIndexForIdentifier:(NSString *)workspaceIdentifier;
 - (TideyNotificationItem *)tideySidebarLatestUnreadNotificationAtIndex:(NSInteger)index;
 - (BOOL)tideySidebarHasReadNotificationsAtIndex:(NSInteger)index;
 - (NSTableCellView *)newTideySidebarCellView;
+- (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row;
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row;
+- (void)configureTideySidebarCellView:(NSTableCellView *)cellView
+                         presentation:(TideySidebarRowPresentation *)presentation;
 - (NSView *)tideySidebarDragPreviewForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
 - (NSImage *)tideySidebarDragPreviewImageForRow:(NSInteger)row width:(CGFloat)width height:(CGFloat)height;
 - (NSMenu *)tideySidebarMenuForRow:(NSInteger)row;
@@ -570,10 +571,17 @@ typedef NS_ENUM(NSInteger, TideyLastClickedRegion) {
 + (NSArray<NSNumber *> *)tideyRightPanelEffectiveTabWidthsForPreferredWidths:(NSArray<NSNumber *> *)preferredWidths
                                                                tabBodyBudget:(CGFloat)tabBodyBudget;
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetrics;
 + (NSArray<TideyEditorTab *> *)tideyRightPanelBulkCloseTargetsForTabs:(NSArray<TideyEditorTab *> *)tabs
                                                      clickedIdentifier:(NSString *)clickedIdentifier
                                                       closeTabsToRight:(BOOL)closeTabsToRight;
 + (BOOL)tideyRightPanelBulkCloseTargetsAreEligible:(NSArray<TideyEditorTab *> *)targets;
++ (NSTableViewStyle)tideySidebarTableStyle;
++ (CGFloat)tideySidebarMinimumWidth;
++ (NSColor *)tideySidebarTableBackgroundOverrideColor;
++ (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyle;
++ (NSColor *)tideyFileTreeBackgroundOverrideColor;
++ (NSTableViewSelectionHighlightStyle)tideyFileTreeSelectionHighlightStyle;
 + (TideyEditorTab *)tideyRightPanelTabForShortcutNumber:(NSInteger)number
                                                    tabs:(NSArray<TideyEditorTab *> *)tabs
                                            expandedKind:(TideyRightPanelTabKind)expandedKind;
@@ -659,27 +667,109 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 @end
 
-@protocol TideySidebarCloseAction <NSObject>
-- (void)tideySidebarCloseWorkspaceAtIndex:(NSInteger)row;
+// Overlay above the selected editor tab: draws the focused paper tab's
+// trailing leg, lower-right corner, and baseline fade with the same policy
+// renderer the terminal tab bar uses, so both hosts produce the same pixels.
+@interface TideyPaperTabTrailingCornerView : NSView
+@property(nonatomic) CGFloat tideyTabWidth;
+@property(nonatomic) CGFloat tideyTabHeight;
+@property(nonatomic) CGFloat tideyAvailableTrailingWidth;
+@property(nonatomic, strong) NSColor *tideyOutlineColor;
+@property(nonatomic, strong) NSColor *tideySeparatorColor;
+@property(nonatomic, strong) NSColor *tideyStripBackgroundColor;
 @end
 
-@interface TideySidebarTableView : NSTableView {
-    NSTrackingArea *_tideyTrackingArea;
-    NSInteger _tideyHoveredRow;
+@implementation TideyPaperTabTrailingCornerView
+
+- (BOOL)isFlipped {
+    return YES;
 }
-@property(nonatomic, weak) id<TideySidebarCloseAction> tideyCloseActionTarget;
-- (BOOL)tideyShouldShowCloseButtonForRow:(NSInteger)row;
-- (void)updateTideyCloseButtonVisibility;
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (!_tideyOutlineColor || !_tideySeparatorColor || !_tideyStripBackgroundColor) {
+        return;
+    }
+    // A full-width tab rect whose trailing column (maxX - outlineWidth) is
+    // this view's column 0. Retaining the selected tab's real width keeps the
+    // shared 4pt top radius, so the leg begins after (not over) the top arc.
+    const NSRect localTabRect =
+        [TideyPaperTabPolicy trailingOverlayReferenceTabRectForTabWidth:_tideyTabWidth
+                                                              tabHeight:_tideyTabHeight];
+    [TideyPaperTabPolicy drawTrailingCornerForTabRect:localTabRect
+                               availableTrailingWidth:_tideyAvailableTrailingWidth
+                                         outlineColor:_tideyOutlineColor
+                                       separatorColor:_tideySeparatorColor
+                                 stripBackgroundColor:_tideyStripBackgroundColor];
+}
+
 @end
 
-@implementation TideySidebarTableView
+// Overlay above the selected editor tab: mirrors the terminal tab bar's
+// leading-corner renderer when the focused tab begins after group chrome.
+@interface TideyPaperTabLeadingCornerView : NSView
+@property(nonatomic) CGFloat tideyTabWidth;
+@property(nonatomic) CGFloat tideyTabHeight;
+@property(nonatomic) CGFloat tideyAvailableLeadingWidth;
+@property(nonatomic, strong) NSColor *tideyOutlineColor;
+@property(nonatomic, strong) NSColor *tideySeparatorColor;
+@property(nonatomic, strong) NSColor *tideyStripBackgroundColor;
+@end
 
-- (instancetype)initWithFrame:(NSRect)frameRect {
-    self = [super initWithFrame:frameRect];
-    if (self) {
-        _tideyHoveredRow = -1;
+@implementation TideyPaperTabLeadingCornerView
+
+- (BOOL)isFlipped {
+    return YES;
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (!_tideyOutlineColor || !_tideySeparatorColor || !_tideyStripBackgroundColor) {
+        return;
     }
-    return self;
+    // The selected tab's leading column is the overlay's final column. Keep
+    // the real tab width so the shared policy preserves its 4pt top radius.
+    const NSRect localTabRect = NSMakeRect(NSWidth(self.bounds) - TideyPaperTabPolicy.outlineWidth,
+                                           0,
+                                           _tideyTabWidth,
+                                           _tideyTabHeight);
+    [TideyPaperTabPolicy drawLeadingCornerForTabRect:localTabRect
+                               availableLeadingWidth:_tideyAvailableLeadingWidth
+                                         outlineColor:_tideyOutlineColor
+                                       separatorColor:_tideySeparatorColor
+                                 stripBackgroundColor:_tideyStripBackgroundColor];
+}
+
+@end
+
+// Every theme renders a group label as the index tab of the paper-tab stack;
+// the native NSButton path remains available until the custom tag is installed.
+@interface TideyRightPanelGroupButton : NSButton {
+    NSTrackingArea *_tideyTrackingArea;
+}
+@property(nonatomic) BOOL tideyUsesPaperIndexStyle;
+@property(nonatomic) BOOL tideyExpanded;
+@property(nonatomic) BOOL tideyDrawsTrailingEdge;
+@property(nonatomic) BOOL tideyHovered;
+@property(nonatomic, strong) NSColor *tideyOutlineColor;
+@property(nonatomic, strong) NSColor *tideyExpandedTextColor;
+@property(nonatomic, strong) NSColor *tideyCollapsedTextColor;
+@property(nonatomic, strong) NSColor *tideyHoverTextColor;
+- (void)tideyUpdateAppearance;
+@end
+
+@implementation TideyRightPanelGroupButton
+
+- (BOOL)isFlipped {
+    return _tideyUsesPaperIndexStyle ? YES : [super isFlipped];
 }
 
 - (void)updateTrackingAreas {
@@ -688,9 +778,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
         [self removeTrackingArea:_tideyTrackingArea];
     }
     _tideyTrackingArea = [[NSTrackingArea alloc] initWithRect:NSZeroRect
-                                                      options:(NSTrackingActiveAlways |
+                                                      options:(NSTrackingActiveInKeyWindow |
                                                                NSTrackingInVisibleRect |
-                                                               NSTrackingMouseMoved |
                                                                NSTrackingMouseEnteredAndExited)
                                                         owner:self
                                                      userInfo:nil];
@@ -699,139 +788,68 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 
 - (void)mouseEntered:(NSEvent *)event {
     [super mouseEntered:event];
-    [self tideyUpdateHoveredRowForPoint:[self convertPoint:event.locationInWindow fromView:nil]];
+    self.tideyHovered = YES;
+    [self tideyUpdateAppearance];
 }
 
 - (void)mouseExited:(NSEvent *)event {
     [super mouseExited:event];
-    _tideyHoveredRow = -1;
-    [self updateTideyCloseButtonVisibility];
+    self.tideyHovered = NO;
+    [self tideyUpdateAppearance];
 }
 
-- (void)mouseMoved:(NSEvent *)event {
-    [super mouseMoved:event];
-    [self tideyUpdateHoveredRowForPoint:[self convertPoint:event.locationInWindow fromView:nil]];
-}
-
-- (void)mouseDown:(NSEvent *)event {
-    NSPoint point = [self convertPoint:event.locationInWindow fromView:nil];
-    NSInteger row = [self rowAtPoint:point];
-    if (row >= 0) {
-        NSRect closeRect = [self tideyCloseRectForRow:row];
-        if (!NSIsEmptyRect(closeRect) && NSPointInRect(point, closeRect)) {
-            [self.tideyCloseActionTarget tideySidebarCloseWorkspaceAtIndex:row];
-            return;
-        }
-    }
-    [super mouseDown:event];
-}
-
-- (void)tideyUpdateHoveredRowForPoint:(NSPoint)point {
-    NSInteger row = [self rowAtPoint:point];
-    if (row < 0) {
-        row = -1;
-    }
-    if (_tideyHoveredRow != row) {
-        _tideyHoveredRow = row;
-        [self updateTideyCloseButtonVisibility];
-    }
-}
-
-- (NSInteger)tideyHoveredRowForCurrentMouseLocation {
-    if (!self.window) {
-        return -1;
-    }
-    NSPoint point = [self convertPoint:self.window.mouseLocationOutsideOfEventStream fromView:nil];
-    if (!NSPointInRect(point, self.bounds)) {
-        return -1;
-    }
-    NSInteger row = [self rowAtPoint:point];
-    return (row >= 0) ? row : -1;
-}
-
-- (BOOL)tideyShouldShowCloseButtonForRow:(NSInteger)row {
-    _tideyHoveredRow = [self tideyHoveredRowForCurrentMouseLocation];
-    return (row >= 0 && row == _tideyHoveredRow);
-}
-
-- (NSRect)tideyCloseRectForRow:(NSInteger)row {
-    NSTableCellView *cellView = [self viewAtColumn:0 row:row makeIfNecessary:NO];
-    NSView *closeView = TideyFindCloseView(cellView);
-    if (closeView) {
-        return [closeView convertRect:closeView.bounds toView:self];
-    }
-    NSRect rowRect = [self rectOfRow:row];
-    if (NSIsEmptyRect(rowRect)) {
-        return NSZeroRect;
-    }
-    return NSMakeRect(NSMaxX(rowRect) - 24, NSMinY(rowRect) + 28, 16, 16);
-}
-
-- (void)updateTideyCloseButtonVisibility {
-    _tideyHoveredRow = [self tideyHoveredRowForCurrentMouseLocation];
-    NSRange rows = [self rowsInRect:self.visibleRect];
-    NSInteger limit = NSMaxRange(rows);
-    for (NSInteger row = rows.location; row < limit; row++) {
-        NSTableCellView *cellView = [self viewAtColumn:0 row:row makeIfNecessary:NO];
-        NSView *closeView = TideyFindCloseView(cellView);
-        if (!closeView) {
-            continue;
-        }
-        BOOL visible = (row == _tideyHoveredRow);
-        closeView.hidden = !visible;
-        closeView.alphaValue = visible ? 1.0 : 0.0;
-    }
-}
-
-@end
-
-@interface TideySidebarRowView : NSTableRowView {
-}
-@end
-
-@implementation TideySidebarRowView
-
-- (void)drawSelectionInRect:(NSRect)dirtyRect {
-    if (!self.selectionHighlightStyle || !self.isSelected) {
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (!_tideyUsesPaperIndexStyle || !_tideyOutlineColor) {
         return;
     }
-    NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 6, 4)
-                                                         xRadius:8
-                                                         yRadius:8];
-    [[NSColor selectedContentBackgroundColor] setFill];
-    [path fill];
-}
 
-- (BOOL)isEmphasized {
-    return YES;
-}
-
-@end
-
-@interface TideySidebarCellView : NSTableCellView
-@end
-
-@implementation TideySidebarCellView
-
-- (void)layout {
-    [super layout];
-
-    NSView *closeView = TideyFindCloseView(self);
-    if (!closeView) {
+    [_tideyOutlineColor setStroke];
+    NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:self.bounds selected:NO];
+    NSBezierPath *path = [TideyPaperTabPolicy outlinePathForRect:outlineRect];
+    if (_tideyDrawsTrailingEdge) {
+        [path stroke];
         return;
     }
-    const CGFloat closeX = MAX(0,
-                               NSWidth(self.bounds) -
-                                   kTideySidebarCloseButtonTrailingInset -
-                                   kTideySidebarCloseButtonSize);
-    const CGFloat closeY = MAX(0,
-                               NSHeight(self.bounds) -
-                                   kTideySidebarCloseButtonTopInset -
-                                   kTideySidebarCloseButtonSize);
-    closeView.frame = NSMakeRect(closeX,
-                                 closeY,
-                                 kTideySidebarCloseButtonSize,
-                                 kTideySidebarCloseButtonSize);
+
+    // The first file tab owns the shared vertical edge. Draw only the index
+    // tab's leading side and top so two adjacent 1pt strokes never brighten.
+    NSBezierPath *leadingAndTop = [NSBezierPath bezierPath];
+    leadingAndTop.lineWidth = path.lineWidth;
+    NSPoint points[3];
+    for (NSInteger index = 0; index < path.elementCount - 1; index++) {
+        switch ([path elementAtIndex:index associatedPoints:points]) {
+            case NSBezierPathElementMoveTo:
+                [leadingAndTop moveToPoint:points[0]];
+                break;
+            case NSBezierPathElementLineTo:
+                [leadingAndTop lineToPoint:points[0]];
+                break;
+            case NSBezierPathElementCurveTo:
+                [leadingAndTop curveToPoint:points[2] controlPoint1:points[0] controlPoint2:points[1]];
+                break;
+            default:
+                break;
+        }
+    }
+    [leadingAndTop stroke];
+}
+
+- (void)tideyUpdateAppearance {
+    if (!_tideyUsesPaperIndexStyle) {
+        return;
+    }
+    NSColor *textColor = _tideyHovered
+        ? _tideyHoverTextColor
+        : (_tideyExpanded ? _tideyExpandedTextColor : _tideyCollapsedTextColor);
+    self.layer.cornerRadius = 0;
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    self.attributedTitle = [[NSAttributedString alloc] initWithString:self.title ?: @""
+                                                           attributes:@{
+        NSFontAttributeName: self.font ?: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold],
+        NSForegroundColorAttributeName: textColor ?: NSColor.secondaryLabelColor,
+    }];
+    [self setNeedsDisplay:YES];
 }
 
 @end
@@ -847,6 +865,8 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 @property(nonatomic, copy) NSString *tideyDragTitle;
 @property(nonatomic) BOOL tideySelected;
 @property(nonatomic) BOOL tideyHovered;
+@property(nonatomic) BOOL tideyLastInGroup;
+@property(nonatomic) BOOL tideyUsesLeadingCornerRenderer;
 @property(nonatomic, strong) NSView *tideyHoverView;
 @property(nonatomic, strong) NSView *tideySelectionLineView;
 @property(nonatomic, strong) NSView *tideySeparatorView;
@@ -858,24 +878,25 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 - (instancetype)initWithFrame:(NSRect)frameRect {
     self = [super initWithFrame:frameRect];
     if (self) {
+        TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
         self.wantsLayer = YES;
         self.layer.backgroundColor = NSColor.clearColor.CGColor;
 
         _tideyHoverView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyHoverView.wantsLayer = YES;
-        _tideyHoverView.layer.backgroundColor = [NSColor colorWithWhite:1 alpha:0.06].CGColor;
+        _tideyHoverView.layer.backgroundColor = tokens.rightPanelTabHoverColor.CGColor;
         _tideyHoverView.hidden = YES;
         [self addSubview:_tideyHoverView];
 
         _tideySelectionLineView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideySelectionLineView.wantsLayer = YES;
-        _tideySelectionLineView.layer.backgroundColor = NSColor.controlAccentColor.CGColor;
+        _tideySelectionLineView.layer.backgroundColor = tokens.rightPanelTabSelectionIndicatorColor.CGColor;
         _tideySelectionLineView.hidden = YES;
         [self addSubview:_tideySelectionLineView];
 
         _tideySeparatorView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideySeparatorView.wantsLayer = YES;
-        _tideySeparatorView.layer.backgroundColor = [NSColor colorWithWhite:0.25 alpha:1].CGColor;
+        _tideySeparatorView.layer.backgroundColor = tokens.rightPanelTabSeparatorColor.CGColor;
         [self addSubview:_tideySeparatorView];
     }
     return self;
@@ -944,17 +965,96 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     }
 }
 
+- (BOOL)tideyDrawsPaperTab {
+    return TideyInterfaceThemeController.shared.currentTokens.tabOutlineColor.alphaComponent > 0;
+}
+
 - (void)layout {
     [super layout];
     _tideyHoverView.frame = self.bounds;
-    _tideySelectionLineView.frame = NSMakeRect(0, 0, NSWidth(self.bounds), 2);
+    if ([self tideyDrawsPaperTab]) {
+        // Keep the indicator inside the rounded top corners of the page.
+        const CGFloat radius = TideyPaperTabPolicy.topCornerRadius;
+        _tideySelectionLineView.frame = NSMakeRect(radius,
+                                                   TideyPaperTabPolicy.outlineWidth,
+                                                   MAX(0, NSWidth(self.bounds) - radius * 2),
+                                                   TideyPaperTabPolicy.selectionIndicatorHeight);
+    } else {
+        _tideySelectionLineView.frame = NSMakeRect(0, 0, NSWidth(self.bounds), 2);
+    }
     _tideySeparatorView.frame = NSMakeRect(NSWidth(self.bounds) - 1, 6, 1, MAX(0, NSHeight(self.bounds) - 12));
 }
 
+// Paper tab (every theme; same contract as PSMMinimalTabStyle): hairline outline with
+// rounded top corners, open at the bottom. Selected: full height, filled with
+// the base surface so it covers the strip baseline and joins its content.
+// Unselected: set back by unselectedTopInset; right edge only on the last tab
+// of a group so adjacent outlines never double-draw.
+- (void)drawRect:(NSRect)dirtyRect {
+    [super drawRect:dirtyRect];
+    if (![self tideyDrawsPaperTab]) {
+        return;
+    }
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:self.bounds selected:_tideySelected];
+    if (_tideySelected) {
+        // Front sheet: filled with the content surface, not the darker desk.
+        [tokens.rightPanelBackgroundColor setFill];
+        NSRectFill(self.bounds);
+    }
+    [(_tideySelected ? tokens.tabSelectedOutlineColor : tokens.tabOutlineColor) setStroke];
+    if (_tideySelected) {
+        // Corner overlays own whichever vertical legs must fade into the strip
+        // baseline; the tab item draws each owned edge exactly once.
+        NSBezierPath *selectedPath = _tideyUsesLeadingCornerRenderer
+            ? [TideyPaperTabPolicy selectedTopOutlinePathForRect:outlineRect]
+            : [TideyPaperTabPolicy selectedLeadingAndTopOutlinePathForRect:outlineRect];
+        [selectedPath stroke];
+        return;
+    }
+    if (_tideyLastInGroup) {
+        [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
+        return;
+    }
+    NSBezierPath *path = [TideyPaperTabPolicy outlinePathForRect:outlineRect];
+    // Drop the trailing vertical segment: the neighbour's left edge draws it.
+    NSBezierPath *leftAndTop = [NSBezierPath bezierPath];
+    leftAndTop.lineWidth = path.lineWidth;
+    const NSInteger elements = path.elementCount;
+    NSPoint points[3];
+    for (NSInteger i = 0; i < elements - 1; i++) {
+        NSBezierPathElement element = [path elementAtIndex:i associatedPoints:points];
+        switch (element) {
+            case NSBezierPathElementMoveTo:
+                [leftAndTop moveToPoint:points[0]];
+                break;
+            case NSBezierPathElementLineTo:
+                [leftAndTop lineToPoint:points[0]];
+                break;
+            case NSBezierPathElementCurveTo:
+                [leftAndTop curveToPoint:points[2] controlPoint1:points[0] controlPoint2:points[1]];
+                break;
+            default:
+                break;
+        }
+    }
+    [leftAndTop stroke];
+}
+
 - (void)tideyUpdateAppearance {
-    _tideySelectionLineView.hidden = !_tideySelected;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    self.layer.cornerRadius = TideyChromeLayoutPolicy.rightPanelTabCornerRadius;
+    self.layer.borderWidth = 0;
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    _tideyHoverView.layer.backgroundColor = tokens.rightPanelTabHoverColor.CGColor;
+    _tideyHoverView.layer.cornerRadius = TideyChromeLayoutPolicy.rightPanelTabCornerRadius;
+    _tideySelectionLineView.layer.backgroundColor = tokens.rightPanelTabSelectionIndicatorColor.CGColor;
+    _tideySeparatorView.layer.backgroundColor = tokens.rightPanelTabSeparatorColor.CGColor;
+    _tideySelectionLineView.hidden = (!_tideySelected || [self tideyDrawsPaperTab]);
+    _tideySeparatorView.hidden = _tideyLastInGroup || [self tideyDrawsPaperTab];
     _tideyHoverView.hidden = (_tideySelected || !_tideyHovered);
     _tideyHoverView.alphaValue = _tideyHoverView.hidden ? 0 : 1;
+    [self setNeedsDisplay:YES];
 }
 
 @end
@@ -1254,6 +1354,153 @@ NS_CLASS_AVAILABLE_MAC(10_14)
 }
 @end
 
+typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
+    TideyPaneBoundaryEdgeLeft,
+    TideyPaneBoundaryEdgeRight,
+    TideyPaneBoundaryEdgeBottom,
+};
+
+// Separator pinned to one edge of its superview. The modern layout derives structural
+// separation from these because all base surfaces share a single fill; Classic
+// keeps them invisible via clear tokens. Vertical edges are the three resizable
+// boundaries. Tab-joining boundaries begin below the tab row and continue
+// the paper-tab leading edge; the full-height drag handle remains separate.
+@interface TideyPaneBoundaryView : NSView
+@property(nonatomic) TideyPaneBoundaryEdge tideyEdge;
+// Optional: pull-bar midpoint in superview coordinates. When nil the bar is
+// centered in the superview. Used when the arrow control lives in a different
+// (taller) view than this boundary.
+@property(nonatomic, copy) CGFloat (^tideyPullBarMidYProvider)(void);
+// Optional: height to leave open at the top of a vertical boundary (superview
+// coordinates, unflipped). Used so the line between the terminal tab list and
+// the editor tab list disappears and the two strips read as one row.
+@property(nonatomic, copy) CGFloat (^tideyTopInsetProvider)(void);
+// Optional: complete frame in superview coordinates. When set, edge pinning is
+// bypassed. Used by the root-hosted workspace/terminal separator, whose
+// geometry comes from the live sidebar width rather than a superview edge.
+@property(nonatomic, copy) NSRect (^tideyFrameProvider)(void);
+// Appearance (shared by every theme) used where a pane separator continues from the
+// leading edge of a paper tab below the tab row.
+@property(nonatomic) BOOL tideyUsesPaperTabJoinGradient;
+@property(nonatomic, strong) NSColor *tideyBoundaryColor;
+@property(nonatomic, strong) NSColor *tideyTabJoinColor;
+@property(nonatomic, strong) CAGradientLayer *tideyTabJoinGradientLayer;
+- (void)tideyApplyBoundaryColor:(NSColor *)boundaryColor
+                   tabJoinColor:(NSColor *)tabJoinColor;
+@end
+
+@interface iTermRootTerminalView (TideyPaneBoundaryPolicy)
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds;
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                           pullBarMidY:(CGFloat)pullBarMidY;
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+      byExcludingTopHeight:(CGFloat)topInset
+           superviewBounds:(NSRect)bounds;
++ (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
++ (BOOL)tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:(BOOL)usesPaperTabJoinGradient
+                                                boundaryColor:(NSColor *)boundaryColor
+                                                 tabJoinColor:(NSColor *)tabJoinColor;
++ (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight;
++ (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
+                                 fileTreeContainerFrame:(NSRect)containerFrame;
++ (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
+                                           rootBounds:(NSRect)rootBounds
+                                         tabRowHeight:(CGFloat)tabRowHeight;
++ (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
++ (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
++ (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                          tabBarBounds:(NSRect)tabBarBounds;
++ (BOOL)tideyEditorPaneBoundaryUsesPaperTabJoinGradient;
++ (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                        tabStripBounds:(NSRect)tabStripBounds;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetrics;
+@end
+
+@implementation TideyPaneBoundaryView
+
+- (void)tideyUpdateLineAppearance {
+    const BOOL drawsJoinGradient =
+        [iTermRootTerminalView tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:self.tideyUsesPaperTabJoinGradient
+                                                                       boundaryColor:self.tideyBoundaryColor
+                                                                        tabJoinColor:self.tideyTabJoinColor];
+    if (!drawsJoinGradient) {
+        self.layer.backgroundColor = self.tideyBoundaryColor.CGColor;
+        self.tideyTabJoinGradientLayer.hidden = YES;
+        return;
+    }
+
+    self.layer.backgroundColor = NSColor.clearColor.CGColor;
+    if (!self.tideyTabJoinGradientLayer) {
+        self.tideyTabJoinGradientLayer = [CAGradientLayer layer];
+        self.tideyTabJoinGradientLayer.startPoint = CGPointMake(0.5, 1);
+        self.tideyTabJoinGradientLayer.endPoint = CGPointMake(0.5, 0);
+        [self.layer addSublayer:self.tideyTabJoinGradientLayer];
+    }
+    self.tideyTabJoinGradientLayer.hidden = NO;
+    self.tideyTabJoinGradientLayer.frame = self.bounds;
+    self.tideyTabJoinGradientLayer.colors = @[
+        (__bridge id)self.tideyTabJoinColor.CGColor,
+        (__bridge id)self.tideyBoundaryColor.CGColor,
+        (__bridge id)self.tideyBoundaryColor.CGColor,
+    ];
+    self.tideyTabJoinGradientLayer.locations =
+        [TideyPaperTabPolicy boundaryJoinGradientLocationsForBoundaryHeight:NSHeight(self.bounds)];
+}
+
+- (void)tideyApplyBoundaryColor:(NSColor *)boundaryColor
+                   tabJoinColor:(NSColor *)tabJoinColor {
+    self.tideyBoundaryColor = boundaryColor;
+    self.tideyTabJoinColor = tabJoinColor;
+    [self tideyUpdateLineAppearance];
+}
+
+- (void)tideyPinToSuperviewEdge {
+    NSView *parent = self.superview;
+    if (!parent) {
+        return;
+    }
+    if (self.tideyFrameProvider) {
+        const NSRect providedFrame = self.tideyFrameProvider();
+        self.hidden = NSIsEmptyRect(providedFrame);
+        self.frame = providedFrame;
+        self.layer.cornerRadius = [iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:providedFrame];
+        [self tideyUpdateLineAppearance];
+        return;
+    }
+    const CGFloat midY = self.tideyPullBarMidYProvider
+        ? self.tideyPullBarMidYProvider()
+        : NSMidY(parent.bounds);
+    NSRect frame = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:self.tideyEdge
+                                                        superviewBounds:parent.bounds
+                                                           pullBarMidY:midY];
+    if (self.tideyTopInsetProvider && [iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:self.tideyEdge]) {
+        frame = [iTermRootTerminalView tideyPaneBoundaryFrame:frame
+                                         byExcludingTopHeight:self.tideyTopInsetProvider()
+                                              superviewBounds:parent.bounds];
+    }
+    self.frame = frame;
+    self.layer.cornerRadius = [iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:frame];
+    [self tideyUpdateLineAppearance];
+}
+
+- (void)viewDidMoveToSuperview {
+    [super viewDidMoveToSuperview];
+    [self tideyPinToSuperviewEdge];
+}
+
+- (void)resizeWithOldSuperviewSize:(NSSize)oldSize {
+    [super resizeWithOldSuperviewSize:oldSize];
+    [self tideyPinToSuperviewEdge];
+}
+
+- (NSView *)hitTest:(NSPoint)point {
+    return nil;
+}
+
+@end
+
 @interface TideyRightPanelTabStripView : NSView
 @property(nonatomic, assign) id tideyOwner;
 @end
@@ -1302,18 +1549,27 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     NSNumber *_windowNumber;
     NSTextField *_windowNumberLabel;
     iTermFakeWindowTitleLabel *_windowTitleLabel;
+    NSColor *_tideyClassicRootColor;
     iTermTabBarBacking *_tabBarBacking NS_AVAILABLE_MAC(10_14);
+    BOOL _tideyClassicTabBarVisualEffectHidden;
     iTermGenericStatusBarContainer *_statusBarContainer;
     NSDictionary *_desiredToolbeltProportions;
     iTermWindowSizeView *_windowSizeView NS_AVAILABLE_MAC(10_14);
     NSView *_tideySidebarView;
     NSScrollView *_tideySidebarScrollView;
     NSTableView *_tideySidebarTableView;
+    NSColor *_tideyClassicSidebarTableBackgroundColor;
+    NSColor *_tideyClassicFileTreeBackgroundColor;
+    NSHashTable<TideyPaneBoundaryView *> *_tideyPaneBoundaryViews;
     NSView *_tideyEditorPanelView;
     NSTextField *_tideyEditorPanelLabel;
     NSView *_tideyEditorTabStripView;
 
     NSView *_tideyEditorFileTreeContainerView;
+    NSView *_tideyEditorFileTreeTopBoundaryView;
+    TideyPaneBoundaryView *_tideyWorkspaceSeparatorView;  // root-hosted workspace/terminal line
+    NSView *_tideyEditorFileTreeHeaderView;  // strip-height row above the file tree (desk color)
+    TideyPaneBoundaryView *_tideyEditorFileTreeBoundaryView;
     NSScrollView *_tideyEditorFileTreeScrollView;
     NSOutlineView *_tideyEditorFileTreeView;
     TideyEditorFileNode *_tideyEditorFileTreeRootNode;
@@ -1512,6 +1768,33 @@ NS_CLASS_AVAILABLE_MAC(10_14)
     return matches;
 }
 
++ (NSTableViewStyle)tideySidebarTableStyle {
+    return NSTableViewStyleSourceList;
+}
+
++ (CGFloat)tideySidebarMinimumWidth {
+    return kTideyMinimumSidebarWidth;
+}
+
+// Both themes draw their own selection card (TideySidebarRowView /
+// TideyFileTreeRowView) over a clear table, so the native Source List
+// highlight is disabled regardless of theme; only the card colors differ.
++ (NSColor *)tideySidebarTableBackgroundOverrideColor {
+    return NSColor.clearColor;
+}
+
++ (NSTableViewSelectionHighlightStyle)tideySidebarSelectionHighlightStyle {
+    return NSTableViewSelectionHighlightStyleNone;
+}
+
++ (NSColor *)tideyFileTreeBackgroundOverrideColor {
+    return NSColor.clearColor;
+}
+
++ (NSTableViewSelectionHighlightStyle)tideyFileTreeSelectionHighlightStyle {
+    return NSTableViewSelectionHighlightStyleNone;
+}
+
 + (NSString *)tideyRightPanelGroupLabelForKind:(TideyRightPanelTabKind)kind {
     return kind == TideyRightPanelTabKindBrowser ? @"Web" : @"Code";
 }
@@ -1642,6 +1925,176 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         [effectiveWidths addObject:@(equalWidth)];
     }
     return effectiveWidths;
+}
+
+// Production tab/group component geometry. Warm intentionally reuses it
+// unchanged; themes only differ through color tokens.
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetrics {
+    return @{
+        @"tabFontSize": @11,
+        @"groupLabelFontSize": @9,
+        @"groupButtonHeight": @20,
+        @"tabVerticalInset": @0,
+        @"titleLeadingInset": @10,
+        @"titleTrailingInsetWithClose": @34,
+        @"titleTrailingInsetWithoutClose": @18,
+        @"closeButtonWidth": @20,
+        @"closeButtonTrailingInset": @2,
+        @"addButtonSize": @22,
+    };
+}
+
+// Group tags are paper index tabs in every theme (colors come from tokens).
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetrics {
+    return @{
+        @"horizontalPadding": @10,
+        @"tabsGap": @0,
+        @"usesPaperIndexStyle": @YES,
+    };
+}
+
++ (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge {
+    return edge == TideyPaneBoundaryEdgeLeft || edge == TideyPaneBoundaryEdgeRight;
+}
+
+// The focus join gradient is a component decision shared by every theme. It
+// is active when the boundary opts in and the active theme supplied both colors.
++ (BOOL)tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:(BOOL)usesPaperTabJoinGradient
+                                                boundaryColor:(NSColor *)boundaryColor
+                                                 tabJoinColor:(NSColor *)tabJoinColor {
+    return usesPaperTabJoinGradient && boundaryColor != nil && tabJoinColor != nil;
+}
+
+// Corner radius for a boundary layer. A 1pt line must have none: a radius on
+// a 1pt-wide layer rounds its end caps, which leaves the top device rows of
+// the workspace seam only partially covered (measured 40%/80% on Retina) and
+// reads as a break where the focused tab's leading outline should join it.
+// Only a bar wider than 1pt (the parked pull-bar experiment) gets a radius.
++ (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame {
+    const CGFloat thickness = MIN(NSWidth(frame), NSHeight(frame));
+    return thickness > 1 ? floor(thickness / 2.0) : 0;
+}
+
++ (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                          tabBarBounds:(NSRect)tabBarBounds {
+    return [TideyPaperTabPolicy selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:selectedTabFrame
+                                                                              stripBounds:tabBarBounds];
+}
+
++ (BOOL)tideyEditorPaneBoundaryUsesPaperTabJoinGradient {
+    // The editor strip begins with group chrome (`Code`), so no selected tab
+    // leg ever continues into the terminal/editor pane separator.
+    return NO;
+}
+
+// Editor strips lead with group chrome. A selected file tab whose left edge
+// sits after that chrome must turn and fade into the strip baseline; only a
+// tab actually touching the strip boundary keeps a hard leading continuation.
++ (NSRect)tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:(NSRect)selectedTabFrame
+                                                        tabStripBounds:(NSRect)tabStripBounds {
+    if ([TideyPaperTabPolicy selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:selectedTabFrame
+                                                                            stripBounds:tabStripBounds]) {
+        return NSZeroRect;
+    }
+    const CGFloat availableLeadingWidth = MAX(0, NSMinX(selectedTabFrame) - NSMinX(tabStripBounds));
+    if (NSIsEmptyRect(selectedTabFrame) || availableLeadingWidth < TideyPaperTabPolicy.outlineWidth) {
+        return NSZeroRect;
+    }
+    const NSRect localTabRect = NSMakeRect(0,
+                                           0,
+                                           NSWidth(selectedTabFrame),
+                                           NSHeight(selectedTabFrame));
+    const NSRect baselineRect =
+        [TideyPaperTabPolicy leadingBaselineRectForTabRect:localTabRect
+                                      availableLeadingWidth:availableLeadingWidth];
+    return NSMakeRect(NSMinX(selectedTabFrame) - (NSWidth(baselineRect) - TideyPaperTabPolicy.outlineWidth),
+                      NSMinY(selectedTabFrame),
+                      NSWidth(baselineRect),
+                      NSHeight(selectedTabFrame));
+}
+
+// The 1pt row where the focused first tab's leading outline ends: the tab
+// bar's bottom row in root (unflipped) coordinates. The workspace separator
+// must include this row so the outline and the separator share a pixel column
+// with no uncovered row between them.
++ (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame {
+    return NSMakeRect(NSMinX(tabBarFrame), NSMinY(tabBarFrame), NSWidth(tabBarFrame), 1);
+}
+
+// Workspace/terminal separator, hosted in the root view (above _tabView) so it
+// can never be clipped by the sidebar. The 1px column sits on the terminal
+// side at x = sidebarWidth: its center (sidebarWidth + 0.5) is the same
+// coordinate as the focused paper tab's leading outline, which PSM strokes at
+// cell.frame.minX + 0.5 with the first tab starting at sidebarWidth. Both
+// themes leave the terminal tab row open so that outline continues into this
+// line.
++ (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
+                                           rootBounds:(NSRect)rootBounds
+                                         tabRowHeight:(CGFloat)tabRowHeight {
+    if (sidebarWidth <= 0 || NSHeight(rootBounds) <= 0) {
+        return NSZeroRect;
+    }
+    const CGFloat x = MIN(NSMaxX(rootBounds) - 1, NSMinX(rootBounds) + sidebarWidth);
+    const CGFloat height = MAX(0, NSHeight(rootBounds) - MAX(0, tabRowHeight));
+    return NSMakeRect(x, NSMinY(rootBounds), 1, height);
+}
+
+// Shortens a vertical boundary so it stops `topInset` below the superview's
+// top edge (unflipped coordinates). Non-positive insets leave it untouched.
++ (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
+      byExcludingTopHeight:(CGFloat)topInset
+           superviewBounds:(NSRect)bounds {
+    if (topInset <= 0) {
+        return frame;
+    }
+    const CGFloat maxY = MIN(NSMaxY(frame), NSMaxY(bounds) - topInset);
+    return NSMakeRect(NSMinX(frame), NSMinY(frame), NSWidth(frame), MAX(0, maxY - NSMinY(frame)));
+}
+
+// Full-height (or full-width) 1px line in both themes; Warm resizer edges use
+// the fainter paneResizerPullBarColor token.
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds {
+    return [self tideyPaneBoundaryFrameForEdge:edge
+                               superviewBounds:bounds
+                                  pullBarMidY:NSMidY(bounds)];
+}
+
+// Vertical midpoint of a chrome toggle arrow centered in a container of the
+// given height (same formula as updateTideyChromeToggleButtons).
++ (CGFloat)tideyChromeToggleButtonMidYForContainerHeight:(CGFloat)containerHeight {
+    return floor((containerHeight - kTideyChromeToggleButtonHeight) / 2.0) + kTideyChromeToggleButtonHeight / 2.0;
+}
+
+// The file-tree arrow is centered in the whole editor panel (tab strip
+// included) while the file-tree boundary lives inside the shorter file-tree
+// container. Convert the arrow midpoint into container coordinates so the
+// pull bar sits beside the arrow.
++ (CGFloat)tideyFileTreePullBarMidYForEditorPanelHeight:(CGFloat)editorPanelHeight
+                                 fileTreeContainerFrame:(NSRect)containerFrame {
+    return [self tideyChromeToggleButtonMidYForContainerHeight:editorPanelHeight] - NSMinY(containerFrame);
+}
+
+// Tim 2026-08-29: the short pull-bar experiment is parked; resizer edges are
+// full-height 1px lines again in both themes (Warm just draws them fainter via
+// paneResizerPullBarColor). pullBarMidY is kept in the signature so the
+// experiment can be re-enabled without touching callers.
++ (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
+                        superviewBounds:(NSRect)bounds
+                           pullBarMidY:(CGFloat)pullBarMidY {
+    (void)pullBarMidY;
+    const CGFloat width = 1;
+    const CGFloat height = NSHeight(bounds);
+    const CGFloat y = 0;
+    switch (edge) {
+        case TideyPaneBoundaryEdgeLeft:
+            return NSMakeRect(0, y, width, height);
+        case TideyPaneBoundaryEdgeRight:
+            return NSMakeRect(MAX(0, NSWidth(bounds) - width), y, width, height);
+        case TideyPaneBoundaryEdgeBottom:
+            return NSMakeRect(0, 0, NSWidth(bounds), 1);
+    }
+    return NSZeroRect;
 }
 
 + (BOOL)tideyRightPanelShouldShowCloseButtonForWidth:(CGFloat)width selected:(BOOL)selected {
@@ -1931,6 +2384,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                      delegate:(id<iTermRootTerminalViewDelegate, iTermToolbeltViewDelegate>)delegate {
     self = [super initWithFrame:frameRect color:color];
     if (self) {
+        _tideyClassicRootColor = [color copy];
         _delegate = delegate;
         _shouldShowTideySidebar = YES;
         _shouldShowTideyTerminal = YES;
@@ -1967,10 +2421,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideySidebarView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideySidebarView.autoresizingMask = NSViewHeightSizable;
         _tideySidebarView.wantsLayer = YES;
-        _tideySidebarView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.11
-                                                                      green:0.12
-                                                                       blue:0.15
-                                                                      alpha:1].CGColor;
+        _tideySidebarView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.sidebarBackgroundColor.CGColor;
         [self addSubview:_tideySidebarView];
 
         _tideySidebarScrollView = [[NSScrollView alloc] initWithFrame:NSZeroRect];
@@ -1988,9 +2439,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideySidebarTableView = sidebarTableView;
         if (@available(macOS 11.0, *)) {
             _tideySidebarTableView.style = NSTableViewStyleSourceList;
+            _tideyClassicSidebarTableBackgroundColor = [_tideySidebarTableView.backgroundColor copy];
+            _tideySidebarTableView.style = [[self class] tideySidebarTableStyle];
+        } else {
+            _tideyClassicSidebarTableBackgroundColor = [_tideySidebarTableView.backgroundColor copy];
         }
+        _tideySidebarTableView.selectionHighlightStyle = [[self class] tideySidebarSelectionHighlightStyle];
         _tideySidebarTableView.intercellSpacing = NSMakeSize(0, 0);
-        _tideySidebarTableView.rowHeight = 60;
+        _tideySidebarTableView.rowHeight = kTideySidebarRowHeight;
         [_tideySidebarTableView registerForDraggedTypes:@[ iTermRootTerminalViewTideySidebarWorkspacePasteboardType ]];
         [_tideySidebarTableView setDraggingSourceOperationMask:NSDragOperationMove forLocal:YES];
 
@@ -2015,6 +2471,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
                                                  selector:@selector(tideyApplicationDidBecomeActive:)
                                                      name:NSApplicationDidBecomeActiveNotification
                                                    object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyApplicationDidResignActive:)
+                                                     name:NSApplicationDidResignActiveNotification
+                                                   object:nil];
+        [[NSNotificationCenter defaultCenter] addObserver:self
+                                                 selector:@selector(tideyInterfaceThemeDidChange:)
+                                                     name:TideyInterfaceThemeController.didChangeNotification
+                                                   object:TideyInterfaceThemeController.shared];
 
         _tideyMouseDownMonitor = [NSEvent addLocalMonitorForEventsMatchingMask:NSEventMaskLeftMouseDown
                                                                        handler:^NSEvent *(NSEvent *event) {
@@ -2035,20 +2499,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorPanelView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorPanelView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
         _tideyEditorPanelView.wantsLayer = YES;
-        _tideyEditorPanelView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
-                                                                          green:0.11
-                                                                           blue:0.14
-                                                                          alpha:1].CGColor;
+        _tideyEditorPanelView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelBackgroundColor.CGColor;
         _tideyEditorPanelView.hidden = YES;
         [self addSubview:_tideyEditorPanelView];
 
         _tideyEditorTabStripView = [[TideyRightPanelTabStripView alloc] initWithFrame:NSZeroRect];
         _tideyEditorTabStripView.autoresizingMask = NSViewWidthSizable;
         _tideyEditorTabStripView.wantsLayer = YES;
-        _tideyEditorTabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09
-                                                                           green:0.10
-                                                                            blue:0.13
-                                                                           alpha:1].CGColor;
+        _tideyEditorTabStripView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelTabStripBackgroundColor.CGColor;
         _tideyEditorTabStripView.layer.masksToBounds = YES;
         ((TideyRightPanelTabStripView *)_tideyEditorTabStripView).tideyOwner = self;
         _primaryPane.tabStripView = _tideyEditorTabStripView;
@@ -2078,11 +2536,16 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorFileTreeContainerView = [[NSView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeContainerView.autoresizingMask = NSViewMinXMargin | NSViewHeightSizable;
         _tideyEditorFileTreeContainerView.wantsLayer = YES;
-        _tideyEditorFileTreeContainerView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.12
-                                                                                      green:0.13
-                                                                                       blue:0.17
-                                                                                      alpha:1].CGColor;
+        _tideyEditorFileTreeContainerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelFileTreeBackgroundColor.CGColor;
         [_tideyEditorPanelView addSubview:_tideyEditorFileTreeContainerView];
+
+        // The tab strip stops at the file tree; this row keeps the strip's desk
+        // color running under the chrome icon buttons above the file tree.
+        _tideyEditorFileTreeHeaderView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeHeaderView.wantsLayer = YES;
+        _tideyEditorFileTreeHeaderView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelTabStripBackgroundColor.CGColor;
+        _tideyEditorFileTreeHeaderView.hidden = YES;
+        [_tideyEditorPanelView addSubview:_tideyEditorFileTreeHeaderView];
 
         _tideyEditorFileTreeScrollView = [[TideyVerticalOnlyScrollView alloc] initWithFrame:NSZeroRect];
         _tideyEditorFileTreeScrollView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
@@ -2102,6 +2565,14 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         if (@available(macOS 11.0, *)) {
             _tideyEditorFileTreeView.style = NSTableViewStyleSourceList;
         }
+        _tideyClassicFileTreeBackgroundColor = [_tideyEditorFileTreeView.backgroundColor copy];
+        {
+            _tideyEditorFileTreeView.selectionHighlightStyle =
+                [[self class] tideyFileTreeSelectionHighlightStyle];
+            NSColor *fileTreeBackgroundOverride = [[self class] tideyFileTreeBackgroundOverrideColor];
+            _tideyEditorFileTreeView.backgroundColor = fileTreeBackgroundOverride
+                ?: _tideyClassicFileTreeBackgroundColor;
+        }
         _tideyEditorFileTreeView.rowHeight = 22;
         _tideyEditorFileTreeView.indentationPerLevel = 12;
         _tideyEditorFileTreeView.columnAutoresizingStyle = NSTableViewNoColumnAutoresizing;
@@ -2115,6 +2586,44 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tideyEditorFileTreeView.outlineTableColumn = fileTreeColumn;
         _tideyEditorFileTreeScrollView.documentView = _tideyEditorFileTreeView;
         [self reloadTideyEditorFileTree];
+
+        _tideyPaneBoundaryViews = [NSHashTable weakObjectsHashTable];
+        // The workspace/terminal separator is created after _tabView below so it
+        // is hosted in the root view above the terminal.
+        TideyPaneBoundaryView *editorBoundaryView =
+            [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                            toView:_tideyEditorPanelView];
+        __weak __typeof(self) weakSelfForEditorBoundary = self;
+        // Tim 2026-08-29: no line between the terminal tab list and the editor
+        // tab list; the boundary starts below the editor tab strip.
+        editorBoundaryView.tideyTopInsetProvider = ^CGFloat{
+            __strong __typeof(weakSelfForEditorBoundary) strongSelf = weakSelfForEditorBoundary;
+            return strongSelf ? NSHeight(strongSelf->_tideyEditorTabStripView.frame) : 0;
+        };
+        editorBoundaryView.tideyUsesPaperTabJoinGradient =
+            [[self class] tideyEditorPaneBoundaryUsesPaperTabJoinGradient];
+        _tideyEditorFileTreeBoundaryView =
+            [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeLeft
+                                            toView:_tideyEditorFileTreeContainerView];
+        __weak __typeof(self) weakSelf = self;
+        _tideyEditorFileTreeBoundaryView.tideyPullBarMidYProvider = ^CGFloat{
+            __strong __typeof(weakSelf) strongSelf = weakSelf;
+            if (!strongSelf) {
+                return 0;
+            }
+            return [[strongSelf class]
+                tideyFileTreePullBarMidYForEditorPanelHeight:NSHeight(strongSelf->_tideyEditorPanelView.bounds)
+                                      fileTreeContainerFrame:strongSelf->_tideyEditorFileTreeContainerView.frame];
+        };
+        [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
+                                        toView:_tideyEditorTabStripView];
+        _tideyEditorFileTreeTopBoundaryView = [[NSView alloc] initWithFrame:NSZeroRect];
+        _tideyEditorFileTreeTopBoundaryView.wantsLayer = YES;
+        _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor =
+            TideyInterfaceThemeController.shared.currentTokens.paneBoundaryColor.CGColor;
+        [_tideyEditorPanelView addSubview:_tideyEditorFileTreeTopBoundaryView
+                               positioned:NSWindowAbove
+                               relativeTo:nil];
 
         self.tideySidebarDragHandle = [[iTermDragHandleView alloc] initWithFrame:NSZeroRect];
         self.tideySidebarDragHandle.delegate = self;
@@ -2164,7 +2673,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
         self.tideyEditorSplitDividerView = [[NSView alloc] initWithFrame:NSZeroRect];
         self.tideyEditorSplitDividerView.wantsLayer = YES;
-        self.tideyEditorSplitDividerView.layer.backgroundColor = [NSColor colorWithWhite:0.24 alpha:1.0].CGColor;
+        self.tideyEditorSplitDividerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelSplitDividerColor.CGColor;
         self.tideyEditorSplitDividerView.hidden = YES;
         [_tideyEditorPanelView addSubview:self.tideyEditorSplitDividerView positioned:NSWindowAbove relativeTo:nil];
 
@@ -2178,6 +2687,20 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tabView.tabViewType = NSNoTabsNoBorder;
         _tabView.swipeHandler = delegate;
         [self addSubview:_tabView];
+        _tideyWorkspaceSeparatorView = [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeRight
+                                                                       toView:self];
+        __weak __typeof(self) weakSelfForWorkspaceSeparator = self;
+        _tideyWorkspaceSeparatorView.tideyFrameProvider = ^NSRect{
+            __strong __typeof(weakSelfForWorkspaceSeparator) strongSelf = weakSelfForWorkspaceSeparator;
+            if (!strongSelf) {
+                return NSZeroRect;
+            }
+            return [[strongSelf class] tideyWorkspaceSeparatorFrameForSidebarWidth:strongSelf.tideySidebarWidth
+                                                                        rootBounds:strongSelf.bounds
+                                                                      tabRowHeight:[strongSelf tideyTerminalTabRowHeight]];
+        };
+        _tideyWorkspaceSeparatorView.tideyUsesPaperTabJoinGradient = NO;
+        [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
         [self addSubview:self.tideySidebarDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideyEditorDragHandle positioned:NSWindowAbove relativeTo:_tabView];
         [self addSubview:self.tideySidebarToggleButton positioned:NSWindowAbove relativeTo:_tabView];
@@ -2201,6 +2724,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
         _tabBarBacking = [[iTermTabBarBacking alloc] init];
         _tabBarBacking.hidesWhenTabBarHidden = [delegate rootTerminalViewShouldHideTabBarBackingWhenTabBarIsHidden];
         _tabBarBacking.autoresizesSubviews = YES;
+        _tideyClassicTabBarVisualEffectHidden = _tabBarBacking.visualEffectView.hidden;
 
         self.tabBarControl = [[iTermTabBarControlView alloc] initWithFrame:tabBarFrame];
         self.tabBarControl.height = [delegate rootTerminalViewHeightOfTabBar:self];
@@ -2424,6 +2948,7 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
             _notchMask.hidden = YES;
             [self addSubview:_notchMask];
         }
+        [self tideyApplyInterfaceThemeTokens];
     }
     return self;
 }
@@ -2454,6 +2979,12 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     [[NSNotificationCenter defaultCenter] removeObserver:self
                                                     name:NSApplicationDidBecomeActiveNotification
                                                   object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:NSApplicationDidResignActiveNotification
+                                                  object:nil];
+    [[NSNotificationCenter defaultCenter] removeObserver:self
+                                                    name:TideyInterfaceThemeController.didChangeNotification
+                                                  object:TideyInterfaceThemeController.shared];
     [self tideyStopWatchingCurrentEditorFile];
     [self tideyStopWatchingEditorFileTree];
     for (TideyRightPanelPane *pane in @[ _primaryPane, _secondaryPane ?: (id)kCFNull ]) {
@@ -3140,7 +3671,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 }
 
 - (void)setCurrentSessionAlpha:(CGFloat)alpha {
-    _tabBarBacking.visualEffectView.hidden = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
+    _tideyClassicTabBarVisualEffectHidden = PSMShouldExtendTransparencyIntoMinimalTabBar() && (alpha < 1);
+    _tabBarBacking.visualEffectView.hidden = YES;
 }
 
 #pragma mark - Division View
@@ -3171,6 +3703,15 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
             _divisionView = [[theClass alloc] initWithFrame:divisionViewFrame];
             _divisionView.autoresizingMask = (NSViewWidthSizable | NSViewMinYMargin);
             [self addSubview:_divisionView];
+            // The division view occupies the tab bar's bottom row, which is
+            // also the top row of the Warm workspace/terminal seam and the last
+            // pixel of the focused tab's leading outline. Keep the seam above
+            // it so that join row is never repainted by the division color.
+            if (_tideyWorkspaceSeparatorView) {
+                [self addSubview:_tideyWorkspaceSeparatorView
+                      positioned:NSWindowAbove
+                      relativeTo:_divisionView];
+            }
         }
         iTermPreferencesTabStyle preferredStyle = [iTermPreferences intForKey:kPreferenceKeyTabStyle];
         switch ([self.effectiveAppearance it_tabStyle:preferredStyle]) {
@@ -3210,7 +3751,10 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
 
 - (void)updateTextColors {
     _windowNumberLabel.textColor = [self.delegate rootTerminalViewTabBarTextColorForWindowNumber];
-    _windowTitleLabel.textColor = [self.delegate rootTerminalViewTabBarTextColorForTitle];
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    _windowTitleLabel.textColor = tokens.usesHostTitlebarTextColors
+        ? [self.delegate rootTerminalViewTabBarTextColorForTitle]
+        : tokens.sidebarPrimaryTextColor;
 }
 
 #pragma mark - Toolbelt
@@ -3460,7 +4004,8 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     if (maxWidth <= 0) {
         return 0;
     }
-    const CGFloat minWidth = MIN(kTideyMinimumSidebarWidth, maxWidth);
+    const CGFloat themeMinimumWidth = [[self class] tideySidebarMinimumWidth];
+    const CGFloat minWidth = MIN(themeMinimumWidth, maxWidth);
     return MAX(minWidth, MIN(_tideySidebarPreferredWidth, maxWidth));
 }
 
@@ -3896,7 +4441,6 @@ static BOOL TideyBrowserHomepageURLIsValid(NSURL *url) {
     [self layoutTideyEditorContents];
 }
 
-static const CGFloat kTideyBrowserToolbarHeight = 28;
 static const CGFloat kTideyBrowserZoomStep = 0.1;
 static const CGFloat kTideyBrowserZoomMinimum = 0.5;
 static const CGFloat kTideyBrowserZoomMaximum = 3.0;
@@ -3942,10 +4486,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     pane.browserContainerView.hidden = YES;
 
     // Toolbar background
-    NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, kTideyBrowserToolbarHeight)];
+    CGFloat toolbarHeight = TideyBrowserToolbarHeight();
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSView *toolbar = [[NSView alloc] initWithFrame:NSMakeRect(0, 0, 100, toolbarHeight)];
     toolbar.autoresizingMask = NSViewWidthSizable | NSViewMinYMargin;
     toolbar.wantsLayer = YES;
-    toolbar.layer.backgroundColor = [NSColor colorWithWhite:0.15 alpha:1].CGColor;
+    toolbar.layer.backgroundColor =
+        [TideyBrowserToolbarPolicy toolbarBackgroundColorWithTokens:tokens].CGColor;
     pane.browserToolbarView = toolbar;
 
     // Back button
@@ -3953,8 +4500,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                 target:self
                                                 action:@selector(tideyBrowserGoBack:)];
     pane.browserBackButton.bordered = NO;
-    pane.browserBackButton.frame = NSMakeRect(4, 0, 28, kTideyBrowserToolbarHeight);
-    pane.browserBackButton.contentTintColor = [NSColor secondaryLabelColor];
+    pane.browserBackButton.frame = NSMakeRect(4, 0, 28, toolbarHeight);
+    pane.browserBackButton.contentTintColor = tokens.browserToolbarControlColor;
     [toolbar addSubview:pane.browserBackButton];
 
     // Forward button
@@ -3962,8 +4509,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                    target:self
                                                    action:@selector(tideyBrowserGoForward:)];
     pane.browserForwardButton.bordered = NO;
-    pane.browserForwardButton.frame = NSMakeRect(32, 0, 28, kTideyBrowserToolbarHeight);
-    pane.browserForwardButton.contentTintColor = [NSColor secondaryLabelColor];
+    pane.browserForwardButton.frame = NSMakeRect(32, 0, 28, toolbarHeight);
+    pane.browserForwardButton.contentTintColor = tokens.browserToolbarControlColor;
     [toolbar addSubview:pane.browserForwardButton];
 
     // Reload button
@@ -3971,31 +4518,50 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                   target:self
                                                   action:@selector(tideyBrowserReload:)];
     pane.browserReloadButton.bordered = NO;
-    pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, kTideyBrowserToolbarHeight);
-    pane.browserReloadButton.contentTintColor = [NSColor secondaryLabelColor];
+    pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, toolbarHeight);
+    pane.browserReloadButton.contentTintColor = tokens.browserToolbarControlColor;
     [toolbar addSubview:pane.browserReloadButton];
 
-    // URL field
-    pane.browserURLField = [[NSTextField alloc] initWithFrame:NSMakeRect(92, 3, 100, 22)];
+    // URL field. Warm owns the card chrome in an outer view so the actual
+    // text field can be vertically inset by frame geometry; AppKit ignores a
+    // custom cell drawing rect for this borderless single-line configuration.
+    NSView *urlFieldContainer = [[NSView alloc] initWithFrame:NSMakeRect(92,
+                                                                        3,
+                                                                        100,
+                                                                        [TideyBrowserToolbarPolicy urlFieldHeight])];
+    urlFieldContainer.autoresizingMask = NSViewWidthSizable;
+    urlFieldContainer.wantsLayer = YES;
+    urlFieldContainer.layer.backgroundColor =
+        [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05].CGColor;
+    urlFieldContainer.layer.cornerRadius = 8;
+    urlFieldContainer.layer.borderWidth = 1;
+    urlFieldContainer.layer.borderColor = tokens.hairlineColor.CGColor;
+    urlFieldContainer.layer.masksToBounds = YES;
+    pane.browserURLFieldContainerView = urlFieldContainer;
+    [toolbar addSubview:urlFieldContainer];
+
+    pane.browserURLField = [[NSTextField alloc]
+        initWithFrame:[TideyBrowserToolbarPolicy urlFieldTextRectForFieldBounds:urlFieldContainer.bounds]];
     pane.browserURLField.autoresizingMask = NSViewWidthSizable;
     pane.browserURLField.usesSingleLineMode = YES;
     pane.browserURLField.cell.wraps = NO;
     pane.browserURLField.placeholderString = @"Enter URL";
-    pane.browserURLField.font = [NSFont systemFontOfSize:12];
-    pane.browserURLField.textColor = [NSColor labelColor];
-    pane.browserURLField.backgroundColor = [NSColor colorWithWhite:0.22 alpha:1];
-    pane.browserURLField.drawsBackground = YES;
-    pane.browserURLField.bordered = YES;
-    pane.browserURLField.bezeled = YES;
+    pane.browserURLField.font = [NSFont monospacedSystemFontOfSize:12.5 weight:NSFontWeightRegular];
+    pane.browserURLField.textColor = tokens.rightPanelPrimaryTextColor;
+    pane.browserURLField.backgroundColor = NSColor.clearColor;
+    pane.browserURLField.drawsBackground = NO;
+    pane.browserURLField.bordered = NO;
+    pane.browserURLField.bezeled = NO;
     pane.browserURLField.bezelStyle = NSTextFieldSquareBezel;
     pane.browserURLField.wantsLayer = YES;
-    pane.browserURLField.layer.cornerRadius = 6;
-    pane.browserURLField.layer.masksToBounds = YES;
+    pane.browserURLField.layer.cornerRadius = 0;
+    pane.browserURLField.layer.borderWidth = 0;
+    pane.browserURLField.layer.masksToBounds = NO;
     pane.browserURLField.cell.scrollable = YES;
     pane.browserURLField.cell.lineBreakMode = NSLineBreakByTruncatingTail;
     pane.browserURLField.target = self;
     pane.browserURLField.action = @selector(tideyBrowserURLFieldAction:);
-    [toolbar addSubview:pane.browserURLField];
+    [urlFieldContainer addSubview:pane.browserURLField];
 
     // Loading indicator
     pane.browserLoadingIndicator = [[NSProgressIndicator alloc] initWithFrame:NSMakeRect(0, 0, 16, 16)];
@@ -4156,29 +4722,30 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     const CGFloat contentHeight = NSHeight(contentBounds);
     const CGFloat contentWidth = NSWidth(contentBounds);
+    const CGFloat toolbarHeight = TideyBrowserToolbarHeight();
     pane.browserContainerView.frame = contentBounds;
 
     // Toolbar at top of container
     NSView *toolbar = pane.browserToolbarView;
-    toolbar.frame = NSMakeRect(0, contentHeight - kTideyBrowserToolbarHeight, contentWidth, kTideyBrowserToolbarHeight);
+    toolbar.frame = NSMakeRect(0, contentHeight - toolbarHeight, contentWidth, toolbarHeight);
+    pane.browserBackButton.frame = NSMakeRect(4, 0, 28, toolbarHeight);
+    pane.browserForwardButton.frame = NSMakeRect(32, 0, 28, toolbarHeight);
+    pane.browserReloadButton.frame = NSMakeRect(60, 0, 28, toolbarHeight);
 
     // URL field fills remaining width after buttons
-    const CGFloat urlFieldX = 92;
-    const CGFloat urlFieldRight = 28;
-    const CGFloat urlFieldHeight = 22;
-    const CGFloat urlFieldY = floor((kTideyBrowserToolbarHeight - urlFieldHeight) / 2.0);
-    pane.browserURLField.frame = NSMakeRect(urlFieldX,
-                                            urlFieldY,
-                                            MAX(50, contentWidth - urlFieldX - urlFieldRight),
-                                            urlFieldHeight);
+    pane.browserURLFieldContainerView.frame =
+        [TideyBrowserToolbarPolicy urlFieldFrameForToolbarHeight:toolbarHeight
+                                                    contentWidth:contentWidth];
+    pane.browserURLField.frame =
+        [TideyBrowserToolbarPolicy urlFieldTextRectForFieldBounds:pane.browserURLFieldContainerView.bounds];
 
     // Loading indicator at right of toolbar
     const CGFloat indicatorSize = 16;
-    const CGFloat indicatorY = floor((kTideyBrowserToolbarHeight - indicatorSize) / 2.0);
+    const CGFloat indicatorY = floor((toolbarHeight - indicatorSize) / 2.0);
     pane.browserLoadingIndicator.frame = NSMakeRect(contentWidth - 24, indicatorY, indicatorSize, indicatorSize);
 
     // WebView below toolbar
-    pane.browserWebView.frame = NSMakeRect(0, 0, contentWidth, MAX(0, contentHeight - kTideyBrowserToolbarHeight));
+    pane.browserWebView.frame = NSMakeRect(0, 0, contentWidth, MAX(0, contentHeight - toolbarHeight));
 }
 
 #pragma mark - Browser Actions
@@ -4746,11 +5313,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         self.tideyEditorSplitToggleButton.hidden = YES;
         self.tideyEditorChromeGradientMaskView.hidden = YES;
         self.tideyEditorSplitDividerView.hidden = YES;
+        _tideyEditorFileTreeHeaderView.hidden = YES;
         [self tideySyncEditorFileTreeWatcher];
         [self updateTideyChromeToggleButtons];
         return;
     }
     const NSRect bounds = _tideyEditorPanelView.bounds;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     const CGFloat tabStripHeight = TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat chromeButtonSize = 22;
     const CGFloat chromeButtonPadding = 8;
@@ -4770,11 +5339,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     self.tideyEditorNewTerminalButton.layer.backgroundColor = NSColor.clearColor.CGColor;
     self.tideyEditorNewWebButton.layer.backgroundColor = NSColor.clearColor.CGColor;
     self.tideyEditorSplitToggleButton.layer.backgroundColor = NSColor.clearColor.CGColor;
-    self.tideyEditorNewTerminalButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
-    self.tideyEditorNewWebButton.contentTintColor = [NSColor colorWithWhite:0.72 alpha:1.0];
+    NSColor *chromeTint = tokens.rightPanelSecondaryTextColor;
+    self.tideyEditorNewTerminalButton.contentTintColor = chromeTint;
+    self.tideyEditorNewWebButton.contentTintColor = chromeTint;
     self.tideyEditorSplitToggleButton.contentTintColor = _splitVisible
-        ? [NSColor colorWithSRGBRed:1.0 green:0.694 blue:0.106 alpha:1.0]
-        : [NSColor colorWithWhite:0.72 alpha:1.0];
+        ? tokens.rightPanelGroupExpandedTextColor
+        : chromeTint;
     self.tideyEditorChromeGradientMaskView.frame = NSMakeRect(MAX(0, NSWidth(bounds) - chromeMaskWidth),
                                                               NSHeight(bounds) - tabStripHeight,
                                                               chromeMaskWidth,
@@ -4798,19 +5368,17 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     _primaryPane.tabStripView.frame = NSMakeRect(0, NSHeight(bounds) - tabStripHeight, primaryWidth, tabStripHeight);
     _primaryPane.tabStripView.layer.backgroundColor = ((_activePane == _primaryPane)
-                                                       ? [NSColor colorWithSRGBRed:0.118 green:0.126 blue:0.155 alpha:1].CGColor
-                                                       : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
+                                                       ? tokens.rightPanelActiveTabStripBackgroundColor.CGColor
+                                                       : tokens.rightPanelInactiveTabStripBackgroundColor.CGColor);
     _primaryPane.editorWebView.frame = NSMakeRect(0, 0, primaryWidth, contentHeight);
     if (_secondaryPane.containerView) {
         _secondaryPane.containerView.hidden = !shouldShowSplitShell;
         _secondaryPane.containerView.frame = NSMakeRect(secondaryOriginX, 0, secondaryWidth, NSHeight(bounds));
-        _secondaryPane.containerView.layer.backgroundColor = ((_activePane == _secondaryPane)
-                                                              ? [NSColor colorWithSRGBRed:0.10 green:0.11 blue:0.14 alpha:1].CGColor
-                                                              : [NSColor colorWithSRGBRed:0.095 green:0.102 blue:0.13 alpha:1].CGColor);
+        _secondaryPane.containerView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
         _secondaryPane.tabStripView.frame = NSMakeRect(0, NSHeight(_secondaryPane.containerView.bounds) - tabStripHeight, secondaryWidth, tabStripHeight);
         _secondaryPane.tabStripView.layer.backgroundColor = ((_activePane == _secondaryPane)
-                                                             ? [NSColor colorWithSRGBRed:0.118 green:0.126 blue:0.155 alpha:1].CGColor
-                                                             : [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor);
+                                                             ? tokens.rightPanelActiveTabStripBackgroundColor.CGColor
+                                                             : tokens.rightPanelInactiveTabStripBackgroundColor.CGColor);
         _secondaryPane.editorWebView.frame = NSMakeRect(0, 0, secondaryWidth, contentHeight);
     }
     CGColorRef maskBackgroundColor = shouldShowSplitShell
@@ -4828,8 +5396,10 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [self.tideyEditorChromeGradientMaskView.layer addSublayer:gradientLayer];
     }
     gradientLayer.frame = self.tideyEditorChromeGradientMaskView.bounds;
-    CGColorRef solidColor = maskBackgroundColor ?: [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1].CGColor;
-    gradientLayer.colors = @[ (__bridge id)NSColor.clearColor.CGColor,
+    CGColorRef solidColor = maskBackgroundColor ?: tokens.rightPanelInactiveTabStripBackgroundColor.CGColor;
+    NSColor *solidNSColor = [NSColor colorWithCGColor:solidColor];
+    CGColorRef transparentSolidColor = [solidNSColor colorWithAlphaComponent:0].CGColor;
+    gradientLayer.colors = @[ (__bridge id)transparentSolidColor,
                               (__bridge id)solidColor,
                               (__bridge id)solidColor ];
     self.tideyEditorSplitDividerView.hidden = !shouldShowSplitShell;
@@ -4841,6 +5411,17 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     }
     _tideyEditorFileTreeContainerView.hidden = !self.shouldShowTideyEditorFileTree;
     _tideyEditorFileTreeContainerView.frame = NSMakeRect(contentWidth, 0, fileTreeWidth, contentHeight);
+    _tideyEditorFileTreeHeaderView.hidden = !self.shouldShowTideyEditorFileTree;
+    _tideyEditorFileTreeHeaderView.frame = NSMakeRect(contentWidth, contentHeight, fileTreeWidth, tabStripHeight);
+    _tideyEditorFileTreeTopBoundaryView.hidden = !self.shouldShowTideyEditorFileTree;
+    _tideyEditorFileTreeTopBoundaryView.frame = NSMakeRect(contentWidth,
+                                                           contentHeight,
+                                                           fileTreeWidth,
+                                                           1);
+    // Strip/container frames were just set; re-pin boundaries that depend on them.
+    for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
+        [boundaryView tideyPinToSuperviewEdge];
+    }
     _tideyEditorFileTreeScrollView.frame = _tideyEditorFileTreeContainerView.bounds;
     [self tideySyncEditorFileTreeWatcher];
     [self constrainTideyEditorFileTreeToVisibleWidth];
@@ -5190,26 +5771,33 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         if (pane == _primaryPane && subview == _tideyEditorPanelHintOverlayView) {
             continue;
         }
+        if ([subview isKindOfClass:[TideyPaneBoundaryView class]]) {
+            continue;
+        }
         [subview removeFromSuperview];
     }
 
     BOOL activePane = (pane == self.activePane);
-    tabStripView.layer.backgroundColor = [NSColor colorWithSRGBRed:(activePane ? 0.118 : 0.102)
-                                                             green:(activePane ? 0.126 : 0.108)
-                                                              blue:(activePane ? 0.155 : 0.135)
-                                                             alpha:1].CGColor;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    NSDictionary<NSString *, NSNumber *> *metrics = [[self class] tideyRightPanelTabComponentMetrics];
+    NSDictionary<NSString *, NSNumber *> *groupMetrics = [[self class] tideyRightPanelGroupMetrics];
+    tabStripView.layer.backgroundColor = (activePane
+        ? tokens.rightPanelActiveTabStripBackgroundColor
+        : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
     const CGFloat stripHeight = NSHeight(tabStripView.bounds) > 0 ?
         NSHeight(tabStripView.bounds) :
         TideyEditorEffectiveTabStripHeight(_tabBarControl.height);
     const CGFloat insetX = 0;
     const CGFloat tabHeight = MAX(22, stripHeight);
-    const CGFloat addButtonSize = 22;
+    const CGFloat addButtonSize = metrics[@"addButtonSize"].doubleValue;
+    const CGFloat tabFontSize = metrics[@"tabFontSize"].doubleValue;
     CGFloat x = insetX;
     NSDictionary<NSAttributedStringKey, id> *tabAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:11 weight:NSFontWeightMedium]
+        NSFontAttributeName: [NSFont systemFontOfSize:tabFontSize weight:NSFontWeightMedium]
     };
     NSDictionary<NSAttributedStringKey, id> *groupLabelAttributes = @{
-        NSFontAttributeName: [NSFont systemFontOfSize:9 weight:NSFontWeightSemibold]
+        NSFontAttributeName: [NSFont systemFontOfSize:metrics[@"groupLabelFontSize"].doubleValue
+                                                weight:NSFontWeightSemibold]
     };
     NSArray<TideyRightPanelTabGroupState *> *groups = [[self class] tideyRightPanelGroupStatesForTabs:pane.tabs
                                                                                         editorExpanded:pane.editorGroupExpanded
@@ -5224,11 +5812,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         isFirstMeasuredGroup = NO;
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
-        fixedChromeWidth += labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
+        fixedChromeWidth += labelTextWidth + groupMetrics[@"horizontalPadding"].doubleValue * 2;
         if (!group.expanded || group.visibleTabs.count == 0) {
             continue;
         }
-        fixedChromeWidth += kTideyRightPanelGroupTabsGap;
+        fixedChromeWidth += groupMetrics[@"tabsGap"].doubleValue;
         fixedChromeWidth += addButtonSize + 4 + kTideyRightPanelAddButtonTrailingPadding;
         for (TideyEditorTab *tab in group.visibleTabs) {
             NSString *title = tab.dirty
@@ -5245,6 +5833,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         [[self class] tideyRightPanelEffectiveTabWidthsForPreferredWidths:preferredTabWidths
                                                            tabBodyBudget:MAX(0, visibleStripWidth - fixedChromeWidth)];
     NSUInteger effectiveWidthIndex = 0;
+    TideyEditorTabItemView *selectedPaperTabView = nil;
+    NSRect selectedPaperTabLeadingCornerFrame = NSZeroRect;
     BOOL isFirstGroup = YES;
     for (TideyRightPanelTabGroupState *group in groups) {
         if (!isFirstGroup) {
@@ -5254,13 +5844,17 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
         NSString *groupLabel = group.label ?: [self tideyRightPanelGroupLabelForKind:group.kind];
         CGFloat labelTextWidth = ceil([groupLabel sizeWithAttributes:groupLabelAttributes].width);
-        CGFloat labelWidth = labelTextWidth + kTideyRightPanelGroupLabelHorizontalPadding * 2;
-        CGFloat groupButtonHeight = 20;
+        CGFloat labelWidth = labelTextWidth + groupMetrics[@"horizontalPadding"].doubleValue * 2;
+        BOOL usesPaperIndexStyle = groupMetrics[@"usesPaperIndexStyle"].boolValue;
+        CGFloat groupButtonHeight = usesPaperIndexStyle
+            ? tabHeight
+            : metrics[@"groupButtonHeight"].doubleValue;
         CGFloat groupButtonY = floor((tabHeight - groupButtonHeight) / 2.0);
-        NSButton *groupButton = [[NSButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
-                                                                           groupButtonY,
-                                                                           labelWidth,
-                                                                           groupButtonHeight)];
+        TideyRightPanelGroupButton *groupButton =
+            [[TideyRightPanelGroupButton alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
+                                                                         groupButtonY,
+                                                                         labelWidth,
+                                                                         groupButtonHeight)];
         groupButton.bordered = NO;
         groupButton.buttonType = NSButtonTypeMomentaryChange;
         groupButton.title = groupLabel;
@@ -5270,29 +5864,27 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         groupButton.target = self;
         groupButton.action = @selector(tideyRightPanelSelectGroup:);
         groupButton.wantsLayer = YES;
-        groupButton.layer.cornerRadius = floor(groupButtonHeight / 2.0);
-        NSColor *expandedBackgroundColor = [NSColor colorWithSRGBRed:(255.0 / 255.0)
-                                                               green:(177.0 / 255.0)
-                                                                blue:(27.0 / 255.0)
-                                                               alpha:0.20];
-        NSColor *collapsedBackgroundColor = [NSColor colorWithSRGBRed:(255.0 / 255.0)
-                                                                green:(177.0 / 255.0)
-                                                                 blue:(27.0 / 255.0)
-                                                                alpha:0.10];
-        NSColor *expandedTextColor = [NSColor colorWithSRGBRed:(255.0 / 255.0)
-                                                         green:(177.0 / 255.0)
-                                                          blue:(27.0 / 255.0)
-                                                         alpha:1.0];
-        NSColor *collapsedTextColor = [NSColor colorWithSRGBRed:(209.0 / 255.0)
-                                                          green:(152.0 / 255.0)
-                                                           blue:(38.0 / 255.0)
-                                                          alpha:1.0];
+        NSColor *expandedBackgroundColor = tokens.rightPanelGroupExpandedFillColor;
+        NSColor *collapsedBackgroundColor = tokens.rightPanelGroupCollapsedFillColor;
+        NSColor *expandedTextColor = tokens.rightPanelGroupExpandedTextColor;
+        NSColor *collapsedTextColor = usesPaperIndexStyle
+            ? tokens.rightPanelTertiaryTextColor
+            : tokens.rightPanelGroupCollapsedTextColor;
+        groupButton.tideyUsesPaperIndexStyle = usesPaperIndexStyle;
+        groupButton.tideyExpanded = group.expanded;
+        groupButton.tideyDrawsTrailingEdge = (!group.expanded || group.visibleTabs.count == 0);
+        groupButton.tideyOutlineColor = tokens.tabOutlineColor;
+        groupButton.tideyExpandedTextColor = expandedTextColor;
+        groupButton.tideyCollapsedTextColor = collapsedTextColor;
+        groupButton.tideyHoverTextColor = tokens.rightPanelSecondaryTextColor;
+        groupButton.layer.cornerRadius = usesPaperIndexStyle ? 0 : floor(groupButtonHeight / 2.0);
         groupButton.layer.backgroundColor = (group.expanded ? expandedBackgroundColor : collapsedBackgroundColor).CGColor;
         groupButton.attributedTitle = [[NSAttributedString alloc] initWithString:groupLabel
                                                                       attributes:@{
             NSFontAttributeName: groupLabelAttributes[NSFontAttributeName],
             NSForegroundColorAttributeName: group.expanded ? expandedTextColor : collapsedTextColor,
         }];
+        [groupButton tideyUpdateAppearance];
         [tabStripView addSubview:groupButton];
         x += labelWidth;
 
@@ -5300,7 +5892,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             continue;
         }
 
-        x += kTideyRightPanelGroupTabsGap;
+        x += groupMetrics[@"tabsGap"].doubleValue;
         for (NSInteger groupIndex = 0; groupIndex < (NSInteger)group.visibleTabs.count; groupIndex++) {
             TideyEditorTab *tab = group.visibleTabs[groupIndex];
             NSString *title = tab.dirty ? [NSString stringWithFormat:@"● %@", tab.displayName ?: @"Untitled"] : (tab.displayName ?: @"Untitled");
@@ -5310,10 +5902,12 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             effectiveWidthIndex++;
             NSInteger originalIndex = [pane.tabs indexOfObjectIdenticalTo:tab];
 
+            CGFloat tabVerticalInset = metrics[@"tabVerticalInset"].doubleValue;
+            CGFloat tabContentHeight = MAX(22, tabHeight - tabVerticalInset * 2);
             TideyEditorTabItemView *tabView = [[TideyEditorTabItemView alloc] initWithFrame:NSMakeRect(x - pane.tabStripScrollOffset,
-                                                                                                        0,
+                                                                                                        tabVerticalInset,
                                                                                                         tabWidth,
-                                                                                                        tabHeight)];
+                                                                                                        tabContentHeight)];
             tabView.tideyOwner = (id<TideyEditorTabItemViewOwner>)self;
             tabView.tideyPane = pane;
             tabView.tideyTabIndex = originalIndex;
@@ -5322,40 +5916,55 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             tabView.tideyDragTitle = title;
             BOOL selected = (originalIndex == pane.selectedTabIndex);
             tabView.tideySelected = selected;
+            if (selected) {
+                selectedPaperTabLeadingCornerFrame =
+                    [[self class] tideyRightPanelLeadingCornerOverlayFrameForSelectedTabFrame:tabView.frame
+                                                                               tabStripBounds:tabStripView.bounds];
+                tabView.tideyUsesLeadingCornerRenderer =
+                    !NSIsEmptyRect(selectedPaperTabLeadingCornerFrame);
+            }
             tabView.tideyHovered = NO;
             [tabView tideyUpdateAppearance];
 
-            NSFont *baseFont = [NSFont systemFontOfSize:11 weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
+            NSFont *baseFont = [NSFont systemFontOfSize:tabFontSize
+                                                  weight:selected ? NSFontWeightSemibold : NSFontWeightMedium];
             TideyFadingPassthroughLabel *titleLabel = [TideyFadingPassthroughLabel labelWithString:title];
             titleLabel.usesSingleLineMode = YES;
             titleLabel.maximumNumberOfLines = 1;
             titleLabel.alignment = NSTextAlignmentLeft;
             titleLabel.lineBreakMode = NSLineBreakByClipping;
             titleLabel.font = tab.preview ? [[NSFontManager sharedFontManager] convertFont:baseFont toHaveTrait:NSItalicFontMask] : baseFont;
-            titleLabel.textColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+            titleLabel.textColor = selected ? tokens.rightPanelPrimaryTextColor : tokens.rightPanelSecondaryTextColor;
             NSSize titleLabelSize = titleLabel.fittingSize;
-            CGFloat titleLabelHeight = MIN(MAX(14.0, ceil(titleLabelSize.height)), MAX(14.0, tabHeight - 4));
-            CGFloat titleLabelY = floor((tabHeight - titleLabelHeight) / 2.0);
+            CGFloat titleLabelHeight = MIN(MAX(14.0, ceil(titleLabelSize.height)), MAX(14.0, tabContentHeight - 4));
+            CGFloat titleLabelY = floor((tabContentHeight - titleLabelHeight) / 2.0);
             BOOL showCloseButton = [[self class] tideyRightPanelShouldShowCloseButtonForWidth:tabWidth
                                                                                      selected:selected];
-            CGFloat titleTrailingInset = showCloseButton ? 34 : 18;
-            titleLabel.frame = NSMakeRect(10,
+            CGFloat titleLeadingInset = metrics[@"titleLeadingInset"].doubleValue;
+            CGFloat titleTrailingInset = (showCloseButton
+                ? metrics[@"titleTrailingInsetWithClose"]
+                : metrics[@"titleTrailingInsetWithoutClose"]).doubleValue;
+            CGFloat titleWidth = tabWidth - titleTrailingInset;
+            titleLabel.frame = NSMakeRect(titleLeadingInset,
                                           titleLabelY,
-                                          MAX(0, tabWidth - titleTrailingInset),
+                                          MAX(0, titleWidth),
                                           titleLabelHeight);
             titleLabel.tideyFullTextWidth = titleLabelSize.width;
             titleLabel.accessibilityValue = title;
             [tabView addSubview:titleLabel];
 
             if (showCloseButton) {
-                NSButton *closeButton = [[NSButton alloc] initWithFrame:NSMakeRect(tabWidth - 22,
-                                                                                   2,
-                                                                                   20,
-                                                                                   tabHeight - 2)];
+                const CGFloat closeWidth = metrics[@"closeButtonWidth"].doubleValue;
+                const CGFloat closeTrailingInset = metrics[@"closeButtonTrailingInset"].doubleValue;
+                NSRect closeFrame = NSMakeRect(tabWidth - closeTrailingInset - closeWidth,
+                                               2,
+                                               closeWidth,
+                                               tabHeight - 2);
+                NSButton *closeButton = [[NSButton alloc] initWithFrame:closeFrame];
                 closeButton.bordered = NO;
                 closeButton.buttonType = NSButtonTypeMomentaryChange;
                 closeButton.font = [NSFont systemFontOfSize:10 weight:NSFontWeightSemibold];
-                closeButton.contentTintColor = selected ? NSColor.labelColor : NSColor.secondaryLabelColor;
+                closeButton.contentTintColor = selected ? tokens.rightPanelPrimaryTextColor : tokens.rightPanelSecondaryTextColor;
                 closeButton.title = @"✕";
                 closeButton.tag = originalIndex;
                 closeButton.target = self;
@@ -5365,9 +5974,15 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             }
 
             BOOL isLastInGroup = (groupIndex == (NSInteger)group.visibleTabs.count - 1);
-            tabView.tideySeparatorView.hidden = isLastInGroup;
+            tabView.tideyLastInGroup = isLastInGroup;
+            [tabView tideyUpdateAppearance];
 
             [tabStripView addSubview:tabView];
+            if (selected) {
+                // Front sheet: the selected tab sits above its neighbours.
+                [tabStripView addSubview:tabView positioned:NSWindowAbove relativeTo:nil];
+                selectedPaperTabView = tabView;
+            }
             x += tabWidth;
         }
 
@@ -5379,7 +5994,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             addButton.bordered = NO;
             addButton.buttonType = NSButtonTypeMomentaryChange;
             addButton.font = [NSFont systemFontOfSize:14 weight:NSFontWeightMedium];
-            addButton.contentTintColor = NSColor.secondaryLabelColor;
+            addButton.contentTintColor = tokens.rightPanelSecondaryTextColor;
             addButton.title = @"+";
             addButton.alignment = NSTextAlignmentCenter;
             addButton.target = self;
@@ -5397,6 +6012,43 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         pane.tabStripScrollOffset = clampedOffset;
         [self reloadTideyRightPanelTabsForPane:pane];
         return;
+    }
+
+    if (selectedPaperTabView && tokens.tabOutlineColor.alphaComponent > 0) {
+        // Same leading-corner treatment as a selected non-leading terminal tab.
+        const NSRect tabFrame = selectedPaperTabView.frame;
+        NSColor *stripBackgroundColor = activePane
+            ? tokens.rightPanelActiveTabStripBackgroundColor
+            : tokens.rightPanelInactiveTabStripBackgroundColor;
+        if (!NSIsEmptyRect(selectedPaperTabLeadingCornerFrame)) {
+            TideyPaperTabLeadingCornerView *leadingCornerView =
+                [[TideyPaperTabLeadingCornerView alloc] initWithFrame:selectedPaperTabLeadingCornerFrame];
+            leadingCornerView.tideyTabWidth = NSWidth(tabFrame);
+            leadingCornerView.tideyTabHeight = NSHeight(tabFrame);
+            leadingCornerView.tideyAvailableLeadingWidth =
+                MAX(0, NSWidth(selectedPaperTabLeadingCornerFrame) - TideyPaperTabPolicy.outlineWidth);
+            leadingCornerView.tideyOutlineColor = tokens.tabSelectedOutlineColor;
+            leadingCornerView.tideySeparatorColor = tokens.paneBoundaryColor;
+            leadingCornerView.tideyStripBackgroundColor = stripBackgroundColor;
+            [tabStripView addSubview:leadingCornerView positioned:NSWindowAbove relativeTo:nil];
+        }
+
+        // Same trailing-corner treatment as the terminal tab bar.
+        const CGFloat availableTrailingWidth = MAX(0, NSMaxX(tabStripView.bounds) - NSMaxX(tabFrame));
+        const NSRect baselineRect = [TideyPaperTabPolicy trailingBaselineRectForTabRect:NSMakeRect(0, 0, 1, NSHeight(tabFrame))
+                                                                 availableTrailingWidth:availableTrailingWidth];
+        TideyPaperTabTrailingCornerView *cornerView =
+            [[TideyPaperTabTrailingCornerView alloc] initWithFrame:NSMakeRect(NSMaxX(tabFrame) - TideyPaperTabPolicy.outlineWidth,
+                                                                              NSMinY(tabFrame),
+                                                                              NSWidth(baselineRect),
+                                                                              NSHeight(tabFrame))];
+        cornerView.tideyTabWidth = NSWidth(tabFrame);
+        cornerView.tideyTabHeight = NSHeight(tabFrame);
+        cornerView.tideyAvailableTrailingWidth = availableTrailingWidth;
+        cornerView.tideyOutlineColor = tokens.tabSelectedOutlineColor;
+        cornerView.tideySeparatorColor = tokens.paneBoundaryColor;
+        cornerView.tideyStripBackgroundColor = stripBackgroundColor;
+        [tabStripView addSubview:cornerView positioned:NSWindowAbove relativeTo:nil];
     }
 
     if (pane == _primaryPane) {
@@ -6400,10 +7052,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
 
     NSView *containerView = [[NSView alloc] initWithFrame:NSZeroRect];
     containerView.wantsLayer = YES;
-    containerView.layer.backgroundColor = [NSColor colorWithSRGBRed:0.10
-                                                              green:0.11
-                                                               blue:0.14
-                                                              alpha:1].CGColor;
+    containerView.layer.backgroundColor = TideyInterfaceThemeController.shared.currentTokens.rightPanelBackgroundColor.CGColor;
     [_tideyEditorPanelView addSubview:containerView positioned:NSWindowBelow relativeTo:_tideyEditorTabStripView];
     _secondaryPane.containerView = containerView;
 
@@ -6413,6 +7062,8 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     tabStripView.layer.masksToBounds = YES;
     ((TideyRightPanelTabStripView *)tabStripView).tideyOwner = self;
     [containerView addSubview:tabStripView];
+    [self tideyAddPaneBoundaryViewWithEdge:TideyPaneBoundaryEdgeBottom
+                                    toView:tabStripView];
     _secondaryPane.tabStripView = tabStripView;
 
     [self loadTideyEditorShellIfNeededForPane:_secondaryPane];
@@ -6750,11 +7401,16 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     NSString *vsURLString = [[self tideyEditorMonacoVSURL] absoluteString];
     NSString *loaderURLString = [[self tideyEditorMonacoLoaderURL] absoluteString];
     NSString *workerURLString = [[self tideyEditorMonacoWorkerURL] absoluteString];
+    TideyEditorCanvasThemeAdapter *editorAdapter =
+        TideyInterfaceThemeController.shared.currentTheme.editorCanvasAdapter;
+    NSString *pageBackgroundHex = editorAdapter.pageBackgroundHex;
+    NSString *monacoThemeName = editorAdapter.monacoThemeName;
+    NSString *themeDefinitionScript = editorAdapter.themeDefinitionScript;
     return [NSString stringWithFormat:@"<!doctype html>"
             "<html><head><meta charset='utf-8'>"
             "<meta name='viewport' content='width=device-width, initial-scale=1'>"
             "<style>"
-            "html, body, #editor { margin:0; padding:0; width:100%%; height:100%%; overflow:hidden; background:#16181d; }"
+            "html, body, #editor { margin:0; padding:0; width:100%%; height:100%%; overflow:hidden; background:%@; }"
             "body { font-family: -apple-system, BlinkMacSystemFont, sans-serif; }"
             "::-webkit-scrollbar { display: none; }"
             ".monaco-editor .scrollbar .slider { opacity: 0; transition: opacity 0.3s; }"
@@ -6801,6 +7457,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "  setEditable(editable) {"
             "    window.__tideyPendingEditable = !!editable;"
             "    if (window.__tideyEditor) { window.__tideyEditor.updateOptions({ readOnly: !window.__tideyPendingEditable }); }"
+            "  },"
+            "  setTheme(themeName, backgroundHex) {"
+            "    document.documentElement.style.background = backgroundHex;"
+            "    document.body.style.background = backgroundHex;"
+            "    if (window.__tideyEditor && window.monaco) { monaco.editor.setTheme(themeName); }"
             "  }"
             "};"
             "</script>"
@@ -6809,10 +7470,11 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "<script>"
             "require.config({ paths: { vs: '%@' } });"
             "require(['vs/editor/editor.main'], function() {"
+            "  %@"
             "  window.__tideyEditor = monaco.editor.create(document.getElementById('editor'), {"
             "    value: '',"
             "    language: 'plaintext',"
-            "    theme: 'vs-dark',"
+            "    theme: '%@',"
             "    readOnly: false,"
             "    automaticLayout: true,"
             "    wordWrap: 'on',"
@@ -6859,10 +7521,13 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
             "  }"
             "});"
             "</script></body></html>",
+            pageBackgroundHex,
             baseURLString,
             workerURLString,
             loaderURLString,
-            vsURLString];
+            vsURLString,
+            themeDefinitionScript,
+            monacoThemeName];
 }
 
 - (NSString *)tideySidebarWorkspaceTitleAtIndex:(NSInteger)index {
@@ -6932,6 +7597,157 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
     [self reloadTideySidebar];
 }
 
+- (void)tideyInterfaceThemeDidChange:(NSNotification *)notification {
+    (void)notification;
+    [self tideyApplyInterfaceThemeTokens];
+}
+
+- (NSColor *)tideyPaneBoundaryColorForEdge:(TideyPaneBoundaryEdge)edge
+                                     tokens:(TideyInterfaceThemeTokens *)tokens {
+    return [[self class] tideyPaneBoundaryEdgeIsResizer:edge]
+        ? tokens.paneResizerPullBarColor
+        : tokens.paneBoundaryColor;
+}
+
+- (TideyPaneBoundaryView *)tideyAddPaneBoundaryViewWithEdge:(TideyPaneBoundaryEdge)edge toView:(NSView *)parent {
+    if (!parent) {
+        return nil;
+    }
+    TideyPaneBoundaryView *boundaryView = [[TideyPaneBoundaryView alloc] initWithFrame:NSZeroRect];
+    boundaryView.tideyEdge = edge;
+    boundaryView.autoresizingMask = NSViewWidthSizable | NSViewHeightSizable;
+    boundaryView.wantsLayer = YES;
+    boundaryView.layer.masksToBounds = NO;
+    boundaryView.layer.cornerRadius = 0;  // set per frame in tideyPinToSuperviewEdge
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    // Colors are applied before the first pin so no layout pass runs with a
+    // nil boundary color.
+    [boundaryView tideyApplyBoundaryColor:[self tideyPaneBoundaryColorForEdge:edge tokens:tokens]
+                             tabJoinColor:tokens.tabSelectedOutlineColor];
+    [parent addSubview:boundaryView positioned:NSWindowAbove relativeTo:nil];
+    [_tideyPaneBoundaryViews addObject:boundaryView];
+    return boundaryView;
+}
+
+- (void)tideyApplyInterfaceThemeTokens {
+    TideyInterfaceThemeDefinition *theme = TideyInterfaceThemeController.shared.currentTheme;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    [self tideyUpdateWorkspaceSeparatorJoinGradientState];
+    for (TideyPaneBoundaryView *boundaryView in _tideyPaneBoundaryViews) {
+        [boundaryView tideyApplyBoundaryColor:
+            [self tideyPaneBoundaryColorForEdge:boundaryView.tideyEdge tokens:tokens]
+                                 tabJoinColor:tokens.tabSelectedOutlineColor];
+        [boundaryView tideyPinToSuperviewEdge];
+    }
+    _tideyEditorFileTreeTopBoundaryView.layer.backgroundColor = tokens.paneBoundaryColor.CGColor;
+    _tideyEditorFileTreeHeaderView.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
+    if (@available(macOS 11.0, *)) {
+        _tideySidebarTableView.style = [[self class] tideySidebarTableStyle];
+    }
+    _tideySidebarTableView.selectionHighlightStyle = [[self class] tideySidebarSelectionHighlightStyle];
+    NSColor *sidebarTableBackgroundOverride = [[self class] tideySidebarTableBackgroundOverrideColor];
+    _tideySidebarTableView.backgroundColor = sidebarTableBackgroundOverride
+        ?: _tideyClassicSidebarTableBackgroundColor;
+    self.color = tokens.terminalSurroundColor;
+    _tideySidebarView.layer.backgroundColor = tokens.sidebarBackgroundColor.CGColor;
+    _tideyEditorPanelView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
+    _tideyEditorTabStripView.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
+    _tideyEditorFileTreeContainerView.layer.backgroundColor = tokens.rightPanelFileTreeBackgroundColor.CGColor;
+    _tideyEditorFileTreeView.selectionHighlightStyle = [[self class] tideyFileTreeSelectionHighlightStyle];
+    NSColor *fileTreeBackgroundOverride = [[self class] tideyFileTreeBackgroundOverrideColor];
+    _tideyEditorFileTreeView.backgroundColor = fileTreeBackgroundOverride
+        ?: _tideyClassicFileTreeBackgroundColor;
+    [_tideyEditorFileTreeView reloadData];
+    _tideyEditorPanelLabel.textColor = tokens.rightPanelPrimaryTextColor;
+    _windowTitleLabel.textColor = tokens.usesHostTitlebarTextColors
+        ? [self.delegate rootTerminalViewTabBarTextColorForTitle]
+        : tokens.sidebarPrimaryTextColor;
+    _windowTitleLabel.font = [NSFont systemFontOfSize:17 weight:NSFontWeightSemibold];
+    _windowNumberLabel.textColor = tokens.usesHostTitlebarTextColors
+        ? [self.delegate rootTerminalViewTabBarTextColorForWindowNumber]
+        : tokens.sidebarSecondaryTextColor;
+    self.tideyEditorSplitDividerView.layer.backgroundColor = tokens.rightPanelSplitDividerColor.CGColor;
+    self.tabBarControl.wantsLayer = YES;
+    self.tabBarControl.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
+    _tabBarBacking.wantsLayer = YES;
+    _tabBarBacking.layer.backgroundColor = tokens.rightPanelTabStripBackgroundColor.CGColor;
+    _tabBarBacking.visualEffectView.hidden = YES;
+    TideyEditorCanvasThemeAdapter *editorAdapter = theme.editorCanvasAdapter;
+    NSString *editorThemeScript = [NSString stringWithFormat:
+        @"if (window.monaco) { %@ } window.tideyNative && window.tideyNative.setTheme('%@', '%@');",
+        editorAdapter.themeDefinitionScript,
+        editorAdapter.monacoThemeName,
+        editorAdapter.pageBackgroundHex];
+    for (TideyRightPanelPane *pane in [self tideyVisibleRightPanelPanes]) {
+        pane.containerView.layer.backgroundColor = tokens.rightPanelBackgroundColor.CGColor;
+        if (pane.editorShellLoaded) {
+            [pane.editorWebView evaluateJavaScript:editorThemeScript completionHandler:nil];
+        }
+        pane.tabStripView.layer.backgroundColor = (pane == self.activePane
+            ? tokens.rightPanelActiveTabStripBackgroundColor
+            : tokens.rightPanelInactiveTabStripBackgroundColor).CGColor;
+        if (!pane.browserToolbarView) {
+            continue;
+        }
+        pane.browserToolbarView.layer.backgroundColor =
+            [TideyBrowserToolbarPolicy toolbarBackgroundColorWithTokens:tokens].CGColor;
+        NSColor *toolbarTint = tokens.browserToolbarControlColor;
+        pane.browserBackButton.contentTintColor = toolbarTint;
+        pane.browserForwardButton.contentTintColor = toolbarTint;
+        pane.browserReloadButton.contentTintColor = toolbarTint;
+        pane.browserURLField.font = [NSFont monospacedSystemFontOfSize:12.5 weight:NSFontWeightRegular];
+        pane.browserURLField.textColor = tokens.rightPanelPrimaryTextColor;
+        pane.browserURLField.backgroundColor = NSColor.clearColor;
+        pane.browserURLField.drawsBackground = NO;
+        pane.browserURLField.bordered = NO;
+        pane.browserURLField.bezeled = NO;
+        pane.browserURLField.layer.cornerRadius = 0;
+        pane.browserURLField.layer.borderWidth = 0;
+        pane.browserURLField.layer.masksToBounds = NO;
+        pane.browserURLFieldContainerView.layer.backgroundColor =
+            [tokens.rightPanelPrimaryTextColor colorWithAlphaComponent:0.05].CGColor;
+        pane.browserURLFieldContainerView.layer.cornerRadius = 8;
+        pane.browserURLFieldContainerView.layer.borderWidth = 1;
+        pane.browserURLFieldContainerView.layer.borderColor = tokens.hairlineColor.CGColor;
+        pane.browserURLFieldContainerView.layer.masksToBounds = YES;
+        [pane.browserURLField setNeedsDisplay:YES];
+        [self tideyLayoutBrowserContainerForPane:pane];
+    }
+    [self layoutTideyEditorContents];
+    [self reloadTideySidebar];
+    [self reloadTideyRightPanelTabs];
+    [self layoutSubviews];
+    [self.tabBarControl setNeedsDisplay:YES];
+    [self setNeedsDisplay:YES];
+}
+
+- (void)tideyUpdateWorkspaceSeparatorJoinGradientState {
+    if (!_tideyWorkspaceSeparatorView) {
+        return;
+    }
+    PSMTabBarCell *selectedCell = nil;
+    for (PSMTabBarCell *cell in _tabBarControl.cells) {
+        if (!cell.isInOverflowMenu && cell.state == NSControlStateValueOn) {
+            selectedCell = cell;
+            break;
+        }
+    }
+    _tideyWorkspaceSeparatorView.tideyUsesPaperTabJoinGradient =
+        selectedCell &&
+        [[self class] tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:selectedCell.frame
+                                                                       tabBarBounds:_tabBarControl.bounds];
+}
+
+- (void)tideyTerminalTabSelectionDidChange {
+    [self tideyUpdateWorkspaceSeparatorJoinGradientState];
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    [_tideyWorkspaceSeparatorView tideyApplyBoundaryColor:
+        [self tideyPaneBoundaryColorForEdge:_tideyWorkspaceSeparatorView.tideyEdge tokens:tokens]
+                                             tabJoinColor:tokens.tabSelectedOutlineColor];
+    [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
+    [_tabBarControl setNeedsDisplay:YES];
+}
+
 - (void)tideyStatusStoreDidChange:(NSNotification *)notification {
     NSString *workspaceIdentifier = notification.userInfo[@"workspaceID"];
     NSInteger row = [self tideySidebarWorkspaceIndexForIdentifier:workspaceIdentifier];
@@ -6941,7 +7757,6 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                                  tableColumnCount:tableColumnCount]) {
         NSIndexSet *rowIndexes = [NSIndexSet indexSetWithIndex:row];
         NSIndexSet *columnIndexes = [NSIndexSet indexSetWithIndexesInRange:NSMakeRange(0, tableColumnCount)];
-        [_tideySidebarTableView noteHeightOfRowsWithIndexesChanged:rowIndexes];
         [_tideySidebarTableView reloadDataForRowIndexes:rowIndexes columnIndexes:columnIndexes];
         [self syncTideySidebarSelection];
         [self layoutTideySidebar];
@@ -6966,6 +7781,14 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
            tableColumnCount > 0;
 }
 
+- (CGFloat)tideyTerminalTabRowHeight {
+    if (self.tabBarControl.hidden) {
+        return 0;
+    }
+    const CGFloat height = NSHeight(self.tabBarControl.frame);
+    return height > 0 ? height : kTideyEditorTabStripHeight;
+}
+
 - (void)layoutTideySidebar {
     const CGFloat width = self.tideySidebarWidth;
     _tideySidebarView.hidden = (width <= 0);
@@ -6974,6 +7797,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
         CGFloat sidebarHeight = NSHeight(_tideySidebarView.bounds);
         _tideySidebarScrollView.frame = NSMakeRect(0, 0, width, sidebarHeight);
     }
+    [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
     [self updateTideyChromeToggleButtons];
 }
 
@@ -7019,6 +7843,9 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                        kTideyDragHandleWidth,
                                                        NSHeight(self.bounds));
     }
+
+    [self tideyUpdateWorkspaceSeparatorJoinGradientState];
+    [_tideyWorkspaceSeparatorView tideyPinToSuperviewEdge];
 
     const CGFloat editorWidth = self.tideyEditorPanelWidth;
     self.tideyEditorDragHandle.hidden = (editorWidth <= 0 || _tideyEditorPanelView.hidden || !self.shouldShowTideyTerminal);
@@ -7093,6 +7920,7 @@ static const CGFloat kTideyBrowserZoomMaximum = 3.0;
                                                             fileTreeButtonY,
                                                             kTideyChromeToggleButtonWidth,
                                                             kTideyChromeToggleButtonHeight);
+    [_tideyEditorFileTreeBoundaryView tideyPinToSuperviewEdge];
 }
 
 - (void)layoutSubviewsWithHiddenTabBarForWindow:(NSWindow *)thisWindow {
@@ -7254,7 +8082,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     self.tabBarControl.frame = NSMakeRect(0, 0, NSWidth(_tabBarBacking.bounds), originalHeight);
     // Fill the 1-2pt gap at the top where PSMMinimalTabStyle doesn't draw.
     self.tabBarControl.wantsLayer = YES;
-    self.tabBarControl.layer.backgroundColor = [NSColor colorWithSRGBRed:0.09 green:0.10 blue:0.13 alpha:1].CGColor;
+    self.tabBarControl.layer.backgroundColor =
+        TideyInterfaceThemeController.shared.currentTokens.rightPanelTabStripBackgroundColor.CGColor;
 }
 
 - (void)layoutSubviewsWithVisibleBottomTabBarForWindow:(NSWindow *)thisWindow {
@@ -7575,7 +8404,9 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         cellView = [self newTideyEditorFileTreeCellView];
     }
     TideyEditorFileNode *node = item;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     cellView.textField.stringValue = node.displayName ?: node.path.lastPathComponent;
+    cellView.textField.textColor = tokens.fileTreeTextColor;
     cellView.textField.lineBreakMode = NSLineBreakByTruncatingTail;
     cellView.textField.usesSingleLineMode = YES;
     cellView.textField.cell.wraps = NO;
@@ -7592,9 +8423,16 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
             fileImage.template = YES;
         });
         cellView.imageView.image = node.directory ? folderImage : fileImage;
-        cellView.imageView.contentTintColor = [NSColor colorWithWhite:0.78 alpha:1];
+        cellView.imageView.contentTintColor = tokens.fileTreeIconColor;
     }
     return cellView;
+}
+
+- (NSTableRowView *)outlineView:(NSOutlineView *)outlineView rowViewForItem:(id)item {
+    if (outlineView != _tideyEditorFileTreeView) {
+        return nil;
+    }
+    return [[TideyFileTreeRowView alloc] initWithFrame:NSZeroRect];
 }
 
 - (NSTableCellView *)newTideyEditorFileTreeCellView {
@@ -7858,24 +8696,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     if (tableView != _tideySidebarTableView) {
         return tableView.rowHeight;
     }
-    if (row < 0 || row >= self.numberOfTideySidebarWorkspaces) {
-        return 60;
-    }
-    NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:row];
-    CGFloat baseHeight = 60;
-    TideyNotificationItem *notification = nil;
-    if (workspaceID.length > 0) {
-        notification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
-    }
-    if (notification && notification.body.length > 0) {
-        baseHeight = 68;
-        BOOL hasStatus = (workspaceID.length > 0 &&
-                          [[TideyStatusStore sharedStore] hasStatusForWorkspaceID:workspaceID]);
-        if (hasStatus) {
-            baseHeight += 14;
-        }
-    }
-    return baseHeight;
+    return kTideySidebarRowHeight;
 }
 
 - (NSTableRowView *)tableView:(NSTableView *)tableView rowViewForRow:(NSInteger)row {
@@ -7901,6 +8722,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 }
 
 - (NSTableCellView *)newTideySidebarCellView {
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     TideySidebarCellView *cellView = [[TideySidebarCellView alloc] initWithFrame:NSZeroRect];
     cellView.identifier = @"TideySidebarSessionCell";
 
@@ -7936,7 +8758,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     titleField.frame = NSMakeRect(36, 30, 140, 20);
     titleField.autoresizingMask = NSViewWidthSizable;
     titleField.font = [NSFont systemFontOfSize:12.5 weight:NSFontWeightSemibold];
-    titleField.textColor = [NSColor whiteColor];
+    titleField.textColor = tokens.sidebarPrimaryTextColor;
     titleField.drawsBackground = NO;
     titleField.backgroundColor = [NSColor clearColor];
     titleField.bezeled = NO;
@@ -7950,7 +8772,7 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     subtitleField.frame = NSMakeRect(36, 12, 164, 16);
     subtitleField.autoresizingMask = NSViewWidthSizable;
     subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-    subtitleField.textColor = [NSColor colorWithWhite:0.72 alpha:1];
+    subtitleField.textColor = tokens.sidebarSecondaryTextColor;
     subtitleField.drawsBackground = NO;
     subtitleField.backgroundColor = [NSColor clearColor];
     subtitleField.bezeled = NO;
@@ -8015,8 +8837,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     closeView.alphaValue = 0.0;
     NSTextField *closeSymbol = [NSTextField labelWithString:@"✕"];
     closeSymbol.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-    closeSymbol.textColor = [NSColor tertiaryLabelColor];
-    closeSymbol.frame = NSMakeRect(0, 0, 16, 16);
+    closeSymbol.textColor = tokens.sidebarCloseColor;
+    closeSymbol.frame = NSMakeRect(4, 4, kTideySidebarCloseGlyphSize, kTideySidebarCloseGlyphSize);
     closeSymbol.alignment = NSTextAlignmentCenter;
     [closeView addSubview:closeSymbol];
     [cellView addSubview:closeView];
@@ -8024,150 +8846,152 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
     return cellView;
 }
 
+- (TideySidebarRowPresentation *)tideySidebarRowPresentationAtIndex:(NSInteger)row {
+    NSString *workspaceIdentifier = [self tideySidebarWorkspaceIdentifierAtIndex:row] ?: @"";
+    TideyNotificationItem *latestUnreadNotification =
+        [self tideySidebarLatestUnreadNotificationAtIndex:row];
+    TideyNotificationItem *latestNotification = nil;
+    if (workspaceIdentifier.length > 0) {
+        latestNotification =
+            [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceIdentifier];
+    }
+    NSArray<TideyStatusEntry *> *statusEntries = @[];
+    if (workspaceIdentifier.length > 0) {
+        statusEntries =
+            [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceIdentifier] ?: @[];
+    }
+    BOOL showsCloseButton =
+        ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
+         [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
+    NSString *shortcutHint = nil;
+    if (_tideyShowingShortcutHints && row < 9) {
+        shortcutHint = [NSString stringWithFormat:@"\u2318%ld", (long)(row + 1)];
+    }
+    return [[TideySidebarRowPresentation alloc]
+        initWithWorkspaceIdentifier:workspaceIdentifier
+                              title:[self tideySidebarWorkspaceTitleAtIndex:row] ?: @""
+                           subtitle:[self tideySidebarWorkspaceSubtitleAtIndex:row] ?: @""
+                        unreadCount:[self tideySidebarWorkspaceUnreadCountAtIndex:row]
+                             pinned:[self tideySidebarWorkspacePinnedAtIndex:row]
+                           selected:(row == self.tideySidebarSelectedWorkspaceIndex)
+                  latestUnreadTitle:(latestUnreadNotification ? (latestUnreadNotification.title ?: @"") : nil)
+                   notificationBody:(latestNotification.body.length > 0 ? latestNotification.body : nil)
+                      statusEntries:statusEntries
+                   showsCloseButton:showsCloseButton
+                       shortcutHint:shortcutHint];
+}
+
 - (void)configureTideySidebarCellView:(NSTableCellView *)cellView row:(NSInteger)row {
-    BOOL selected = (row == self.tideySidebarSelectedWorkspaceIndex);
-    NSInteger unreadCount = [self tideySidebarWorkspaceUnreadCountAtIndex:row];
+    [self configureTideySidebarCellView:cellView
+                           presentation:[self tideySidebarRowPresentationAtIndex:row]];
+}
+
+- (void)configureTideySidebarCellView:(NSTableCellView *)cellView
+                         presentation:(TideySidebarRowPresentation *)presentation {
+    TideyInterfaceThemeDefinition *theme = TideyInterfaceThemeController.shared.currentTheme;
+    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    const NSAutoresizingMaskOptions sharedTopAnchor = NSViewMinYMargin;
     NSView *badgeView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarBadgeViewIdentifier);
+    badgeView.autoresizingMask = sharedTopAnchor;
     NSTextField *badgeLabel = (NSTextField *)[badgeView viewWithTag:1006];
-    badgeView.hidden = (unreadCount <= 0);
-    if (unreadCount > 0) {
-        badgeView.layer.backgroundColor = [NSColor systemRedColor].CGColor;
+    badgeView.hidden = (presentation.unreadCount <= 0);
+    if (presentation.unreadCount > 0) {
+        badgeView.layer.backgroundColor = tokens.sidebarUnreadColor.CGColor;
         badgeLabel.stringValue = @"";
     }
     NSImageView *pinView = (NSImageView *)[cellView viewWithTag:1003];
-    pinView.hidden = ![self tideySidebarWorkspacePinnedAtIndex:row];
+    pinView.autoresizingMask = NSViewMaxXMargin | sharedTopAnchor;
+    pinView.hidden = !presentation.pinned;
+    pinView.contentTintColor = tokens.sidebarPinColor;
+    cellView.textField.font = [NSFont systemFontOfSize:13 weight:NSFontWeightSemibold];
+    cellView.textField.autoresizingMask = NSViewWidthSizable | sharedTopAnchor;
+    if (presentation.unreadCount > 0) {
+        cellView.textField.textColor = presentation.selected
+            ? tokens.sidebarSelectedUnreadTitleColor
+            : tokens.sidebarUnreadTitleColor;
+    } else {
+        cellView.textField.textColor = presentation.selected
+            ? tokens.sidebarSelectedPrimaryTextColor
+            : tokens.sidebarPrimaryTextColor;
+    }
+    cellView.textField.lineBreakMode = NSLineBreakByClipping;
+    cellView.textField.usesSingleLineMode = YES;
+    cellView.textField.cell.wraps = NO;
+    cellView.textField.cell.scrollable = NO;
+    cellView.textField.cell.truncatesLastVisibleLine = NO;
+    NSView *closeView = TideyFindCloseView(cellView);
+    NSTextField *closeSymbol = (NSTextField *)closeView.subviews.firstObject;
+    if ([closeSymbol isKindOfClass:NSTextField.class]) {
+        closeSymbol.textColor = tokens.sidebarCloseColor;
+    }
     CGFloat width = NSWidth(cellView.bounds);
-
-    // Determine notification state for body display.
-    NSString *workspaceID = [self tideySidebarWorkspaceIdentifierAtIndex:row];
-    TideyNotificationItem *latestNotification = [self tideySidebarLatestUnreadNotificationAtIndex:row];
-    TideyNotificationItem *anyNotification = nil;
-    if (workspaceID.length > 0) {
-        anyNotification = [[TideyNotificationStore sharedStore] latestNotificationForWorkspaceID:workspaceID];
-    }
-    BOOL hasBody = (anyNotification && anyNotification.body.length > 0);
-
-    // Determine status entries for this workspace.
-    NSArray<TideyStatusEntry *> *statusEntries = nil;
-    if (workspaceID.length > 0) {
-        statusEntries = [[TideyStatusStore sharedStore] statusEntriesForWorkspaceID:workspaceID];
-    }
-    BOOL hasStatus = (statusEntries.count > 0);
+    BOOL hasStatus = presentation.hasStatus;
+    CGFloat textInset = kTideySidebarWarmTextInset;
 
     NSTextField *bodyField = (NSTextField *)[cellView viewWithTag:1007];
     NSTextField *statusField = (NSTextField *)[cellView viewWithTag:1008];
+    NSArray<NSString *> *statusValues = [presentation.statusEntries valueForKey:@"value"];
+    NSView *subtitleView = [cellView viewWithTag:1002];
+    subtitleView.autoresizingMask = NSViewWidthSizable | sharedTopAnchor;
+    bodyField.autoresizingMask = NSViewWidthSizable | sharedTopAnchor;
 
-    if (hasBody) {
-        // Expanded layout:
-        //   ① Badge + Workspace Title           ✕   (top row)
-        //   Notification body (up to 3 lines, gray)  (middle)
-        //   ⊕ Status (if present)                    (bottom, above cwd)
-        //   ~/cwd                                    (always at very bottom)
-        //
-        // Row height: 68 (no status) or 82 (with status).
-        // sOff shifts upper elements up when status adds 14pt to height.
-        const CGFloat sOff = hasStatus ? 14 : 0;
+    // Workspace cards intentionally expose only the workspace name and its
+    // authoritative status. CWD, notification title, and notification body
+    // remain available to the presentation model but do not compete with the
+    // workspace identity in the sidebar.
+    CGFloat titleY = NSHeight(cellView.bounds) - 31;
+    CGFloat titleHeight = 16;
+    cellView.textField.stringValue = presentation.title;
+    cellView.textField.frame = NSMakeRect(textInset,
+                                          titleY,
+                                          MAX(0, width - 42),
+                                          titleHeight);
 
-        // --- Title row (top) ---
-        cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        CGFloat titleY = 51 + sOff;
-        CGFloat titleX = 8;
-        CGFloat titleMaxW = width - 56;
-        cellView.textField.frame = NSMakeRect(titleX, titleY, MAX(0, titleMaxW), 14);
+    NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
+    subtitleField.hidden = YES;
+    subtitleField.stringValue = @"";
+    bodyField.hidden = YES;
+    bodyField.stringValue = @"";
 
-        CGFloat badgeY = titleY + floor((14.0 - kTideySidebarBadgeSize) / 2.0);
-        badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
-                                     badgeY,
-                                     kTideySidebarBadgeSize,
-                                     kTideySidebarBadgeSize);
-        pinView.frame = NSMakeRect(MAX(0, width - 42), 51 + sOff, 12, 12);
+    pinView.hidden = !presentation.pinned || presentation.showsCloseButton;
+    pinView.frame = NSMakeRect(MAX(0, width - 24),
+                               titleY + 2,
+                               12,
+                               12);
+    CGFloat badgeY = titleY + floor((titleHeight - kTideySidebarBadgeSize) / 2.0);
+    badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
+                                 badgeY,
+                                 kTideySidebarBadgeSize,
+                                 kTideySidebarBadgeSize);
 
-        NSView *closeView = TideyFindCloseView(cellView);
-        BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
-                          [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
-        closeView.hidden = !showClose;
-        closeView.alphaValue = showClose ? 1.0 : 0.0;
-
-        // --- Notification body (middle, up to 2 lines) ---
-        NSString *bodyText = anyNotification.body;
-        if (bodyText.length == 0) {
-            bodyText = anyNotification.title ?: @"";
-        }
-        bodyField.stringValue = bodyText;
-        bodyField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
-        bodyField.hidden = NO;
-        bodyField.frame = NSMakeRect(8, 16 + sOff, MAX(0, width - 16), 28);
-
-        // --- Bottom: cwd above status ---
-        NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
-        subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-        subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor secondaryLabelColor];
-        subtitleField.font = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-        CGFloat cwdY = hasStatus ? 16 : 2;
-        subtitleField.frame = NSMakeRect(8, cwdY, MAX(0, width - 16), 14);
-    } else {
-        // Normal layout (60pt row).
-        // Only indent for badge when there are unread notifications.
-        CGFloat textMaxW = width - 56;
-
-        cellView.textField.stringValue = [self tideySidebarWorkspaceTitleAtIndex:row];
-        CGFloat titleY = hasStatus ? 38 : 30;
-        cellView.textField.frame = NSMakeRect(8, titleY, MAX(0, textMaxW), 14);
-
-        NSTextField *subtitleField = (NSTextField *)[cellView viewWithTag:1002];
-        subtitleField.font = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
-        if (latestNotification) {
-            subtitleField.stringValue = latestNotification.title;
-            subtitleField.textColor = selected ? [NSColor whiteColor] : [NSColor controlAccentColor];
-        } else {
-            subtitleField.stringValue = [self tideySidebarWorkspaceSubtitleAtIndex:row];
-            subtitleField.textColor = selected ? [NSColor colorWithWhite:1 alpha:0.8] : [NSColor colorWithWhite:0.72 alpha:1];
-        }
-        CGFloat subtitleY = hasStatus ? 22 : 12;
-        subtitleField.frame = NSMakeRect(8, subtitleY, MAX(0, width - 16), 14);
-
-        bodyField.hidden = YES;
-        bodyField.stringValue = @"";
-
-        pinView.frame = NSMakeRect(MAX(0, width - 42), 34, 12, 12);
-        CGFloat badgeY = titleY + floor((14.0 - kTideySidebarBadgeSize) / 2.0);
-        badgeView.frame = NSMakeRect(kTideySidebarBadgeLeadingInset,
-                                     badgeY,
-                                     kTideySidebarBadgeSize,
-                                     kTideySidebarBadgeSize);
-
-        NSView *closeView = TideyFindCloseView(cellView);
-        BOOL showClose = ([_tideySidebarTableView isKindOfClass:[TideySidebarTableView class]] &&
-                          [(TideySidebarTableView *)_tideySidebarTableView tideyShouldShowCloseButtonForRow:row]);
-        closeView.hidden = !showClose;
-        closeView.alphaValue = showClose ? 1.0 : 0.0;
-    }
+    closeView.hidden = !presentation.showsCloseButton;
+    closeView.alphaValue = presentation.showsCloseButton ? 1.0 : 0.0;
+    closeView.accessibilityElement = presentation.showsCloseButton;
+    closeView.accessibilityRole = NSAccessibilityButtonRole;
+    closeView.accessibilityLabel = [NSString stringWithFormat:@"Close %@", presentation.title];
 
     [cellView addSubview:badgeView positioned:NSWindowAbove relativeTo:nil];
 
     // Configure status field at the bottom of the cell.
     if (hasStatus) {
-        // Apply color from the first entry that has one, or fall back to secondaryLabelColor.
         NSColor *statusColor = nil;
-        for (TideyStatusEntry *entry in statusEntries) {
+        for (TideyStatusEntry *entry in presentation.statusEntries) {
             if (entry.colorHex.length > 0) {
                 statusColor = [self tideyColorFromHexString:entry.colorHex];
                 if (statusColor) break;
             }
         }
-        NSColor *effectiveColor;
-        if (selected) {
-            effectiveColor = [NSColor colorWithWhite:1 alpha:0.8];
-        } else {
-            effectiveColor = statusColor ?: [NSColor secondaryLabelColor];
-        }
+        NSColor *effectiveColor = [theme.statusSemanticsAdapter colorForStatusValues:statusValues
+                                                                       producerColor:statusColor
+                                                                            selected:presentation.selected];
 
         NSMutableAttributedString *statusAttr = [[NSMutableAttributedString alloc] init];
+        NSFont *statusFont = [NSFont systemFontOfSize:11 weight:NSFontWeightRegular];
         NSDictionary *textAttrs = @{
-            NSFontAttributeName: [NSFont systemFontOfSize:10 weight:NSFontWeightRegular],
+            NSFontAttributeName: statusFont,
             NSForegroundColorAttributeName: effectiveColor,
         };
-        for (TideyStatusEntry *entry in statusEntries) {
+        for (TideyStatusEntry *entry in presentation.statusEntries) {
             if (statusAttr.length > 0) {
                 [statusAttr appendAttributedString:[[NSAttributedString alloc] initWithString:@"  "
                                                                                   attributes:textAttrs]];
@@ -8183,8 +9007,8 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
                     NSImageSymbolConfiguration *symbolConfig =
                         [NSImageSymbolConfiguration configurationWithHierarchicalColor:effectiveColor];
                     symbolImage = [symbolImage imageWithSymbolConfiguration:symbolConfig];
-                    NSFont *textFont = [NSFont systemFontOfSize:10 weight:NSFontWeightRegular];
-                    CGFloat iconSize = 9.0;
+                    NSFont *textFont = statusFont;
+                    CGFloat iconSize = 10.0;
                     // Center the icon vertically relative to the text cap height.
                     CGFloat yOffset = (textFont.capHeight - iconSize) / 2.0;
                     NSTextAttachment *attachment = [[NSTextAttachment alloc] init];
@@ -8200,24 +9024,47 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
         }
         statusField.attributedStringValue = statusAttr;
         statusField.hidden = NO;
-        // Status always at the bottom (below cwd).
-        CGFloat statusY = hasBody ? 2 : 6;
-        statusField.frame = NSMakeRect(8, statusY, MAX(0, width - 16), 12);
+        // The reserved bottom slot keeps status arrival from moving the name.
+        CGFloat statusY = 15;
+        statusField.frame = NSMakeRect(textInset,
+                                       statusY,
+                                       MAX(0, width - textInset * 2),
+                                       14);
         statusField.textColor = effectiveColor;
+        statusField.font = statusFont;
+        statusField.usesSingleLineMode = YES;
+        statusField.accessibilityLabel = [NSString stringWithFormat:@"Status: %@",
+                                                                     [statusValues componentsJoinedByString:@", "]];
     } else {
         statusField.hidden = YES;
         statusField.stringValue = @"";
+        statusField.accessibilityLabel = @"";
     }
+
+    NSMutableArray<NSString *> *accessibilityParts = [NSMutableArray arrayWithObject:presentation.title];
+    if (statusValues.count > 0) {
+        [accessibilityParts addObject:[statusValues componentsJoinedByString:@", "]];
+    }
+    if (presentation.unreadCount > 0) {
+        [accessibilityParts addObject:[NSString stringWithFormat:@"%ld unread",
+                                                                (long)presentation.unreadCount]];
+    }
+    cellView.accessibilityElement = YES;
+    cellView.accessibilityRole = NSAccessibilityRowRole;
+    cellView.accessibilityLabel = [accessibilityParts componentsJoinedByString:@", "];
+    cellView.toolTip = presentation.latestUnreadTitle;
 
     // Configure shortcut hint overlay (⌘1 .. ⌘9).
     NSView *hintView = TideyFindSubviewWithIdentifier(cellView, kTideySidebarHintViewIdentifier);
     if (hintView) {
+        hintView.autoresizingMask = NSViewMinXMargin | sharedTopAnchor;
         NSTextField *hintLabel = (NSTextField *)[hintView viewWithTag:1009];
-        if (_tideyShowingShortcutHints && row < 9) {
-            hintLabel.stringValue = [NSString stringWithFormat:@"\u2318%ld", (long)(row + 1)];
+        if (presentation.shortcutHint) {
+            hintLabel.stringValue = presentation.shortcutHint;
             CGFloat hintX = MAX(0, width - 40);
-            CGFloat hintY = hasBody ? 46 : 32;
+            CGFloat hintY = 13;
             hintView.frame = NSMakeRect(hintX, hintY, 28, 18);
+            hintView.layer.backgroundColor = tokens.sidebarBackgroundColor.CGColor;
             hintView.hidden = NO;
             [NSAnimationContext runAnimationGroup:^(NSAnimationContext *context) {
                 context.duration = 0.15;
@@ -8529,6 +9376,10 @@ decisionHandler:(void (^)(WKNavigationActionPolicy))decisionHandler {
 }
 
 - (void)tideyApplicationDidBecomeActive:(NSNotification *)notification {
+    [self tideyDismissShortcutHints];
+}
+
+- (void)tideyApplicationDidResignActive:(NSNotification *)notification {
     [self tideyDismissShortcutHints];
 }
 

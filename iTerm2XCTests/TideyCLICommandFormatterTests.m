@@ -41,6 +41,32 @@
     XCTAssertEqualObjects(messages, expected);
 }
 
+- (void)testMessagesForCodexHookEventsDriveIdleRunningIdleLifecycle {
+    NSArray<NSString *> *sessionStart =
+        [TideyCLICommandFormatter messagesForCodexHookEvent:@"session-start"
+                                                workspaceID:@"workspace-1"
+                                                 payloadJSON:nil];
+    XCTAssertEqualObjects(sessionStart, (@[
+        @"report_shell_state prompt --workspace_id=workspace-1",
+        @"{\"action\":\"set_title\",\"workspace_id\":\"workspace-1\",\"title\":\"Codex\"}"
+    ]));
+
+    NSArray<NSString *> *promptSubmit =
+        [TideyCLICommandFormatter messagesForCodexHookEvent:@"user-prompt-submit"
+                                                workspaceID:@"workspace-1"
+                                                 payloadJSON:nil];
+    XCTAssertEqualObjects(promptSubmit, (@[
+        @"report_shell_state running --workspace_id=workspace-1"
+    ]));
+
+    NSArray<NSString *> *stop =
+        [TideyCLICommandFormatter messagesForCodexHookEvent:@"stop"
+                                                workspaceID:@"workspace-1"
+                                                 payloadJSON:nil];
+    XCTAssertEqualObjects(stop.lastObject,
+                          @"report_shell_state prompt --workspace_id=workspace-1");
+}
+
 - (void)testMessagesForClaudeHookEventStopUsesTranscriptSummary {
     NSString *stdinJSON = @"{\"transcriptPath\":\"~/ignored.jsonl\"}";
     NSString *transcript =

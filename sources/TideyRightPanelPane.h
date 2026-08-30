@@ -11,6 +11,7 @@
 @property(nonatomic, strong) NSView *tabStripView;
 @property(nonatomic, strong) NSView *browserContainerView;
 @property(nonatomic, strong) NSView *browserToolbarView;
+@property(nonatomic, strong) NSView *browserURLFieldContainerView;
 @property(nonatomic, strong) WKWebView *editorWebView;
 @property(nonatomic, strong) WKWebView *browserWebView;
 @property(nonatomic, strong) TideyBrowserEngine *browserEngine;

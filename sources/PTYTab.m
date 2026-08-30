@@ -251,7 +251,20 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
     return [NSImage it_imageNamed:@"important" forClass:self.class];
 }
 
++ (NSImage *)tideyNewOutputDotImageWithColor:(NSColor *)color {
+    // Same 16pt slot as the NewOutput assets; a 9pt dot centered in it.
+    return [NSImage imageOfSize:NSMakeSize(16, 16) drawBlock:^{
+        [color setFill];
+        [[NSBezierPath bezierPathWithOvalInRect:NSMakeRect(3.5, 3.5, 9, 9)] fill];
+    }];
+}
+
 + (NSImage *)imageForNewOutputWithAppearance:(NSAppearance *)appearance {
+    NSColor *themeDotColor =
+        TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabNewOutputDotColor;
+    if (themeDotColor) {
+        return [self tideyNewOutputDotImageWithColor:themeDotColor];
+    }
     iTermPreferencesTabStyle preferredStyle = [iTermPreferences intForKey:kPreferenceKeyTabStyle];
     switch ((iTermPreferencesTabStyle)[appearance it_tabStyle:preferredStyle]) {
         case TAB_STYLE_AUTOMATIC:

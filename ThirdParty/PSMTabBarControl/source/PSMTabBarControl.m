@@ -74,6 +74,10 @@ PSMTabBarControlOptionKey PSMTabBarControlOptionColoredDrawBottomLineForHorizont
 PSMTabBarControlOptionKey PSMTabBarControlOptionFontSizeOverride =
     @"PSMTabBarControlOptionFontSizeOverride";
 PSMTabBarControlOptionKey PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence = @"PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence";
+PSMTabBarControlOptionKey PSMTabBarControlOptionSelectedUnderlineColor = @"PSMTabBarControlOptionSelectedUnderlineColor";
+PSMTabBarControlOptionKey PSMTabBarControlOptionPaperTabOutlineColor = @"PSMTabBarControlOptionPaperTabOutlineColor";
+PSMTabBarControlOptionKey PSMTabBarControlOptionPaperTabSelectedOutlineColor = @"PSMTabBarControlOptionPaperTabSelectedOutlineColor";
+PSMTabBarControlOptionKey PSMTabBarControlOptionPaperTabSelectedFillColor = @"PSMTabBarControlOptionPaperTabSelectedFillColor";
 PSMTabBarControlOptionKey PSMTabBarControlOptionDragEdgeHeight = @"PSMTabBarControlOptionDragEdgeHeight";
 PSMTabBarControlOptionKey PSMTabBarControlOptionAttachedToTitleBar = @"PSMTabBarControlOptionAttachedToTitleBar";
 PSMTabBarControlOptionKey PSMTabBarControlOptionHTMLTabTitles = @"PSMTabBarControlOptionHTMLTabTitles";
@@ -2833,4 +2837,3 @@ static CFAbsoluteTime gDragMoveFirstTime = 0;
 }
 
 @end
-

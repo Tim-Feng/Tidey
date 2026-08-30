@@ -6,11 +6,8 @@
 //
 
 #import "PSMMinimalTabStyle.h"
+#import "iTerm2SharedARC-Swift.h"
 #import "PSMOverflowPopUpButton.h"
-
-static NSColor *PSMTideyTabBarBackgroundColor(void) {
-    return [NSColor colorWithSRGBRed:0.102 green:0.108 blue:0.135 alpha:1];
-}
 
 @implementation NSColor(PSMMinimalTabStyle)
 
@@ -78,7 +75,7 @@ static NSColor *PSMTideyTabBarBackgroundColor(void) {
 }
 
 - (NSColor *)tabBarColor {
-    return PSMTideyTabBarBackgroundColor();
+    return [self.delegate minimalTabStyleBackgroundColor] ?: NSColor.blackColor;
 }
 
 - (BOOL)backgroundIsDark {
@@ -125,7 +122,16 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     return [NSColor clearColor];
 }
 
+- (NSColor *)paperTabOutlineColor {
+    return [self.tabBar.delegate tabView:self.tabBar
+                           valueOfOption:PSMTabBarControlOptionPaperTabOutlineColor];
+}
+
 - (NSColor *)verticalLineColorSelected:(BOOL)selected {
+    if ([self paperTabOutlineColor]) {
+        // Paper tabs carry their own outlines; the flat divider would double-draw.
+        return [NSColor clearColor];
+    }
     return [NSColor colorWithWhite:0.25 alpha:1];
 }
 
@@ -149,6 +155,15 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
 }
 
 - (NSColor *)backgroundColorSelected:(BOOL)selected highlightAmount:(CGFloat)highlightAmount {
+    if (selected && [self paperTabOutlineColor]) {
+        // Paper tabs: the front sheet is filled with its content surface, not
+        // the darker desk behind the tabs.
+        NSColor *fill = [self.tabBar.delegate tabView:self.tabBar
+                                        valueOfOption:PSMTabBarControlOptionPaperTabSelectedFillColor];
+        if (fill) {
+            return fill;
+        }
+    }
     if (selected || highlightAmount <= 0) {
         return self.tabBarColor;
     }
@@ -193,7 +208,13 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
     if (bar.orientation != PSMTabBarHorizontalOrientation) {
         return;
     }
-    [[NSColor controlAccentColor] set];
+    if ([self paperTabOutlineColor]) {
+        // Paper tabs mark focus with the selected outline, not an underline.
+        return;
+    }
+    NSColor *underlineColor = [bar.delegate tabView:bar
+                                      valueOfOption:PSMTabBarControlOptionSelectedUnderlineColor];
+    [(underlineColor ?: NSColor.controlAccentColor) set];
     NSRect lineRect = NSMakeRect(NSMinX(cell.frame), NSMinY(cell.frame), NSWidth(cell.frame), 2);
     NSRectFillUsingOperation(lineRect, NSCompositingOperationSourceOver);
 }
@@ -418,6 +439,88 @@ static CGFloat PSMWeightedAverage(CGFloat l, CGFloat u, CGFloat w) {
         horizontal:(BOOL)horizontal
       withOverflow:(BOOL)withOverflow {
     [super drawTabBar:bar inRect:rect clipRect:clipRect horizontal:horizontal withOverflow:withOverflow];
+    [self drawPaperTabsInTabBar:bar clipRect:clipRect];
+}
+
+// Tidey Warm paper tabs: every visible tab gets a hairline page outline with
+// rounded top corners; the selected tab is drawn last, full height and open at
+// the bottom so it joins the terminal, while a baseline runs under the
+// unselected tabs on either side of it. Only active when the delegate supplies
+// PSMTabBarControlOptionPaperTabOutlineColor.
+- (void)drawPaperTabsInTabBar:(PSMTabBarControl *)bar clipRect:(NSRect)clipRect {
+    NSColor *outlineColor = [self paperTabOutlineColor];
+    if (!outlineColor || bar.orientation != PSMTabBarHorizontalOrientation || ![bar tabView]) {
+        return;
+    }
+    [NSGraphicsContext saveGraphicsState];
+    [outlineColor set];
+
+    PSMTabBarCell *selectedCell = nil;
+    for (PSMTabBarCell *cell in [bar cells]) {
+        if (cell.isInOverflowMenu) {
+            continue;
+        }
+        if (cell.state == NSControlStateValueOn) {
+            selectedCell = cell;
+            continue;
+        }
+        if (!NSIntersectsRect(NSInsetRect(cell.frame, -1, -1), clipRect)) {
+            continue;
+        }
+        NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:cell.frame selected:NO];
+        [[TideyPaperTabPolicy outlinePathForRect:outlineRect] stroke];
+    }
+
+    // Baseline under everything except the selected tab.
+    const CGFloat baselineY = NSMaxY(bar.bounds) - 0.5;
+    if (selectedCell && !selectedCell.isInOverflowMenu) {
+        const BOOL connectsToLeadingBoundary =
+            [TideyPaperTabPolicy selectedTabConnectsToLeadingBoundaryWithSelectedTabFrame:selectedCell.frame
+                                                                                stripBounds:bar.bounds];
+        const CGFloat availableLeadingWidth = MAX(0, NSMinX(selectedCell.frame) - NSMinX(bar.bounds));
+        const CGFloat availableTrailingWidth = MAX(0, NSMaxX(bar.bounds) - NSMaxX(selectedCell.frame));
+        NSRect outlineRect = [TideyPaperTabPolicy outlineRectForTabBounds:selectedCell.frame selected:YES];
+        const NSRect leadingFadeBaseline = [TideyPaperTabPolicy leadingBaselineRectForTabRect:outlineRect
+                                                                              availableLeadingWidth:availableLeadingWidth];
+        const NSRect fadeBaseline = [TideyPaperTabPolicy trailingBaselineRectForTabRect:outlineRect
+                                                                 availableTrailingWidth:availableTrailingWidth];
+        const CGFloat plainLeadingBaselineEnd = connectsToLeadingBoundary
+            ? NSMinX(selectedCell.frame) + 0.5
+            : NSMinX(leadingFadeBaseline);
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
+                                  toPoint:NSMakePoint(plainLeadingBaselineEnd, baselineY)];
+        // Plain baseline resumes only after the trailing fade.
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMaxX(fadeBaseline), baselineY)
+                                  toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
+        // Front sheet: redraw the selected cell over neighbouring outlines,
+        // A tab at the strip's leading edge keeps its left leg so it can join
+        // the workspace separator. A later selected tab hands both legs to the
+        // mirrored corner renderers so they fade into the baseline.
+        [selectedCell drawWithFrame:selectedCell.frame inView:bar];
+        NSColor *selectedOutlineColor = [self.tabBar.delegate tabView:self.tabBar
+                                                        valueOfOption:PSMTabBarControlOptionPaperTabSelectedOutlineColor]
+            ?: outlineColor;
+        [selectedOutlineColor set];
+        if (connectsToLeadingBoundary) {
+            [[TideyPaperTabPolicy selectedLeadingAndTopOutlinePathForRect:outlineRect] stroke];
+        } else {
+            [[TideyPaperTabPolicy selectedTopOutlinePathForRect:outlineRect] stroke];
+            [TideyPaperTabPolicy drawLeadingCornerForTabRect:outlineRect
+                                        availableLeadingWidth:availableLeadingWidth
+                                                  outlineColor:selectedOutlineColor
+                                                separatorColor:outlineColor
+                                          stripBackgroundColor:self.tabBarColor];
+        }
+        [TideyPaperTabPolicy drawTrailingCornerForTabRect:outlineRect
+                                   availableTrailingWidth:availableTrailingWidth
+                                             outlineColor:selectedOutlineColor
+                                           separatorColor:outlineColor
+                                     stripBackgroundColor:self.tabBarColor];
+    } else {
+        [NSBezierPath strokeLineFromPoint:NSMakePoint(NSMinX(bar.bounds), baselineY)
+                                  toPoint:NSMakePoint(NSMaxX(bar.bounds), baselineY)];
+    }
+    [NSGraphicsContext restoreGraphicsState];
 }
 
 - (void)drawDividerBetweenTabBarAndContent:(NSRect)rect bar:(PSMTabBarControl *)bar {

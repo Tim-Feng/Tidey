@@ -1,7 +1,13 @@
 #import <XCTest/XCTest.h>
 #import "PTYSession.h"
 
+#import "ITAddressBookMgr.h"
+#import "NSColor+iTerm.h"
+#import "ProfileModel.h"
+#import "iTerm2SharedARC-Swift.h"
+#import "iTermColorMap.h"
 #import "iTermPasteHelper.h"
+#import "iTermProfilePreferences.h"
 #import "iTermWarning.h"
 
 typedef NSModalResponse (^WarningBlockType)(NSAlert *alert, NSString *identifier);
@@ -133,6 +139,139 @@ typedef NSModalResponse (^WarningBlockType)(NSAlert *alert, NSString *identifier
     XCTAssert(!_fakePasteHelper.slowly);
     XCTAssert(!_fakePasteHelper.escapeShellChars);
     XCTAssert(_fakePasteHelper.spacesPerTab == 8);
+}
+
+- (void)testWarmTerminalPaletteRoundTripsToClassicWithoutModifyingProfile {
+    NSString *priorThemeIdentifier = [TideyInterfaceThemeController.shared.currentThemeIdentifier copy];
+    @try {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+        NSMutableDictionary *profile = [self factoryProfile];
+        NSDictionary *originalProfile = [[profile copy] autorelease];
+        _session.profile = profile;
+        [_session setPreferencesFromAddressBookEntry:profile];
+        NSColor *classicBackground = [_session.screen.colorMap colorForKey:kColorMapBackground];
+        NSColor *classicForeground = [_session.screen.colorMap colorForKey:kColorMapForeground];
+        NSColor *classicBlue = [_session.screen.colorMap colorForKey:kColorMap8bitBase + 4];
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x151413];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground] hex:0xEAE4D4];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4] hex:0x7E9CB8];
+        XCTAssertEqualObjects(profile, originalProfile);
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
+             equalsColor:classicBackground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground]
+             equalsColor:classicForeground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4]
+             equalsColor:classicBlue];
+        XCTAssertEqualObjects(profile, originalProfile);
+    } @finally {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = priorThemeIdentifier;
+        [priorThemeIdentifier release];
+    }
+}
+
+- (void)testSakuraTerminalPaletteRoundTripsToClassicWithoutModifyingProfile {
+    NSString *priorThemeIdentifier = [TideyInterfaceThemeController.shared.currentThemeIdentifier copy];
+    @try {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+        NSMutableDictionary *profile = [self factoryProfile];
+        NSDictionary *originalProfile = [[profile copy] autorelease];
+        _session.profile = profile;
+        [_session setPreferencesFromAddressBookEntry:profile];
+        NSColor *classicBackground = [_session.screen.colorMap colorForKey:kColorMapBackground];
+        NSColor *classicForeground = [_session.screen.colorMap colorForKey:kColorMapForeground];
+        NSColor *classicBlue = [_session.screen.colorMap colorForKey:kColorMap8bitBase + 4];
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"sakura";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x161214];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground] hex:0xEFE6EA];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4] hex:0x8FA8CC];
+        XCTAssertEqualObjects(profile, originalProfile);
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
+             equalsColor:classicBackground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground]
+             equalsColor:classicForeground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4]
+             equalsColor:classicBlue];
+        XCTAssertEqualObjects(profile, originalProfile);
+    } @finally {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = priorThemeIdentifier;
+        [priorThemeIdentifier release];
+    }
+}
+
+- (void)testWarmTerminalPaletteOverridesCustomProfileAtRenderTimeAndRestoresClassic {
+    NSString *priorThemeIdentifier = [TideyInterfaceThemeController.shared.currentThemeIdentifier copy];
+    @try {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+        NSMutableDictionary *profile = [self factoryProfile];
+        NSColor *customBackground = [NSColor colorWithSRGBRed:0.01
+                                                       green:0.02
+                                                        blue:0.03
+                                                       alpha:1];
+        NSDictionary *customBackgroundValue = [customBackground dictionaryValue];
+        profile[KEY_BACKGROUND_COLOR] = customBackgroundValue;
+        profile[iTermAmendedColorKey2(KEY_BACKGROUND_COLOR, YES, NO)] = customBackgroundValue;
+        profile[iTermAmendedColorKey2(KEY_BACKGROUND_COLOR, YES, YES)] = customBackgroundValue;
+        NSDictionary *originalProfile = [[profile copy] autorelease];
+        _session.profile = profile;
+        [_session setPreferencesFromAddressBookEntry:profile];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
+             equalsColor:customBackground];
+        NSColor *factoryRed = [_session.screen.colorMap colorForKey:kColorMap8bitBase + 1];
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x151413];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 1] hex:0xC97A6D];
+        XCTAssertEqualObjects(profile, originalProfile);
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
+             equalsColor:customBackground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 1]
+             equalsColor:factoryRed];
+        XCTAssertEqualObjects(profile, originalProfile);
+    } @finally {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = priorThemeIdentifier;
+        [priorThemeIdentifier release];
+    }
+}
+
+- (NSMutableDictionary *)factoryProfile {
+    NSMutableDictionary *profile = [NSMutableDictionary dictionary];
+    [ITAddressBookMgr setDefaultsInBookmark:profile];
+    profile[KEY_GUID] = [ProfileModel freshGuid];
+    return profile;
+}
+
+- (void)assertColor:(NSColor *)actual hex:(NSInteger)hex {
+    NSColor *expected = [NSColor colorWithSRGBRed:((hex >> 16) & 0xff) / 255.0
+                                           green:((hex >> 8) & 0xff) / 255.0
+                                            blue:(hex & 0xff) / 255.0
+                                           alpha:1];
+    [self assertColor:actual equalsColor:expected];
+}
+
+- (void)assertColor:(NSColor *)actual equalsColor:(NSColor *)expected {
+    actual = [actual colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    expected = [expected colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+    XCTAssertNotNil(actual);
+    XCTAssertNotNil(expected);
+    XCTAssertEqualWithAccuracy(actual.redComponent, expected.redComponent, 0.001);
+    XCTAssertEqualWithAccuracy(actual.greenComponent, expected.greenComponent, 0.001);
+    XCTAssertEqualWithAccuracy(actual.blueComponent, expected.blueComponent, 0.001);
+    XCTAssertEqualWithAccuracy(actual.alphaComponent, expected.alphaComponent, 0.001);
 }
 
 #pragma mark - iTermWarningHandler

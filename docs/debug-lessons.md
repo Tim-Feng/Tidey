@@ -63,6 +63,10 @@
   - 這會連 tab bar、status bar、division view 一起動
 - `PSMTabBarControl` 會在 layout 後重設 overflow button
   - `>>` 是 PSM overflow button，不是 Tidey toggle
+- paper tab 與 workspace separator 的銜接取決於目前選中的 tab
+  - 第一個 tab 被選取時，左側 focus outline 才能延續到 workspace separator；選中後續 tab 時，workspace separator 要恢復普通分隔線，該 tab 的左右垂直邊則各自漸層接回 tab strip baseline
+  - tab selection callback 要在 PSM cell state 更新後重新計算 join 狀態；render regression 必須同時覆蓋第一個與後續 tab 被選取的畫面
+  - 共用 `TideyPaperTabPolicy` 不代表兩個 host 都已接上 renderer；terminal PSM 與 editor custom tab 必須各自把 selected tab 的 leading／trailing leg 交給 overlay，host regression 要釘住 overlay frame 與首位 tab 的例外
 - `autoresizingMask` 會製造中間態
   - 先分清楚最終 frame 錯，還是中間一拍錯
 - `NSOutlineView` / `NSTableView` / `NSScrollView` 的行為先查 API
@@ -460,11 +464,10 @@
 
 ## Theme System
 
-- `NSTableViewStyleSourceList` 的 selection 顏色無法自訂
-  - 沒有公開 API，`drawSelectionInRect:` 在 SourceList 模式下不會被呼叫
-  - 解法：`selectionHighlightStyle = NSTableViewSelectionHighlightStyleNone` + 自己加 overlay subview
-  - overlay z-order：系統 selection → overlay → cell content（用 `NSWindowBelow relativeTo:cellView`）
-  - 不要改 `NSTableViewStylePlain`，會破壞 SourceList 的排版（padding、行高、字體）
+- `NSTableViewStyleSourceList` 的 selection 顏色無法可靠自訂
+  - macOS 15 的真實 Tidey Dev 視窗不會為 Source List 選取列呼叫 `drawSelectionInRect:`，仍由系統畫原生藍色；在 row 上疊自訂 selection view 的實驗也沒有蓋過實際系統層級
+  - 需要精確自訂焦點色時，Warm 使用 `NSTableViewStylePlain`＋`NSTableViewSelectionHighlightStyleRegular`，讓 `TideySidebarRowView` 畫選取卡；Classic 保留 Source List
+  - Plain／Source List 的切換必須另外凍結 row height、欄位 frame、字級、最小寬度、背景與 close hit area，並以真實 Development 視窗驗收；不能只靠 hosted bitmap 或假設 table style 不影響排版
 
 - `CALayer.backgroundColor` 改了但畫面不更新
   - notification handler 確認有被呼叫（用 NSLog 驗證），但 layer 改動沒反映到畫面
@@ -601,6 +604,12 @@
 
 ## Testing
 
+- AppKit enum 不可用布林 truthiness 判斷有效狀態
+  - `NSTableViewSelectionHighlightStyleRegular` 的值是 `0`；`if (!style)` 會把正常選取誤判成沒有選取，導致 plain table 的自訂選取背景完全不畫
+  - 判斷關閉狀態要明確比較 `NSTableViewSelectionHighlightStyleNone`，並用 bitmap render 覆蓋實際 style 值，不只測 token 或 model
+- UI token／單元測試通過不等於完整畫面驗收
+  - 至少用一個真實 Development app 視窗同時呈現選取 workspace、最小側欄寬度、terminal 與右側 Browser／Editor；確認實際階層、裁切、間距與選取狀態
+  - 真實畫面先由產品負責人驗收，再交 frozen code review；code review 不能代替視覺驗收，也不能只靠 mockup 宣稱實作完成
 - 不要在 test host 直接初始化 `iTermRootTerminalView`
   - app bundle image/resource 常常缺，會在 init 途中炸掉
 - 把 feature 抽成 standalone helper，或只測窄 seam
@@ -617,6 +626,11 @@
 - Pipeline 必須保留 producer 的 exit status
   - `xcodebuild ... | tee` 沒有 `set -o pipefail` 時，`** TEST FAILED **` 照樣印 `Tests passed`——CI 假綠了數月
   - 綠燈本身不代表測試跑過：同時驗 xcresult 的 total test count > 0（5897a021a）
+- isolated DerivedData 的 hosted tests 要先建立 app host
+  - 先用同一個 `-derivedDataPath` build `iTerm2` scheme 的 Development configuration，並確認 `Tidey Dev.app/Contents/MacOS/Tidey Dev` 存在，再執行 `iTerm2Tests`
+  - 直接對全新的 DerivedData 執行 hosted test，或沿用只完成部分 linkage 的舊快取，可能以缺少 test host binary 或第三方 undefined symbols 失敗；這是 infra red，不是產品行為 red
+- Xcode `-quiet` 的文字紀錄不保證含有測試總數
+  - Xcode 26 可能只留下 `Testing started`，即使測試已成功；用 `xcresulttool get test-results tests` 讀 `.xcresult`，確認 `Test Case` 數量大於零且沒有非 `Passed` 結果
 - `.xctestplan` 是執行環境的一部分
   - test plan 的 environment entries 會覆蓋 shell env，外部 unset 蓋不掉
   - Malloc diagnostics（StackLogging/GuardEdges/PreScribble）留在預設 plan 會讓 test host 啟動在 CI 超時（40a31f2cc）；這類 config diff 要當程式碼審查
@@ -654,3 +668,6 @@
   - `.icon` 和 `.icns` 不要混
 - 改 `DefaultBookmark.plist` 後，如果 app 還在吃舊預設，要先清掉已寫入的 user defaults / cached profile
   - 不然 plist 改了，執行中的預設 profile 不一定會立刻跟著變
+- hosted iTerm2Tests 的 linkage 快取跟著 scheme 走，不只跟著 app host 走
+  - 一個只 build 過 `iTerm2` scheme 的 DerivedData，即使 `Tidey Dev.app` host 存在，跑 `iTerm2Tests` 仍可能以第三方 undefined symbols（CoreParse `_OBJC_CLASS_$_CP*`、railroad `_railroad_*`）在 test bundle 連結時失敗——這是 infra red
+  - 解法：改用曾成功跑過 `iTerm2Tests` 的 DerivedData（例如 Xcode 預設樹），或在該樹完整重建 `iTerm2Tests` scheme；不要在產品 assertion 上除錯連結錯誤

@@ -203,6 +203,7 @@ extern const NSInteger iTermRootTerminalViewWindowNumberLabelWidth;
 - (BOOL)selectTideySidebarWorkspaceAtIndex:(NSInteger)index;
 - (NSInteger)numberOfTideySidebarWorkspaces;
 - (void)reloadTideySidebar;
+- (void)tideyTerminalTabSelectionDidChange;
 + (BOOL)tideyShouldTargetSidebarStatusRefreshForWorkspaceIdentifier:(NSString *)workspaceIdentifier
                                                         resolvedRow:(NSInteger)resolvedRow
                                                    tableColumnCount:(NSInteger)tableColumnCount;
