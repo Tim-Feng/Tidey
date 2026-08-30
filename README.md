@@ -8,9 +8,13 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ## Latest in 0.7.0
 
+- **Three extensible interface themes** — switch the complete workspace, terminal, editor, browser, and settings palette between Classic · 經典藍調, Amber Night · 琥珀夜色, and Sakura Fubuki · 落櫻繽紛.
+- **Paper tabs and focused resizing** — terminal and editor tabs share the raised paper treatment; compact pull bars keep pane boundaries quiet, and double-clicking one restores its default size.
+- **Streamlined workspace and browser chrome** — workspace cards keep only name and status in a fixed-height layout, while the in-app browser adds a compact address bar and a configurable homepage.
 - **Complete terminal history on iPhone** — Tidey Remote can page through the same retained terminal scrollback available on the Mac, without loading an unbounded transcript at once.
 - **More reliable workspace status** — serialized socket updates and bounded retries prevent transient Bridge pressure from leaving an idle workspace stuck on Running.
 - **Stable interactive terminal resume** — history paging stays anchored when an iPhone attaches or reconnects, so live output does not shift underneath older scrollback.
+- **New Tidey identity** — the app and menu bar now use the balanced three-wave Tidey icon.
 
 ## Install
 
