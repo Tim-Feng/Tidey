@@ -13521,21 +13521,13 @@ static CGFloat iTermDimmingAmount(PSMTabBarControl *tabView) {
     } else if ([option isEqualToString:PSMTabBarControlOptionMinimalSelectedTabUnderlineProminence]) {
         return @([iTermAdvancedSettingsModel minimalSelectedTabUnderlineProminence]);
     } else if ([option isEqualToString:PSMTabBarControlOptionSelectedUnderlineColor]) {
-        const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
-            isEqualToString:@"warm"];
-        return [TideyTerminalPalettePolicy terminalTabUnderlineColorWithWarmEnabled:warm];
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabUnderlineColor;
     } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabOutlineColor]) {
-        const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
-            isEqualToString:@"warm"];
-        return [TideyTerminalPalettePolicy terminalTabOutlineColorWithWarmEnabled:warm];
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabOutlineColor;
     } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabSelectedOutlineColor]) {
-        const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
-            isEqualToString:@"warm"];
-        return [TideyTerminalPalettePolicy terminalTabSelectedOutlineColorWithWarmEnabled:warm];
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabSelectedOutlineColor;
     } else if ([option isEqualToString:PSMTabBarControlOptionPaperTabSelectedFillColor]) {
-        const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
-            isEqualToString:@"warm"];
-        return [TideyTerminalPalettePolicy terminalTabSelectedFillColorWithWarmEnabled:warm];
+        return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabSelectedFillColor;
     } else if ([option isEqualToString:PSMTabBarControlOptionFontSizeOverride]) {
         if (![iTermAdvancedSettingsModel useCustomTabBarFontSize]) {
             return nil;
@@ -19351,9 +19343,7 @@ backgroundColor:(NSColor *)backgroundColor {
 #pragma mark - PSMMinimalTabStyleDelegate
 
 - (NSColor *)minimalTabStyleBackgroundColor {
-    const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
-        isEqualToString:@"warm"];
-    return [TideyTerminalPalettePolicy terminalTabStripBackgroundColorWithWarmEnabled:warm];
+    return TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabStripBackgroundColor;
 }
 
 #pragma mark - iTermBroadcastInputHelperDelegate

@@ -19,29 +19,17 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 @implementation TideySettingsTabButton
 
 - (void)drawRect:(NSRect)dirtyRect {
-    BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    TideySettingsThemeAdapter *settings =
+        TideyInterfaceThemeController.shared.currentTheme.settingsAdapter;
     if (self.isActiveTab) {
-        NSColor *accentDim = warm
-            ? tokens.settingsCardBackgroundColor
-            : [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:0.12];
         NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:self.bounds xRadius:6 yRadius:6];
-        [accentDim setFill];
+        [settings.tabSelectionBackgroundColor setFill];
         [path fill];
     }
     // Draw title
     NSMutableParagraphStyle *style = [[NSMutableParagraphStyle alloc] init];
     style.alignment = NSTextAlignmentCenter;
-    NSColor *textColor;
-    if (self.isActiveTab) {
-        textColor = warm
-            ? tokens.sidebarRunningColor
-            : [NSColor colorWithSRGBRed:88/255.0 green:178/255.0 blue:220/255.0 alpha:1.0];
-    } else {
-        textColor = warm
-            ? tokens.settingsSecondaryTextColor
-            : [NSColor colorWithSRGBRed:0x88/255.0 green:0x88/255.0 blue:0x88/255.0 alpha:1.0];
-    }
+    NSColor *textColor = self.isActiveTab ? settings.tabSelectionTextColor : settings.tabTextColor;
     NSDictionary *attrs = @{
         NSFontAttributeName: [NSFont systemFontOfSize:12 weight:NSFontWeightMedium],
         NSForegroundColorAttributeName: textColor,
@@ -306,59 +294,35 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (NSColor *)windowBackgroundColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.settingsPanelBackgroundColor;
-    }
-    return [NSColor colorWithSRGBRed:0x1e/255.0 green:0x1e/255.0 blue:0x1e/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.panelBackgroundColor;
 }
 
 - (NSColor *)cardBackgroundColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.settingsCardBackgroundColor;
-    }
-    return [NSColor colorWithSRGBRed:0x2a/255.0 green:0x2a/255.0 blue:0x2c/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.cardBackgroundColor;
 }
 
 - (NSColor *)cardBorderColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.settingsCardBorderColor;
-    }
-    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.06];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.cardBorderColor;
 }
 
 - (NSColor *)dividerColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.settingsDividerColor;
-    }
-    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.07];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.dividerColor;
 }
 
 - (NSColor *)primaryTextColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.settingsPrimaryTextColor;
-    }
-    return [NSColor colorWithSRGBRed:1 green:1 blue:1 alpha:0.92];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.primaryTextColor;
 }
 
 - (NSColor *)secondaryTextColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.settingsSecondaryTextColor;
-    }
-    return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.55];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.secondaryTextColor;
 }
 
 - (NSColor *)tertiaryTextColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.rightPanelTertiaryTextColor;
-    }
-    return [NSColor colorWithSRGBRed:235/255.0 green:235/255.0 blue:245/255.0 alpha:0.28];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.tertiaryTextColor;
 }
 
 - (NSColor *)accentColor {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return TideyInterfaceThemeController.shared.currentTokens.sidebarRunningColor;
-    }
-    return [NSColor colorWithSRGBRed:0x0a/255.0 green:0x84/255.0 blue:0xff/255.0 alpha:1.0];
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.accentColor;
 }
 
 - (NSColor *)destructiveColor {
@@ -1110,10 +1074,8 @@ typedef NS_ENUM(NSInteger, TideySettingsPage) {
 }
 
 - (void)applyCurrentInterfaceTheme {
-    BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
-    self.window.backgroundColor = warm
-        ? TideyInterfaceThemeController.shared.currentTokens.settingsPanelBackgroundColor
-        : [NSColor colorWithSRGBRed:0x1a/255.0 green:0x1a/255.0 blue:0x1a/255.0 alpha:1.0];
+    self.window.backgroundColor =
+        TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.mainWindowBackgroundColor;
     [self.appearanceTabButton setNeedsDisplay:YES];
     [self.shortcutsTabButton setNeedsDisplay:YES];
     [self.remoteTabButton setNeedsDisplay:YES];

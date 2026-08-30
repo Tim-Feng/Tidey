@@ -23,12 +23,12 @@
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 0.5, 0.5)
                                                          xRadius:13
                                                          yRadius:13];
-    // Card background: rgba(255,255,255,0.04)
-    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBackgroundColor setFill];
+    TideySettingsThemeAdapter *settings =
+        TideyInterfaceThemeController.shared.currentTheme.settingsAdapter;
+    [settings.cardBackgroundColor setFill];
     [path fill];
 
-    // Card border: rgba(255,255,255,0.08)
-    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBorderColor setStroke];
+    [settings.cardBorderColor setStroke];
     [path setLineWidth:1.0];
     [path stroke];
 }
@@ -42,8 +42,7 @@
 @implementation TideySettingsCardDivider
 
 - (void)drawRect:(NSRect)dirtyRect {
-    // Separator: rgba(255,255,255,0.06)
-    [TideyInterfaceThemeController.shared.currentTokens.settingsDividerColor setFill];
+    [TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.dividerColor setFill];
     NSRectFill(self.bounds);
 }
 
@@ -51,11 +50,11 @@
 
 // ----- Colors -----
 static NSColor *TideySettingsPrimaryTextColor(void) {
-    return TideyInterfaceThemeController.shared.currentTokens.settingsPrimaryTextColor;
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.primaryTextColor;
 }
 
 static NSColor *TideySettingsSecondaryTextColor(void) {
-    return TideyInterfaceThemeController.shared.currentTokens.settingsSecondaryTextColor;
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.secondaryTextColor;
 }
 
 // ----- Main VC -----
@@ -192,20 +191,21 @@ static const CGFloat kAnsiLabelHeight = 14;
     [card addSubview:label];
     [self.primaryThemeLabels addObject:label];
 
-    self.interfaceThemePicker = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - 142,
+    const CGFloat pickerWidth = 232;
+    self.interfaceThemePicker = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(width - kCardInternalPaddingH - pickerWidth,
                                                                                 7,
-                                                                                142,
+                                                                                pickerWidth,
                                                                                 26)
                                                        pullsDown:NO];
-    for (NSString *identifier in TideyInterfaceThemeController.supportedThemeIdentifiers) {
-        [self.interfaceThemePicker addItemWithTitle:[TideyInterfaceThemeController displayNameForIdentifier:identifier]];
-        self.interfaceThemePicker.lastItem.representedObject = identifier;
+    for (TideyInterfaceThemeDefinition *theme in TideyInterfaceThemeController.availableThemes) {
+        [self.interfaceThemePicker addItemWithTitle:theme.displayName];
+        self.interfaceThemePicker.lastItem.representedObject = theme.identifier;
     }
     self.interfaceThemePicker.target = self;
     self.interfaceThemePicker.action = @selector(interfaceThemePickerDidChange:);
     [card addSubview:self.interfaceThemePicker];
 
-    NSTextField *note = [NSTextField labelWithString:@"Changes Tidey’s interface chrome only. Terminal colors stay with the active profile."];
+    NSTextField *note = [NSTextField labelWithString:@"Themes define Tidey’s chrome and may provide matching terminal and editor palettes."];
     note.font = [NSFont systemFontOfSize:11];
     note.textColor = TideySettingsSecondaryTextColor();
     note.frame = NSMakeRect(kCardInternalPaddingH, 42, width - kCardInternalPaddingH * 2, 16);
@@ -437,9 +437,10 @@ static const CGFloat kAnsiLabelHeight = 14;
 #pragma mark - Interface Theme Actions
 
 - (void)interfaceThemePickerDidChange:(NSPopUpButton *)sender {
-    NSString *identifier = [sender.selectedItem.representedObject isKindOfClass:NSString.class]
-        ? sender.selectedItem.representedObject
-        : @"classic";
+    if (![sender.selectedItem.representedObject isKindOfClass:NSString.class]) {
+        return;
+    }
+    NSString *identifier = sender.selectedItem.representedObject;
     TideyInterfaceThemeController.shared.currentThemeIdentifier = identifier;
 }
 
@@ -450,21 +451,27 @@ static const CGFloat kAnsiLabelHeight = 14;
 
 - (void)selectCurrentInterfaceTheme {
     NSString *identifier = TideyInterfaceThemeController.shared.currentThemeIdentifier;
-    NSUInteger index = [TideyInterfaceThemeController.supportedThemeIdentifiers indexOfObject:identifier];
+    NSUInteger index = [TideyInterfaceThemeController.availableThemes
+        indexOfObjectPassingTest:^BOOL(TideyInterfaceThemeDefinition *theme, NSUInteger idx, BOOL *stop) {
+            (void)idx;
+            (void)stop;
+            return [theme.identifier isEqualToString:identifier];
+        }];
     [self.interfaceThemePicker selectItemAtIndex:index == NSNotFound ? 0 : (NSInteger)index];
 }
 
 - (void)applyCurrentInterfaceTheme {
-    TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
+    TideySettingsThemeAdapter *settings =
+        TideyInterfaceThemeController.shared.currentTheme.settingsAdapter;
     [self selectCurrentInterfaceTheme];
     for (NSTextField *label in self.primaryThemeLabels) {
-        label.textColor = tokens.settingsPrimaryTextColor;
+        label.textColor = settings.primaryTextColor;
     }
     for (NSTextField *label in self.secondaryThemeLabels) {
-        label.textColor = tokens.settingsSecondaryTextColor;
+        label.textColor = settings.secondaryTextColor;
     }
     for (NSTextField *label in self.tertiaryThemeLabels) {
-        label.textColor = tokens.rightPanelTertiaryTextColor;
+        label.textColor = settings.tertiaryTextColor;
     }
     [self setNeedsDisplayRecursively:self.view];
 }

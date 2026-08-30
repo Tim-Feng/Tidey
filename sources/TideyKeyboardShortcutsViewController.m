@@ -18,9 +18,9 @@
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(bounds, 0.5, 0.5)
                                                          xRadius:13
                                                          yRadius:13];
-    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBackgroundColor setFill];
+    [TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.cardBackgroundColor setFill];
     [path fill];
-    [TideyInterfaceThemeController.shared.currentTokens.settingsCardBorderColor setStroke];
+    [TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.cardBorderColor setStroke];
     [path setLineWidth:1.0];
     [path stroke];
 }
@@ -33,7 +33,7 @@
 @implementation TideyShortcutsCardDivider
 
 - (void)drawRect:(NSRect)dirtyRect {
-    [TideyInterfaceThemeController.shared.currentTokens.settingsDividerColor setFill];
+    [TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.dividerColor setFill];
     NSRectFill(self.bounds);
 }
 
@@ -42,11 +42,11 @@
 @implementation TideyKeyboardShortcutsViewController
 
 static NSColor *TideyShortcutsPrimaryTextColor(void) {
-    return TideyInterfaceThemeController.shared.currentTokens.settingsPrimaryTextColor;
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.primaryTextColor;
 }
 
 static NSColor *TideyShortcutsSecondaryTextColor(void) {
-    return TideyInterfaceThemeController.shared.currentTokens.settingsSecondaryTextColor;
+    return TideyInterfaceThemeController.shared.currentTheme.settingsAdapter.secondaryTextColor;
 }
 
 - (void)loadView {

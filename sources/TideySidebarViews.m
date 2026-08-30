@@ -4,11 +4,9 @@
 
 const CGFloat kTideySidebarBadgeSize = 6;
 const CGFloat kTideySidebarBadgeLeadingInset = 1;
-const CGFloat kTideySidebarCloseButtonTopInset = 10;
-const CGFloat kTideySidebarWarmCloseButtonTopInset = 12;
-const CGFloat kTideySidebarCloseButtonTrailingInset = 4;
-const CGFloat kTideySidebarWarmCloseButtonTrailingInset = 0;
-const CGFloat kTideySidebarCloseButtonSize = 16;
+const CGFloat kTideySidebarTrailingSlotSize = 24;
+const CGFloat kTideySidebarTrailingSlotTrailingInset = 6;
+const CGFloat kTideySidebarCloseGlyphSize = 16;
 
 NSUserInterfaceItemIdentifier const kTideySidebarCloseViewIdentifier = @"TideySidebarCloseView";
 NSUserInterfaceItemIdentifier const kTideySidebarBadgeViewIdentifier = @"TideySidebarBadgeView";
@@ -114,7 +112,12 @@ NSView *TideyFindCloseView(NSView *container) {
     if (NSIsEmptyRect(rowRect)) {
         return NSZeroRect;
     }
-    return NSMakeRect(NSMaxX(rowRect) - 24, NSMinY(rowRect) + 28, 16, 16);
+    return NSMakeRect(NSMaxX(rowRect) -
+                          kTideySidebarTrailingSlotTrailingInset -
+                          kTideySidebarTrailingSlotSize,
+                      NSMinY(rowRect) + 29,
+                      kTideySidebarTrailingSlotSize,
+                      kTideySidebarTrailingSlotSize);
 }
 
 - (void)updateTideyCloseButtonVisibility {
@@ -143,29 +146,22 @@ NSView *TideyFindCloseView(NSView *container) {
     }
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 6, 4)
-                                                         xRadius:tokens.sidebarSelectionCornerRadius
-                                                         yRadius:tokens.sidebarSelectionCornerRadius];
+                                                         xRadius:TideyChromeLayoutPolicy.sidebarSelectionCornerRadius
+                                                         yRadius:TideyChromeLayoutPolicy.sidebarSelectionCornerRadius];
     [tokens.sidebarSelectionColor setFill];
     [path fill];
-    if (tokens.usesRaisedSidebarSelection) {
-        [tokens.sidebarSelectionBorderColor setStroke];
-        path.lineWidth = 1;
-        [path stroke];
-    }
+    [tokens.sidebarSelectionBorderColor setStroke];
+    path.lineWidth = 1;
+    [path stroke];
 }
 
 - (void)drawBackgroundInRect:(NSRect)dirtyRect {
     [super drawBackgroundInRect:dirtyRect];
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        [self tideyDrawWarmSelection];
-    }
+    [self tideyDrawWarmSelection];
 }
 
 - (void)drawSelectionInRect:(NSRect)dirtyRect {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return;
-    }
-    [super drawSelectionInRect:dirtyRect];
+    // Selection chrome is drawn from the active theme's tokens above.
 }
 
 - (BOOL)isEmphasized {
@@ -181,9 +177,6 @@ NSView *TideyFindCloseView(NSView *container) {
     if (!self.isSelected) {
         return;
     }
-    if (![TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return;
-    }
     TideyInterfaceThemeTokens *tokens = TideyInterfaceThemeController.shared.currentTokens;
     NSBezierPath *path = [NSBezierPath bezierPathWithRoundedRect:NSInsetRect(self.bounds, 4, 1)
                                                          xRadius:6
@@ -193,17 +186,11 @@ NSView *TideyFindCloseView(NSView *container) {
 }
 
 - (void)drawSelectionInRect:(NSRect)dirtyRect {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return;
-    }
-    [super drawSelectionInRect:dirtyRect];
+    // Selection chrome is drawn from the active theme's tokens above.
 }
 
 - (BOOL)isEmphasized {
-    if ([TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"]) {
-        return YES;
-    }
-    return [super isEmphasized];
+    return YES;
 }
 
 @end
@@ -217,26 +204,17 @@ NSView *TideyFindCloseView(NSView *container) {
     if (!closeView) {
         return;
     }
-    // Warm tucks the close control into the selection card's upper-right
-    // corner; Classic keeps the historical insets.
-    const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier
-        isEqualToString:@"warm"];
-    const CGFloat trailingInset = warm ? kTideySidebarWarmCloseButtonTrailingInset
-                                       : kTideySidebarCloseButtonTrailingInset;
-    const CGFloat topInset = warm ? kTideySidebarWarmCloseButtonTopInset
-                                  : kTideySidebarCloseButtonTopInset;
+    // The close hit target shares the name row's trailing control slot.
     const CGFloat closeX = MAX(0,
                                NSWidth(self.bounds) -
-                                   trailingInset -
-                                   kTideySidebarCloseButtonSize);
+                                   kTideySidebarTrailingSlotTrailingInset -
+                                   kTideySidebarTrailingSlotSize);
     const CGFloat closeY = MAX(0,
-                               NSHeight(self.bounds) -
-                                   topInset -
-                                   kTideySidebarCloseButtonSize);
+                               NSHeight(self.bounds) - 35);
     closeView.frame = NSMakeRect(closeX,
                                  closeY,
-                                 kTideySidebarCloseButtonSize,
-                                 kTideySidebarCloseButtonSize);
+                                 kTideySidebarTrailingSlotSize,
+                                 kTideySidebarTrailingSlotSize);
 }
 
 @end

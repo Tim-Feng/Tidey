@@ -260,10 +260,10 @@ static void SetAgainstGrainDim(BOOL isVertical, NSSize *dest, CGFloat value) {
 }
 
 + (NSImage *)imageForNewOutputWithAppearance:(NSAppearance *)appearance {
-    const BOOL warm = [TideyInterfaceThemeController.shared.currentThemeIdentifier isEqualToString:@"warm"];
-    NSColor *warmDotColor = [TideyTerminalPalettePolicy terminalTabNewOutputDotColorWithWarmEnabled:warm];
-    if (warmDotColor) {
-        return [self tideyNewOutputDotImageWithColor:warmDotColor];
+    NSColor *themeDotColor =
+        TideyInterfaceThemeController.shared.currentTheme.terminalAdapter.terminalTabNewOutputDotColor;
+    if (themeDotColor) {
+        return [self tideyNewOutputDotImageWithColor:themeDotColor];
     }
     iTermPreferencesTabStyle preferredStyle = [iTermPreferences intForKey:kPreferenceKeyTabStyle];
     switch ((iTermPreferencesTabStyle)[appearance it_tabStyle:preferredStyle]) {

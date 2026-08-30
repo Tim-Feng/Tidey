@@ -9,16 +9,17 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 };
 
 @interface iTermRootTerminalView (TideyRightPanelTabComponentParityTests)
-+ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetricsForWarmTheme:(BOOL)warm;
-+ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetricsForWarmTheme:(BOOL)warm;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelTabComponentMetrics;
++ (NSDictionary<NSString *, NSNumber *> *)tideyRightPanelGroupMetrics;
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
-                        superviewBounds:(NSRect)bounds
-                              warmTheme:(BOOL)warm;
+                        superviewBounds:(NSRect)bounds;
 + (BOOL)tideyPaneBoundaryEdgeIsResizer:(TideyPaneBoundaryEdge)edge;
++ (BOOL)tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:(BOOL)usesPaperTabJoinGradient
+                                                boundaryColor:(NSColor *)boundaryColor
+                                                 tabJoinColor:(NSColor *)tabJoinColor;
 + (NSRect)tideyPaneBoundaryFrameForEdge:(TideyPaneBoundaryEdge)edge
                         superviewBounds:(NSRect)bounds
-                           pullBarMidY:(CGFloat)pullBarMidY
-                              warmTheme:(BOOL)warm;
+                           pullBarMidY:(CGFloat)pullBarMidY;
 + (NSRect)tideyPaneBoundaryFrame:(NSRect)frame
       byExcludingTopHeight:(CGFloat)topInset
            superviewBounds:(NSRect)bounds;
@@ -27,8 +28,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                    fileTreeContainerFrame:(NSRect)containerFrame;
 + (NSRect)tideyWorkspaceSeparatorFrameForSidebarWidth:(CGFloat)sidebarWidth
                                            rootBounds:(NSRect)rootBounds
-                                         tabRowHeight:(CGFloat)tabRowHeight
-                                            warmTheme:(BOOL)warm;
+                                         tabRowHeight:(CGFloat)tabRowHeight;
 + (NSRect)tideyWorkspaceSeparatorJoinRowForTabBarFrame:(NSRect)tabBarFrame;
 + (CGFloat)tideyPaneBoundaryCornerRadiusForFrame:(NSRect)frame;
 + (BOOL)tideyWorkspaceSeparatorUsesTabJoinGradientForSelectedTabFrame:(NSRect)selectedTabFrame
@@ -38,16 +38,16 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                         tabStripBounds:(NSRect)tabStripBounds;
 @end
 
-// The Warm editor strip must reuse the production tab/group component geometry;
-// only colors differ (through theme tokens). These assertions pin that contract.
+// Every theme reuses the production tab/group component geometry; only colors
+// differ through theme tokens. These assertions pin that contract.
 @interface TideyRightPanelTabComponentParityTests : XCTestCase
 @end
 
 @implementation TideyRightPanelTabComponentParityTests
 
-- (void)testClassicMetricsMatchProductionComponentSystem {
+- (void)testMetricsMatchProductionComponentSystem {
     NSDictionary<NSString *, NSNumber *> *metrics =
-        [iTermRootTerminalView tideyRightPanelTabComponentMetricsForWarmTheme:NO];
+        [iTermRootTerminalView tideyRightPanelTabComponentMetrics];
 
     XCTAssertEqualObjects(metrics[@"tabFontSize"], @11);
     XCTAssertEqualObjects(metrics[@"groupLabelFontSize"], @9);
@@ -61,54 +61,42 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     XCTAssertEqualObjects(metrics[@"addButtonSize"], @22);
 }
 
-- (void)testWarmGroupTagUsesPaperIndexMetricsAndPreservesClassicCapsuleMetrics {
-    NSDictionary<NSString *, NSNumber *> *classic =
-        [iTermRootTerminalView tideyRightPanelGroupMetricsForWarmTheme:NO];
-    XCTAssertEqualObjects(classic[@"horizontalPadding"], @12);
-    XCTAssertEqualObjects(classic[@"tabsGap"], @8);
-    XCTAssertEqualObjects(classic[@"usesPaperIndexStyle"], @NO);
-
-    NSDictionary<NSString *, NSNumber *> *warm =
-        [iTermRootTerminalView tideyRightPanelGroupMetricsForWarmTheme:YES];
-    XCTAssertEqualObjects(warm[@"horizontalPadding"], @10);
-    XCTAssertEqualObjects(warm[@"tabsGap"], @0);
-    XCTAssertEqualObjects(warm[@"usesPaperIndexStyle"], @YES);
+- (void)testGroupTagUsesPaperIndexMetricsInEveryTheme {
+    NSDictionary<NSString *, NSNumber *> *metrics =
+        [iTermRootTerminalView tideyRightPanelGroupMetrics];
+    XCTAssertEqualObjects(metrics[@"horizontalPadding"], @10);
+    XCTAssertEqualObjects(metrics[@"tabsGap"], @0);
+    XCTAssertEqualObjects(metrics[@"usesPaperIndexStyle"], @YES);
 }
 
-- (void)testClassicPaneBoundariesStayFullLength {
+- (void)testPaneBoundariesStayFullLength {
     const NSRect bounds = NSMakeRect(0, 0, 240, 600);
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                                   superviewBounds:bounds
-                                                                         warmTheme:NO],
+                                                                   superviewBounds:bounds],
                                NSMakeRect(0, 0, 1, 600)));
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeRight
-                                                                   superviewBounds:bounds
-                                                                         warmTheme:NO],
+                                                                   superviewBounds:bounds],
                                NSMakeRect(239, 0, 1, 600)));
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeBottom
-                                                                   superviewBounds:bounds
-                                                                         warmTheme:NO],
+                                                                   superviewBounds:bounds],
                                NSMakeRect(0, 0, 240, 1)));
 }
 
-- (void)testWarmResizerBoundariesAreFullHeightLinesLikeClassic {
-    // Tim parked the short pull-bar experiment: Warm resizer edges are the same
-    // full-height 1px lines as Classic; only the color token differs.
+- (void)testResizerBoundariesStayFullHeightWhenGivenAPullBarMidpoint {
+    // Tim parked the short pull-bar experiment; midpoint input does not alter
+    // the shared full-height 1px geometry.
     const NSRect bounds = NSMakeRect(0, 0, 240, 600);
     for (NSNumber *edgeNumber in @[ @(TideyPaneBoundaryEdgeLeft), @(TideyPaneBoundaryEdgeRight), @(TideyPaneBoundaryEdgeBottom) ]) {
         const TideyPaneBoundaryEdge edge = edgeNumber.integerValue;
-        const NSRect classic = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:edge
-                                                                    superviewBounds:bounds
-                                                                          warmTheme:NO];
-        const NSRect warm = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:edge
-                                                                 superviewBounds:bounds
-                                                                    pullBarMidY:317
-                                                                       warmTheme:YES];
-        XCTAssertTrue(NSEqualRects(classic, warm), @"edge %ld", (long)edge);
+        const NSRect standard = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:edge
+                                                                     superviewBounds:bounds];
+        const NSRect withMidpoint = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:edge
+                                                                         superviewBounds:bounds
+                                                                            pullBarMidY:317];
+        XCTAssertTrue(NSEqualRects(standard, withMidpoint), @"edge %ld", (long)edge);
     }
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                                   superviewBounds:bounds
-                                                                         warmTheme:YES],
+                                                                   superviewBounds:bounds],
                                NSMakeRect(0, 0, 1, 600)));
     XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeLeft]);
     XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryEdgeIsResizer:TideyPaneBoundaryEdgeRight]);
@@ -126,8 +114,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 - (void)testWorkspaceAndEditorBoundariesStopBelowTheirTabStrips {
     const NSRect bounds = NSMakeRect(0, 0, 400, 600);
     const NSRect full = [iTermRootTerminalView tideyPaneBoundaryFrameForEdge:TideyPaneBoundaryEdgeLeft
-                                                             superviewBounds:bounds
-                                                                   warmTheme:YES];
+                                                             superviewBounds:bounds];
     const NSRect shortened = [iTermRootTerminalView tideyPaneBoundaryFrame:full
                                                       byExcludingTopHeight:34
                                                            superviewBounds:bounds];
@@ -147,23 +134,15 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 - (void)testWorkspaceSeparatorCenterMatchesTheFocusedTabLeadingStroke {
     const NSRect root = NSMakeRect(0, 0, 1200, 700);
     const CGFloat sidebarWidth = 200;
-    const NSRect warm = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
-                                                                                rootBounds:root
-                                                                              tabRowHeight:34
-                                                                                 warmTheme:YES];
-    XCTAssertTrue(NSEqualRects(warm, NSMakeRect(200, 0, 1, 666)));
-    XCTAssertTrue(NSContainsRect(root, warm));
+    const NSRect separator = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
+                                                                                      rootBounds:root
+                                                                                    tabRowHeight:34];
+    XCTAssertTrue(NSEqualRects(separator, NSMakeRect(200, 0, 1, 666)));
+    XCTAssertTrue(NSContainsRect(root, separator));
     const NSRect firstTabCell = NSMakeRect(sidebarWidth, 0, 120, 34);
     const CGFloat tabLeadingStrokeCenter = NSMinX(firstTabCell) + 0.5;
-    XCTAssertEqual(NSMidX(warm), tabLeadingStrokeCenter);
-    // Warm: absent across the tab row, present below it.
-    XCTAssertEqual(NSMaxY(warm), NSHeight(root) - 34);
-
-    const NSRect classic = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
-                                                                                   rootBounds:root
-                                                                                 tabRowHeight:34
-                                                                                    warmTheme:NO];
-    XCTAssertTrue(NSEqualRects(classic, NSMakeRect(200, 0, 1, 700)));
+    XCTAssertEqual(NSMidX(separator), tabLeadingStrokeCenter);
+    XCTAssertEqual(NSMaxY(separator), NSHeight(root) - 34);
 }
 
 - (void)testWorkspaceSeparatorFollowsTabRowVisibilityAndDegenerateSizes {
@@ -171,33 +150,28 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     // Hidden tab bar (height 0): the line runs full height.
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:200
                                                                                         rootBounds:root
-                                                                                      tabRowHeight:0
-                                                                                         warmTheme:YES],
+                                                                                      tabRowHeight:0],
                                NSMakeRect(200, 0, 1, 700)));
     // Root shorter than the tab row: zero-height line, never negative.
     const NSRect tiny = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:200
                                                                                  rootBounds:NSMakeRect(0, 0, 1200, 20)
-                                                                               tabRowHeight:34
-                                                                                  warmTheme:YES];
+                                                                               tabRowHeight:34];
     XCTAssertEqual(NSHeight(tiny), 0);
     XCTAssertEqual(NSMinX(tiny), 200);
     // No sidebar: no line.
     XCTAssertTrue(NSIsEmptyRect([iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:0
                                                                                          rootBounds:root
-                                                                                       tabRowHeight:34
-                                                                                          warmTheme:YES]));
+                                                                                       tabRowHeight:34]));
     // Sidebar wider than the root (mid-resize): clamped to the last root column.
     const NSRect clamped = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:5000
                                                                                     rootBounds:root
-                                                                                  tabRowHeight:34
-                                                                                     warmTheme:YES];
+                                                                                  tabRowHeight:34];
     XCTAssertTrue(NSContainsRect(root, clamped));
     XCTAssertEqual(NSMinX(clamped), NSMaxX(root) - 1);
     // Re-pin after a resize is a pure function of the new inputs.
     XCTAssertTrue(NSEqualRects([iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:260
                                                                                         rootBounds:NSMakeRect(0, 0, 900, 500)
-                                                                                      tabRowHeight:34
-                                                                                         warmTheme:YES],
+                                                                                      tabRowHeight:34],
                                NSMakeRect(260, 0, 1, 466)));
 }
 
@@ -211,8 +185,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
     const CGFloat tabBarHeight = 34;
     const NSRect separator = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:sidebarWidth
                                                                                      rootBounds:root
-                                                                                   tabRowHeight:tabBarHeight
-                                                                                      warmTheme:YES];
+                                                                                   tabRowHeight:tabBarHeight];
 
     // Layout with the division row: decorationTop = 34 + 1, tab bar at y = 665.
     const NSRect tabBarWithDivision = NSMakeRect(sidebarWidth, 700 - tabBarHeight - 1, 800, tabBarHeight);
@@ -238,8 +211,7 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
 - (void)testOnePointBoundaryLinesHaveNoCornerRadiusSoTheJoinRowIsFullyPainted {
     const NSRect seam = [iTermRootTerminalView tideyWorkspaceSeparatorFrameForSidebarWidth:200
                                                                                rootBounds:NSMakeRect(0, 0, 1200, 700)
-                                                                             tabRowHeight:34
-                                                                                warmTheme:YES];
+                                                                             tabRowHeight:34];
     XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:seam], 0);
     XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 0, 1, 566)], 0);
     XCTAssertEqual([iTermRootTerminalView tideyPaneBoundaryCornerRadiusForFrame:NSMakeRect(0, 0, 400, 1)], 0);
@@ -288,14 +260,29 @@ typedef NS_ENUM(NSInteger, TideyPaneBoundaryEdge) {
                                                                                tabStripBounds:bounds]));
 }
 
-- (void)testWarmMetricsAreIdenticalToClassicMetrics {
-    NSDictionary<NSString *, NSNumber *> *classic =
-        [iTermRootTerminalView tideyRightPanelTabComponentMetricsForWarmTheme:NO];
-    NSDictionary<NSString *, NSNumber *> *warm =
-        [iTermRootTerminalView tideyRightPanelTabComponentMetricsForWarmTheme:YES];
+// The join gradient is a shared component behavior and never depends on a
+// theme identity. It is off only when the boundary opts out or a color is missing.
+- (void)testPaneBoundaryJoinGradientActivationFollowsLayoutPolicyNotTheme {
+    NSColor *classicBoundary = [NSColor colorWithWhite:1 alpha:0.14];
+    NSColor *classicJoin = [NSColor colorWithWhite:1 alpha:0.40];
+    NSColor *warmBoundary = [NSColor colorWithSRGBRed:240 / 255.0 green:230 / 255.0 blue:210 / 255.0 alpha:0.06];
+    NSColor *warmJoin = [NSColor colorWithSRGBRed:240 / 255.0 green:230 / 255.0 blue:210 / 255.0 alpha:0.40];
+    XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:YES
+                                                                           boundaryColor:classicBoundary
+                                                                            tabJoinColor:classicJoin]);
+    XCTAssertTrue([iTermRootTerminalView tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:YES
+                                                                           boundaryColor:warmBoundary
+                                                                            tabJoinColor:warmJoin]);
+    XCTAssertFalse([iTermRootTerminalView tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:NO
+                                                                            boundaryColor:classicBoundary
+                                                                             tabJoinColor:classicJoin]);
+    XCTAssertFalse([iTermRootTerminalView tideyPaneBoundaryJoinGradientIsActiveWithUsesPaperTabJoinGradient:YES
+                                                                            boundaryColor:nil
+                                                                             tabJoinColor:classicJoin]);
+}
 
-    XCTAssertEqual(classic.count, 10);
-    XCTAssertEqualObjects(warm, classic);
+- (void)testSharedMetricsExposeOneComponentContract {
+    XCTAssertEqual([iTermRootTerminalView tideyRightPanelTabComponentMetrics].count, 10);
 }
 
 @end

@@ -175,22 +175,58 @@ typedef NSModalResponse (^WarningBlockType)(NSAlert *alert, NSString *identifier
     }
 }
 
+- (void)testSakuraTerminalPaletteRoundTripsToClassicWithoutModifyingProfile {
+    NSString *priorThemeIdentifier = [TideyInterfaceThemeController.shared.currentThemeIdentifier copy];
+    @try {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+        NSMutableDictionary *profile = [self factoryProfile];
+        NSDictionary *originalProfile = [[profile copy] autorelease];
+        _session.profile = profile;
+        [_session setPreferencesFromAddressBookEntry:profile];
+        NSColor *classicBackground = [_session.screen.colorMap colorForKey:kColorMapBackground];
+        NSColor *classicForeground = [_session.screen.colorMap colorForKey:kColorMapForeground];
+        NSColor *classicBlue = [_session.screen.colorMap colorForKey:kColorMap8bitBase + 4];
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"sakura";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground] hex:0x161214];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground] hex:0xEFE6EA];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4] hex:0x8FA8CC];
+        XCTAssertEqualObjects(profile, originalProfile);
+
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
+
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
+             equalsColor:classicBackground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapForeground]
+             equalsColor:classicForeground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMap8bitBase + 4]
+             equalsColor:classicBlue];
+        XCTAssertEqualObjects(profile, originalProfile);
+    } @finally {
+        TideyInterfaceThemeController.shared.currentThemeIdentifier = priorThemeIdentifier;
+        [priorThemeIdentifier release];
+    }
+}
+
 - (void)testWarmTerminalPaletteOverridesCustomProfileAtRenderTimeAndRestoresClassic {
     NSString *priorThemeIdentifier = [TideyInterfaceThemeController.shared.currentThemeIdentifier copy];
     @try {
         TideyInterfaceThemeController.shared.currentThemeIdentifier = @"classic";
         NSMutableDictionary *profile = [self factoryProfile];
-        NSDictionary *customBackgroundValue = [[NSColor colorWithSRGBRed:0.01
-                                                                    green:0.02
-                                                                     blue:0.03
-                                                                    alpha:1] dictionaryValue];
+        NSColor *customBackground = [NSColor colorWithSRGBRed:0.01
+                                                       green:0.02
+                                                        blue:0.03
+                                                       alpha:1];
+        NSDictionary *customBackgroundValue = [customBackground dictionaryValue];
         profile[KEY_BACKGROUND_COLOR] = customBackgroundValue;
         profile[iTermAmendedColorKey2(KEY_BACKGROUND_COLOR, YES, NO)] = customBackgroundValue;
         profile[iTermAmendedColorKey2(KEY_BACKGROUND_COLOR, YES, YES)] = customBackgroundValue;
         NSDictionary *originalProfile = [[profile copy] autorelease];
         _session.profile = profile;
         [_session setPreferencesFromAddressBookEntry:profile];
-        NSColor *customBackground = [_session.screen.colorMap colorForKey:kColorMapBackground];
+        [self assertColor:[_session.screen.colorMap colorForKey:kColorMapBackground]
+             equalsColor:customBackground];
         NSColor *factoryRed = [_session.screen.colorMap colorForKey:kColorMap8bitBase + 1];
 
         TideyInterfaceThemeController.shared.currentThemeIdentifier = @"warm";

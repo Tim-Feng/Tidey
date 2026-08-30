@@ -1,93 +1,121 @@
 import AppKit
 
-@objc enum TideyInterfaceTheme: Int {
-    case classic
-    case warm
-}
-
 @objcMembers
 final class TideyInterfaceThemeController: NSObject {
     static let didChangeNotification = Notification.Name("TideyInterfaceThemeDidChangeNotification")
     static let defaultsKey = "TideyInterfaceTheme"
-    static let supportedThemeIdentifiers = ["classic", "warm"]
     static let shared = TideyInterfaceThemeController(userDefaults: applicationUserDefaults())
+
+    static var availableThemes: [TideyInterfaceThemeDefinition] {
+        TideyInterfaceThemeRegistry.shared.availableThemes
+    }
+
+    static var supportedThemeIdentifiers: [String] {
+        TideyInterfaceThemeRegistry.shared.supportedThemeIdentifiers
+    }
 
     static func applicationUserDefaults() -> UserDefaults {
         iTermUserDefaults.userDefaults()
     }
 
     private let userDefaults: UserDefaults
+    private let registry: TideyInterfaceThemeRegistry
+    private var selectedTheme: TideyInterfaceThemeDefinition
 
-    init(userDefaults: UserDefaults) {
+    @objc(initWithUserDefaults:)
+    convenience init(userDefaults: UserDefaults) {
+        self.init(userDefaults: userDefaults, registry: .shared)
+    }
+
+    @nonobjc
+    init(userDefaults: UserDefaults, registry: TideyInterfaceThemeRegistry) {
         self.userDefaults = userDefaults
+        self.registry = registry
+        self.selectedTheme = registry.theme(forIdentifier: userDefaults.string(forKey: Self.defaultsKey))
         super.init()
     }
 
     var currentThemeIdentifier: String {
         get {
-            Self.normalizedThemeIdentifier(userDefaults.string(forKey: Self.defaultsKey))
+            selectedTheme.identifier
         }
         set {
-            let normalized = Self.normalizedThemeIdentifier(newValue)
-            guard normalized != currentThemeIdentifier else {
-                if userDefaults.string(forKey: Self.defaultsKey) != normalized {
-                    userDefaults.set(normalized, forKey: Self.defaultsKey)
+            let theme = registry.theme(forIdentifier: newValue)
+            guard theme.identifier != selectedTheme.identifier else {
+                if userDefaults.string(forKey: Self.defaultsKey) != theme.identifier {
+                    userDefaults.set(theme.identifier, forKey: Self.defaultsKey)
                 }
                 return
             }
-            userDefaults.set(normalized, forKey: Self.defaultsKey)
+            selectedTheme = theme
+            userDefaults.set(theme.identifier, forKey: Self.defaultsKey)
             reapplyCurrentTheme()
         }
     }
 
+    var currentTheme: TideyInterfaceThemeDefinition {
+        selectedTheme
+    }
+
     var currentTokens: TideyInterfaceThemeTokens {
-        currentThemeIdentifier == "warm" ? .warm : .classic
+        selectedTheme.tokens
     }
 
     static func normalizedThemeIdentifier(_ storedValue: String?) -> String {
-        storedValue == "warm" ? "warm" : "classic"
+        TideyInterfaceThemeRegistry.shared.normalizedThemeIdentifier(storedValue)
     }
 
     static func displayName(forIdentifier identifier: String) -> String {
-        normalizedThemeIdentifier(identifier) == "warm" ? "Warm" : "Classic"
+        TideyInterfaceThemeRegistry.shared.theme(forIdentifier: identifier).displayName
     }
 
     func reapplyCurrentTheme() {
+        selectedTheme = registry.theme(forIdentifier: userDefaults.string(forKey: Self.defaultsKey))
         NotificationCenter.default.post(name: Self.didChangeNotification, object: self)
     }
 }
 
 @objcMembers
 final class TideyInterfaceThemeTokens: NSObject {
+    // Classic follows the same surface contract as Warm: chrome canvases use
+    // one base fill and separators carry the pane hierarchy. This value also
+    // matches Classic's historical Monaco canvas.
+    private static let classicBaseSurfaceColor = NSColor(srgbRed: 0x16 / 255.0,
+                                                         green: 0x18 / 255.0,
+                                                         blue: 0x1D / 255.0,
+                                                         alpha: 1)
+
+    // One darker desk behind every paper-tab strip.
+    private static let classicTabStripDeskColor = NSColor(srgbRed: 0x11 / 255.0,
+                                                          green: 0x13 / 255.0,
+                                                          blue: 0x18 / 255.0,
+                                                          alpha: 1)
+
     static let classic = TideyInterfaceThemeTokens(
-        sidebarBackgroundColor: NSColor(srgbRed: 0.11, green: 0.12, blue: 0.15, alpha: 1),
-        sidebarSelectionColor: .selectedContentBackgroundColor,
-        sidebarSelectionBorderColor: .clear,
+        baseSurfaceColor: classicBaseSurfaceColor,
+        tabDeskColor: classicTabStripDeskColor,
+        sidebarSelectionColor: color(hex: 0x1F2A3E),
+        sidebarSelectionBorderColor: color(hex: 0x5FA0F0, alpha: 0.35),
         sidebarPrimaryTextColor: .white,
-        sidebarSelectedPrimaryTextColor: .white,
+        sidebarSelectedPrimaryTextColor: color(hex: 0xF2F5FA),
         sidebarSecondaryTextColor: NSColor(white: 0.72, alpha: 1),
-        sidebarSelectedSecondaryTextColor: NSColor(white: 1, alpha: 0.8),
+        sidebarSelectedSecondaryTextColor: color(hex: 0xB7C3D6),
         sidebarUnreadColor: .systemRed,
         sidebarIdleColor: .secondaryLabelColor,
-        sidebarSelectedIdleColor: NSColor(white: 1, alpha: 0.8),
+        sidebarSelectedIdleColor: color(hex: 0x8E9AAE),
         sidebarRunningColor: .secondaryLabelColor,
         sidebarCloseColor: .tertiaryLabelColor,
-        rightPanelBackgroundColor: NSColor(srgbRed: 0.10, green: 0.11, blue: 0.14, alpha: 1),
-        rightPanelTabStripBackgroundColor: NSColor(srgbRed: 0.09, green: 0.10, blue: 0.13, alpha: 1),
-        rightPanelActiveTabStripBackgroundColor: NSColor(srgbRed: 0.118, green: 0.126, blue: 0.155, alpha: 1),
-        rightPanelInactiveTabStripBackgroundColor: NSColor(srgbRed: 0.102, green: 0.108, blue: 0.135, alpha: 1),
-        rightPanelFileTreeBackgroundColor: NSColor(srgbRed: 0.12, green: 0.13, blue: 0.17, alpha: 1),
         fileTreeTextColor: NSColor(white: 0.92, alpha: 1),
         fileTreeIconColor: NSColor(white: 0.78, alpha: 1),
-        fileTreeSelectionColor: .clear,
-        paneBoundaryColor: .clear,
-        paneResizerPullBarColor: .clear,
-        tabOutlineColor: .clear,
-        tabSelectedOutlineColor: .clear,
+        // Classic palette for the shared modern components: cool white
+        // hairlines/outlines, dark blue-charcoal selection cards.
+        fileTreeSelectionColor: color(hex: 0x1F2A3E),
+        paneBoundaryColor: NSColor(white: 1, alpha: 0.14),
+        paneResizerPullBarColor: NSColor(white: 1, alpha: 0.08),
+        tabOutlineColor: NSColor(white: 1, alpha: 0.10),
+        tabSelectedOutlineColor: NSColor(white: 1, alpha: 0.40),
         rightPanelSplitDividerColor: NSColor(white: 0.24, alpha: 1),
         rightPanelTabHoverColor: NSColor(white: 1, alpha: 0.06),
-        rightPanelTabSelectionColor: .clear,
-        rightPanelTabSelectionBorderColor: .clear,
         rightPanelTabSelectionIndicatorColor: .controlAccentColor,
         rightPanelTabSeparatorColor: NSColor(white: 0.25, alpha: 1),
         rightPanelPrimaryTextColor: .labelColor,
@@ -109,7 +137,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                     green: 152.0 / 255.0,
                                                     blue: 38.0 / 255.0,
                                                     alpha: 1),
-        terminalSurroundColor: .clear,
         settingsPanelBackgroundColor: NSColor(srgbRed: 0.08, green: 0.09, blue: 0.11, alpha: 1),
         settingsCardBackgroundColor: NSColor(white: 1, alpha: 0.04),
         settingsCardBorderColor: NSColor(white: 1, alpha: 0.08),
@@ -123,10 +150,12 @@ final class TideyInterfaceThemeTokens: NSObject {
                                              blue: 0x88 / 255.0,
                                              alpha: 1),
         hairlineColor: NSColor(white: 0.25, alpha: 1),
-        usesRaisedSidebarSelection: false,
-        usesRaisedRightPanelTabs: false,
-        sidebarSelectionCornerRadius: 8,
-        rightPanelTabCornerRadius: 0)
+        sidebarPinColor: NSColor(white: 0.90, alpha: 1),
+        sidebarUnreadTitleColor: .controlAccentColor,
+        sidebarSelectedUnreadTitleColor: .white,
+        browserToolbarBackgroundColor: NSColor(white: 0.15, alpha: 1),
+        browserToolbarControlColor: .secondaryLabelColor,
+        usesHostTitlebarTextColors: true)
 
     // Tim's Warm constraint: every chrome base surface (workspace column, tab
     // strips, canvas surround, file tree) shares this single fill; adjacent
@@ -151,7 +180,8 @@ final class TideyInterfaceThemeTokens: NSObject {
                                            alpha: 1)
 
     static let warm = TideyInterfaceThemeTokens(
-        sidebarBackgroundColor: warmBaseSurfaceColor,
+        baseSurfaceColor: warmBaseSurfaceColor,
+        tabDeskColor: warmTabStripDeskColor,
         sidebarSelectionColor: NSColor(srgbRed: 0x2F / 255.0,
                                        green: 0x2C / 255.0,
                                        blue: 0x28 / 255.0,
@@ -196,11 +226,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                                    green: 0x6A / 255.0,
                                    blue: 0x60 / 255.0,
                                    alpha: 1),
-        rightPanelBackgroundColor: warmBaseSurfaceColor,
-        rightPanelTabStripBackgroundColor: warmTabStripDeskColor,
-        rightPanelActiveTabStripBackgroundColor: warmTabStripDeskColor,
-        rightPanelInactiveTabStripBackgroundColor: warmTabStripDeskColor,
-        rightPanelFileTreeBackgroundColor: warmBaseSurfaceColor,
         fileTreeTextColor: NSColor(srgbRed: 0xEA / 255.0,
                                    green: 0xE4 / 255.0,
                                    blue: 0xD4 / 255.0,
@@ -240,14 +265,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                                          green: 0x1C / 255.0,
                                          blue: 0x1A / 255.0,
                                          alpha: 1),
-        rightPanelTabSelectionColor: NSColor(srgbRed: 0x23 / 255.0,
-                                             green: 0x21 / 255.0,
-                                             blue: 0x20 / 255.0,
-                                             alpha: 1),
-        rightPanelTabSelectionBorderColor: NSColor(srgbRed: 240 / 255.0,
-                                                   green: 230 / 255.0,
-                                                   blue: 210 / 255.0,
-                                                   alpha: 0.07),
         rightPanelTabSelectionIndicatorColor: warmSeaglassColor,
         rightPanelTabSeparatorColor: NSColor(srgbRed: 240 / 255.0,
                                              green: 230 / 255.0,
@@ -281,7 +298,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                                                    green: 0x9F / 255.0,
                                                    blue: 0x8D / 255.0,
                                                    alpha: 1),
-        terminalSurroundColor: warmBaseSurfaceColor,
         settingsPanelBackgroundColor: NSColor(srgbRed: 0x15 / 255.0,
                                               green: 0x14 / 255.0,
                                               blue: 0x13 / 255.0,
@@ -309,14 +325,61 @@ final class TideyInterfaceThemeTokens: NSObject {
         hairlineColor: NSColor(srgbRed: 240 / 255.0,
                                green: 230 / 255.0,
                                blue: 210 / 255.0,
-                               alpha: 0.07),
-        usesRaisedSidebarSelection: true,
-        // Editor tabs reuse the production flat-tab component; Warm only
-        // recolors it (seaglass indicator line, cream text, base surface).
-        usesRaisedRightPanelTabs: false,
-        sidebarSelectionCornerRadius: 8,
-        rightPanelTabCornerRadius: 0)
+                               alpha: 0.07))
 
+    private static func color(hex: Int, alpha: CGFloat = 1) -> NSColor {
+        NSColor(srgbRed: CGFloat((hex >> 16) & 0xff) / 255,
+                green: CGFloat((hex >> 8) & 0xff) / 255,
+                blue: CGFloat(hex & 0xff) / 255,
+                alpha: alpha)
+    }
+
+    // 落櫻繽紛: a low-fatigue rose-charcoal canvas. Pink is reserved for
+    // focus and attention semantics while running remains distinct in green.
+    static let sakura = TideyInterfaceThemeTokens(
+        baseSurfaceColor: color(hex: 0x161214),
+        tabDeskColor: color(hex: 0x110E10),
+        sidebarSelectionColor: color(hex: 0x2A1F25),
+        sidebarSelectionBorderColor: color(hex: 0xE8A0B4, alpha: 0.35),
+        sidebarPrimaryTextColor: color(hex: 0xEFE6EA),
+        sidebarSelectedPrimaryTextColor: color(hex: 0xF8F2F5),
+        sidebarSecondaryTextColor: color(hex: 0xB8A8B0),
+        sidebarSelectedSecondaryTextColor: color(hex: 0xD3C6CD),
+        sidebarUnreadColor: color(hex: 0xEE9AB0),
+        sidebarIdleColor: color(hex: 0x7E6F78),
+        sidebarSelectedIdleColor: color(hex: 0x998A93),
+        sidebarRunningColor: color(hex: 0x9CC39B),
+        sidebarCloseColor: color(hex: 0x7E6F78),
+        fileTreeTextColor: color(hex: 0xEFE6EA),
+        fileTreeIconColor: color(hex: 0xB8A8B0),
+        fileTreeSelectionColor: color(hex: 0x2A1F25),
+        paneBoundaryColor: color(hex: 0xEFE6EA, alpha: 0.12),
+        paneResizerPullBarColor: color(hex: 0xEFE6EA, alpha: 0.06),
+        tabOutlineColor: color(hex: 0xEFE6EA, alpha: 0.08),
+        tabSelectedOutlineColor: color(hex: 0xE8A0B4, alpha: 0.45),
+        rightPanelSplitDividerColor: color(hex: 0xEFE6EA, alpha: 0.07),
+        rightPanelTabHoverColor: color(hex: 0x201A1E),
+        rightPanelTabSelectionIndicatorColor: color(hex: 0xE8A0B4),
+        rightPanelTabSeparatorColor: color(hex: 0xEFE6EA, alpha: 0.07),
+        rightPanelPrimaryTextColor: color(hex: 0xEFE6EA),
+        rightPanelSecondaryTextColor: color(hex: 0xB8A8B0),
+        rightPanelTertiaryTextColor: color(hex: 0x7E6F78),
+        rightPanelGroupExpandedFillColor: color(hex: 0xE8A0B4, alpha: 0.14),
+        rightPanelGroupCollapsedFillColor: color(hex: 0xEFE6EA, alpha: 0.06),
+        rightPanelGroupExpandedTextColor: color(hex: 0xE8A0B4),
+        rightPanelGroupCollapsedTextColor: color(hex: 0xB8A8B0),
+        settingsPanelBackgroundColor: color(hex: 0x161214),
+        settingsCardBackgroundColor: color(hex: 0x241C21),
+        settingsCardBorderColor: color(hex: 0xEFE6EA, alpha: 0.07),
+        settingsDividerColor: color(hex: 0xEFE6EA, alpha: 0.07),
+        settingsPrimaryTextColor: color(hex: 0xEFE6EA),
+        settingsSecondaryTextColor: color(hex: 0xB8A8B0),
+        hairlineColor: color(hex: 0xEFE6EA, alpha: 0.07))
+
+    // Surface component. All large chrome canvases and all paper-tab desks
+    // derive from these two values; callers cannot configure them separately.
+    let baseSurfaceColor: NSColor
+    let tabDeskColor: NSColor
     let sidebarBackgroundColor: NSColor
     let sidebarSelectionColor: NSColor
     let sidebarSelectionBorderColor: NSColor
@@ -329,6 +392,9 @@ final class TideyInterfaceThemeTokens: NSObject {
     let sidebarSelectedIdleColor: NSColor
     let sidebarRunningColor: NSColor
     let sidebarCloseColor: NSColor
+    let sidebarPinColor: NSColor
+    let sidebarUnreadTitleColor: NSColor
+    let sidebarSelectedUnreadTitleColor: NSColor
 
     let rightPanelBackgroundColor: NSColor
     let rightPanelTabStripBackgroundColor: NSColor
@@ -344,8 +410,6 @@ final class TideyInterfaceThemeTokens: NSObject {
     let tabSelectedOutlineColor: NSColor
     let rightPanelSplitDividerColor: NSColor
     let rightPanelTabHoverColor: NSColor
-    let rightPanelTabSelectionColor: NSColor
-    let rightPanelTabSelectionBorderColor: NSColor
     let rightPanelTabSelectionIndicatorColor: NSColor
     let rightPanelTabSeparatorColor: NSColor
     let rightPanelPrimaryTextColor: NSColor
@@ -355,6 +419,8 @@ final class TideyInterfaceThemeTokens: NSObject {
     let rightPanelGroupCollapsedFillColor: NSColor
     let rightPanelGroupExpandedTextColor: NSColor
     let rightPanelGroupCollapsedTextColor: NSColor
+    let browserToolbarBackgroundColor: NSColor
+    let browserToolbarControlColor: NSColor
 
     let terminalSurroundColor: NSColor
     let settingsPanelBackgroundColor: NSColor
@@ -364,13 +430,11 @@ final class TideyInterfaceThemeTokens: NSObject {
     let settingsPrimaryTextColor: NSColor
     let settingsSecondaryTextColor: NSColor
     let hairlineColor: NSColor
+    let usesHostTitlebarTextColors: Bool
 
-    let usesRaisedSidebarSelection: Bool
-    let usesRaisedRightPanelTabs: Bool
-    let sidebarSelectionCornerRadius: CGFloat
-    let rightPanelTabCornerRadius: CGFloat
-
-    private init(sidebarBackgroundColor: NSColor,
+    @nonobjc
+    init(baseSurfaceColor: NSColor,
+                 tabDeskColor: NSColor,
                  sidebarSelectionColor: NSColor,
                  sidebarSelectionBorderColor: NSColor,
                  sidebarPrimaryTextColor: NSColor,
@@ -382,11 +446,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                  sidebarSelectedIdleColor: NSColor,
                  sidebarRunningColor: NSColor,
                  sidebarCloseColor: NSColor,
-                 rightPanelBackgroundColor: NSColor,
-                 rightPanelTabStripBackgroundColor: NSColor,
-                 rightPanelActiveTabStripBackgroundColor: NSColor,
-                 rightPanelInactiveTabStripBackgroundColor: NSColor,
-                 rightPanelFileTreeBackgroundColor: NSColor,
                  fileTreeTextColor: NSColor,
                  fileTreeIconColor: NSColor,
                  fileTreeSelectionColor: NSColor,
@@ -396,8 +455,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                  tabSelectedOutlineColor: NSColor,
                  rightPanelSplitDividerColor: NSColor,
                  rightPanelTabHoverColor: NSColor,
-                 rightPanelTabSelectionColor: NSColor,
-                 rightPanelTabSelectionBorderColor: NSColor,
                  rightPanelTabSelectionIndicatorColor: NSColor,
                  rightPanelTabSeparatorColor: NSColor,
                  rightPanelPrimaryTextColor: NSColor,
@@ -407,7 +464,6 @@ final class TideyInterfaceThemeTokens: NSObject {
                  rightPanelGroupCollapsedFillColor: NSColor,
                  rightPanelGroupExpandedTextColor: NSColor,
                  rightPanelGroupCollapsedTextColor: NSColor,
-                 terminalSurroundColor: NSColor,
                  settingsPanelBackgroundColor: NSColor,
                  settingsCardBackgroundColor: NSColor,
                  settingsCardBorderColor: NSColor,
@@ -415,11 +471,15 @@ final class TideyInterfaceThemeTokens: NSObject {
                  settingsPrimaryTextColor: NSColor,
                  settingsSecondaryTextColor: NSColor,
                  hairlineColor: NSColor,
-                 usesRaisedSidebarSelection: Bool,
-                 usesRaisedRightPanelTabs: Bool,
-                 sidebarSelectionCornerRadius: CGFloat,
-                 rightPanelTabCornerRadius: CGFloat) {
-        self.sidebarBackgroundColor = sidebarBackgroundColor
+                 sidebarPinColor: NSColor? = nil,
+                 sidebarUnreadTitleColor: NSColor? = nil,
+                 sidebarSelectedUnreadTitleColor: NSColor? = nil,
+                 browserToolbarBackgroundColor: NSColor? = nil,
+                 browserToolbarControlColor: NSColor? = nil,
+                 usesHostTitlebarTextColors: Bool = false) {
+        self.baseSurfaceColor = baseSurfaceColor
+        self.tabDeskColor = tabDeskColor
+        self.sidebarBackgroundColor = baseSurfaceColor
         self.sidebarSelectionColor = sidebarSelectionColor
         self.sidebarSelectionBorderColor = sidebarSelectionBorderColor
         self.sidebarPrimaryTextColor = sidebarPrimaryTextColor
@@ -431,11 +491,14 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.sidebarSelectedIdleColor = sidebarSelectedIdleColor
         self.sidebarRunningColor = sidebarRunningColor
         self.sidebarCloseColor = sidebarCloseColor
-        self.rightPanelBackgroundColor = rightPanelBackgroundColor
-        self.rightPanelTabStripBackgroundColor = rightPanelTabStripBackgroundColor
-        self.rightPanelActiveTabStripBackgroundColor = rightPanelActiveTabStripBackgroundColor
-        self.rightPanelInactiveTabStripBackgroundColor = rightPanelInactiveTabStripBackgroundColor
-        self.rightPanelFileTreeBackgroundColor = rightPanelFileTreeBackgroundColor
+        self.sidebarPinColor = sidebarPinColor ?? sidebarSecondaryTextColor
+        self.sidebarUnreadTitleColor = sidebarUnreadTitleColor ?? sidebarUnreadColor
+        self.sidebarSelectedUnreadTitleColor = sidebarSelectedUnreadTitleColor ?? sidebarUnreadColor
+        self.rightPanelBackgroundColor = baseSurfaceColor
+        self.rightPanelTabStripBackgroundColor = tabDeskColor
+        self.rightPanelActiveTabStripBackgroundColor = tabDeskColor
+        self.rightPanelInactiveTabStripBackgroundColor = tabDeskColor
+        self.rightPanelFileTreeBackgroundColor = baseSurfaceColor
         self.fileTreeTextColor = fileTreeTextColor
         self.fileTreeIconColor = fileTreeIconColor
         self.fileTreeSelectionColor = fileTreeSelectionColor
@@ -445,8 +508,6 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.tabSelectedOutlineColor = tabSelectedOutlineColor
         self.rightPanelSplitDividerColor = rightPanelSplitDividerColor
         self.rightPanelTabHoverColor = rightPanelTabHoverColor
-        self.rightPanelTabSelectionColor = rightPanelTabSelectionColor
-        self.rightPanelTabSelectionBorderColor = rightPanelTabSelectionBorderColor
         self.rightPanelTabSelectionIndicatorColor = rightPanelTabSelectionIndicatorColor
         self.rightPanelTabSeparatorColor = rightPanelTabSeparatorColor
         self.rightPanelPrimaryTextColor = rightPanelPrimaryTextColor
@@ -456,7 +517,9 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.rightPanelGroupCollapsedFillColor = rightPanelGroupCollapsedFillColor
         self.rightPanelGroupExpandedTextColor = rightPanelGroupExpandedTextColor
         self.rightPanelGroupCollapsedTextColor = rightPanelGroupCollapsedTextColor
-        self.terminalSurroundColor = terminalSurroundColor
+        self.browserToolbarBackgroundColor = browserToolbarBackgroundColor ?? baseSurfaceColor
+        self.browserToolbarControlColor = browserToolbarControlColor ?? rightPanelTertiaryTextColor
+        self.terminalSurroundColor = baseSurfaceColor
         self.settingsPanelBackgroundColor = settingsPanelBackgroundColor
         self.settingsCardBackgroundColor = settingsCardBackgroundColor
         self.settingsCardBorderColor = settingsCardBorderColor
@@ -464,19 +527,19 @@ final class TideyInterfaceThemeTokens: NSObject {
         self.settingsPrimaryTextColor = settingsPrimaryTextColor
         self.settingsSecondaryTextColor = settingsSecondaryTextColor
         self.hairlineColor = hairlineColor
-        self.usesRaisedSidebarSelection = usesRaisedSidebarSelection
-        self.usesRaisedRightPanelTabs = usesRaisedRightPanelTabs
-        self.sidebarSelectionCornerRadius = sidebarSelectionCornerRadius
-        self.rightPanelTabCornerRadius = rightPanelTabCornerRadius
+        self.usesHostTitlebarTextColors = usesHostTitlebarTextColors
         super.init()
     }
 }
 
 @objcMembers
-final class TideyTerminalPalettePolicy: NSObject {
-    static let warmTabUnderlineColor = TideyInterfaceThemeTokens.warmSeaglassColor
+final class TideyTerminalThemeAdapter: NSObject {
+    let tokens: TideyInterfaceThemeTokens
+    let colorOverrides: [NSNumber: NSColor]
+    let terminalTabUnderlineColor: NSColor?
+    let terminalTabNewOutputDotColor: NSColor?
 
-    static let warmColorTable: [NSNumber: NSColor] = {
+    static let warmColorOverrides: [NSNumber: NSColor] = {
         let namedColors: [(Int32, Int)] = [
             (kColorMapBackground, 0x151413),
             (kColorMapForeground, 0xEAE4D4),
@@ -502,56 +565,84 @@ final class TideyTerminalPalettePolicy: NSObject {
         })
     }()
 
-    @objc(colorTableByApplyingWarmPaletteTo:factoryColorTable:warmEnabled:)
-    static func colorTable(byApplyingWarmPaletteTo colorTable: [NSNumber: NSColor],
-                           factoryColorTable _: [NSNumber: NSColor],
-                           warmEnabled: Bool) -> [NSNumber: NSColor] {
-        guard warmEnabled else {
-            return colorTable
+    static let sakuraColorOverrides: [NSNumber: NSColor] = {
+        let namedColors: [(Int32, Int)] = [
+            (kColorMapBackground, 0x161214),
+            (kColorMapForeground, 0xEFE6EA),
+            (kColorMapBold, 0xF8F2F5),
+            (kColorMapCursor, 0xE8A0B4),
+            (kColorMapCursorText, 0x161214),
+            (kColorMapSelection, 0x2A1F25),
+            (kColorMapSelectedText, 0xF8F2F5),
+            (kColorMapLink, 0x8FB0D0),
+        ]
+        let ansiHexColors = [
+            0x262024, 0xD97A85, 0x9CC39B, 0xD9B27A,
+            0x8FA8CC, 0xD9A0C4, 0x8FBFB8, 0xD8CDD3,
+            0x5C4F57, 0xE89AA3, 0xB5D5B4, 0xE8C795,
+            0xA9BEDB, 0xE8B9D6, 0xA8D2CB, 0xF8F2F5,
+        ]
+        let ansiColors = ansiHexColors.enumerated().map { index, hex in
+            (kColorMap8bitBase + Int32(index), hex)
         }
 
+        return Dictionary(uniqueKeysWithValues: (namedColors + ansiColors).map { key, hex in
+            (NSNumber(value: key), color(hex: hex))
+        })
+    }()
+
+    @nonobjc
+    init(tokens: TideyInterfaceThemeTokens,
+         colorOverrides: [NSNumber: NSColor],
+         terminalTabUnderlineColor: NSColor?,
+         terminalTabNewOutputDotColor: NSColor?) {
+        self.tokens = tokens
+        self.colorOverrides = colorOverrides
+        self.terminalTabUnderlineColor = terminalTabUnderlineColor
+        self.terminalTabNewOutputDotColor = terminalTabNewOutputDotColor
+        super.init()
+    }
+
+    @nonobjc
+    static func themed(tokens: TideyInterfaceThemeTokens,
+                       colorOverrides: [NSNumber: NSColor] = [:]) -> TideyTerminalThemeAdapter {
+        TideyTerminalThemeAdapter(tokens: tokens,
+                                  colorOverrides: colorOverrides,
+                                  terminalTabUnderlineColor: tokens.rightPanelTabSelectionIndicatorColor,
+                                  terminalTabNewOutputDotColor: tokens.sidebarUnreadColor)
+    }
+
+    @nonobjc
+    static func profileCompatible(tokens: TideyInterfaceThemeTokens) -> TideyTerminalThemeAdapter {
+        TideyTerminalThemeAdapter(tokens: tokens,
+                                  colorOverrides: [:],
+                                  terminalTabUnderlineColor: nil,
+                                  terminalTabNewOutputDotColor: nil)
+    }
+
+    @objc(colorTableByApplyingTo:)
+    func colorTable(byApplyingTo colorTable: [NSNumber: NSColor]) -> [NSNumber: NSColor] {
         var result = colorTable
-        warmColorTable.forEach { result[$0.key] = $0.value }
+        // Profile-compatible themes supply no overrides, so their render table
+        // remains equivalent to the active terminal profile.
+        colorOverrides.forEach { result[$0.key] = $0.value }
         return result
     }
 
-    @objc(terminalTabUnderlineColorWithWarmEnabled:)
-    static func terminalTabUnderlineColor(warmEnabled: Bool) -> NSColor? {
-        warmEnabled ? warmTabUnderlineColor : nil
+    var terminalTabOutlineColor: NSColor? {
+        tokens.tabOutlineColor
     }
 
-    /// Paper-tab outline for the terminal tab bar. nil keeps the production
-    /// minimal style untouched (Classic).
-    @objc(terminalTabOutlineColorWithWarmEnabled:)
-    static func terminalTabOutlineColor(warmEnabled: Bool) -> NSColor? {
-        warmEnabled ? TideyInterfaceThemeTokens.warm.tabOutlineColor : nil
+    var terminalTabSelectedFillColor: NSColor? {
+        tokens.rightPanelBackgroundColor
     }
 
-    /// Fill for the focused paper tab: the canvas base surface, so the front
-    /// sheet joins its content. nil in Classic.
-    /// Color of the tab's new-output/idle dot. Warm reuses the workspace
-    /// unread accent so the tab and the sidebar card speak the same language;
-    /// nil keeps the production asset (Classic).
-    @objc(terminalTabNewOutputDotColorWithWarmEnabled:)
-    static func terminalTabNewOutputDotColor(warmEnabled: Bool) -> NSColor? {
-        warmEnabled ? TideyInterfaceThemeTokens.warm.sidebarUnreadColor : nil
+    var terminalTabSelectedOutlineColor: NSColor? {
+        tokens.tabSelectedOutlineColor
     }
 
-    @objc(terminalTabSelectedFillColorWithWarmEnabled:)
-    static func terminalTabSelectedFillColor(warmEnabled: Bool) -> NSColor? {
-        warmEnabled ? TideyInterfaceThemeTokens.warm.rightPanelBackgroundColor : nil
-    }
-
-    @objc(terminalTabSelectedOutlineColorWithWarmEnabled:)
-    static func terminalTabSelectedOutlineColor(warmEnabled: Bool) -> NSColor? {
-        warmEnabled ? TideyInterfaceThemeTokens.warm.tabSelectedOutlineColor : nil
-    }
-
-    @objc(terminalTabStripBackgroundColorWithWarmEnabled:)
-    static func terminalTabStripBackgroundColor(warmEnabled: Bool) -> NSColor {
-        warmEnabled
-            ? TideyInterfaceThemeTokens.warm.rightPanelTabStripBackgroundColor
-            : TideyInterfaceThemeTokens.classic.rightPanelInactiveTabStripBackgroundColor
+    var terminalTabStripBackgroundColor: NSColor {
+        tokens.rightPanelTabStripBackgroundColor
     }
 
     private static func color(hex: Int) -> NSColor {
@@ -562,37 +653,34 @@ final class TideyTerminalPalettePolicy: NSObject {
     }
 }
 
-// Editor web canvas (Monaco) theme policy. Classic keeps the historical
-// `vs-dark` + `#16181d` page exactly; Warm defines a Monaco theme whose UI
-// colors come from the Warm tokens and whose syntax rules reuse the accepted
-// Warm terminal palette families.
 @objcMembers
-final class TideyEditorCanvasPolicy: NSObject {
-    static let classicMonacoThemeName = "vs-dark"
-    static let warmMonacoThemeName = "tidey-warm"
-    static let classicPageBackgroundHex = "#16181d"
+final class TideyEditorCanvasThemeAdapter: NSObject {
+    let monacoThemeName: String
+    let tokens: TideyInterfaceThemeTokens
+    let terminalAdapter: TideyTerminalThemeAdapter
+    let usesTerminalPaletteRules: Bool
 
-    @objc(monacoThemeNameWithWarmEnabled:)
-    static func monacoThemeName(warmEnabled: Bool) -> String {
-        warmEnabled ? warmMonacoThemeName : classicMonacoThemeName
+    @nonobjc
+    init(identifier: String,
+         tokens: TideyInterfaceThemeTokens,
+         terminalAdapter: TideyTerminalThemeAdapter,
+         usesTerminalPaletteRules: Bool) {
+        self.monacoThemeName = "tidey-\(identifier)"
+        self.tokens = tokens
+        self.terminalAdapter = terminalAdapter
+        self.usesTerminalPaletteRules = usesTerminalPaletteRules
+        super.init()
     }
 
-    @objc(pageBackgroundHexWithWarmEnabled:)
-    static func pageBackgroundHex(warmEnabled: Bool) -> String {
-        warmEnabled ? hexString(for: TideyInterfaceThemeTokens.warm.rightPanelBackgroundColor)
-                    : classicPageBackgroundHex
+    var pageBackgroundHex: String {
+        Self.hexString(for: tokens.rightPanelBackgroundColor)
     }
 
-    /// JavaScript that registers the Warm Monaco theme; empty for Classic so the
-    /// production page stays byte-identical.
-    @objc(themeDefinitionScriptWithWarmEnabled:)
-    static func themeDefinitionScript(warmEnabled: Bool) -> String {
-        guard warmEnabled else {
-            return ""
-        }
-        return "monaco.editor.defineTheme('\(warmMonacoThemeName)', \(warmThemeDefinitionJSON));"
+    var themeDefinitionScript: String {
+        "monaco.editor.defineTheme('\(monacoThemeName)', \(themeDefinitionJSON));"
     }
 
+    @objc(hexStringForColor:)
     static func hexString(for color: NSColor) -> String {
         let srgb = color.usingColorSpace(.sRGB) ?? color
         let red = Int((srgb.redComponent * 255).rounded())
@@ -601,21 +689,24 @@ final class TideyEditorCanvasPolicy: NSObject {
         return String(format: "#%02x%02x%02x", red, green, blue)
     }
 
-    private static var warmThemeDefinitionJSON: String {
-        let tokens = TideyInterfaceThemeTokens.warm
-        let palette = TideyTerminalPalettePolicy.warmColorTable
-        func ansi(_ index: Int32) -> String {
-            hexString(for: palette[NSNumber(value: kColorMap8bitBase + index)] ?? tokens.rightPanelPrimaryTextColor)
+    private var themeDefinitionJSON: String {
+        guard usesTerminalPaletteRules else {
+            let base = Self.hexString(for: tokens.baseSurfaceColor)
+            return "{\"base\":\"vs-dark\",\"inherit\":true,\"rules\":[],\"colors\":{\"editor.background\":\"\(base)\",\"editorGutter.background\":\"\(base)\",\"minimap.background\":\"\(base)\"}}"
         }
-        let base = hexString(for: tokens.rightPanelBackgroundColor)
-        let text = hexString(for: tokens.rightPanelPrimaryTextColor)
-        let secondary = hexString(for: tokens.rightPanelSecondaryTextColor)
-        let tertiary = hexString(for: tokens.rightPanelTertiaryTextColor)
-        let selection = hexString(for: tokens.sidebarSelectionColor)
-        let hover = hexString(for: tokens.rightPanelTabHoverColor)
-        let raised = hexString(for: tokens.settingsCardBackgroundColor)
-        let seaglass = hexString(for: TideyInterfaceThemeTokens.warmSeaglassColor)
-        let cursor = hexString(for: palette[NSNumber(value: kColorMapCursor)] ?? TideyInterfaceThemeTokens.warmSeaglassColor)
+        let palette = terminalAdapter.colorOverrides
+        func ansi(_ index: Int32) -> String {
+            Self.hexString(for: palette[NSNumber(value: kColorMap8bitBase + index)] ?? tokens.rightPanelPrimaryTextColor)
+        }
+        let base = Self.hexString(for: tokens.rightPanelBackgroundColor)
+        let text = Self.hexString(for: tokens.rightPanelPrimaryTextColor)
+        let secondary = Self.hexString(for: tokens.rightPanelSecondaryTextColor)
+        let tertiary = Self.hexString(for: tokens.rightPanelTertiaryTextColor)
+        let selection = Self.hexString(for: tokens.sidebarSelectionColor)
+        let hover = Self.hexString(for: tokens.rightPanelTabHoverColor)
+        let raised = Self.hexString(for: tokens.settingsCardBackgroundColor)
+        let accent = Self.hexString(for: tokens.rightPanelTabSelectionIndicatorColor)
+        let cursor = Self.hexString(for: palette[NSNumber(value: kColorMapCursor)] ?? tokens.rightPanelTabSelectionIndicatorColor)
         let colors: [(String, String)] = [
             ("editor.background", base),
             ("editor.foreground", text),
@@ -630,7 +721,7 @@ final class TideyEditorCanvasPolicy: NSObject {
             ("editorIndentGuide.background", ansi(0)),
             ("editorIndentGuide.activeBackground", ansi(8)),
             ("editorBracketMatch.background", hover),
-            ("editorBracketMatch.border", seaglass),
+            ("editorBracketMatch.border", accent),
             ("editorWidget.background", raised),
             ("editorWidget.border", raised),
             ("editorSuggestWidget.background", raised),
@@ -639,7 +730,7 @@ final class TideyEditorCanvasPolicy: NSObject {
             ("scrollbarSlider.background", ansi(8) + "80"),
             ("scrollbarSlider.hoverBackground", ansi(8) + "b0"),
             ("scrollbarSlider.activeBackground", ansi(8) + "b0"),
-            ("editorLink.activeForeground", seaglass),
+            ("editorLink.activeForeground", accent),
             ("minimap.background", base),
         ]
         let rules: [(String, String)] = [
@@ -660,29 +751,316 @@ final class TideyEditorCanvasPolicy: NSObject {
     }
 }
 
-// Browser toolbar geometry and color stay behind a pure policy so AppKit frame
-// wiring can be characterized without constructing the root terminal view.
-// These values intentionally preserve the current behavior until a behavioral
-// test changes the Warm branch.
+@objcMembers
+final class TideyStatusSemanticsThemeAdapter: NSObject {
+    let tokens: TideyInterfaceThemeTokens
+    let usesSemanticStatusColors: Bool
+
+    @nonobjc
+    init(tokens: TideyInterfaceThemeTokens, usesSemanticStatusColors: Bool) {
+        self.tokens = tokens
+        self.usesSemanticStatusColors = usesSemanticStatusColors
+        super.init()
+    }
+
+    @objc(colorForStatusValues:producerColor:selected:)
+    func color(forStatusValues values: [String],
+               producerColor: NSColor?,
+               selected: Bool) -> NSColor {
+        guard usesSemanticStatusColors else {
+            return selected ? tokens.sidebarSelectedSecondaryTextColor
+                            : (producerColor ?? NSColor.secondaryLabelColor)
+        }
+        if values.contains("Needs input") {
+            return tokens.sidebarUnreadColor
+        }
+        if values.contains("Running") {
+            return tokens.sidebarRunningColor
+        }
+        if values.contains("Idle") {
+            return selected ? tokens.sidebarSelectedIdleColor : tokens.sidebarIdleColor
+        }
+        return tokens.sidebarSecondaryTextColor
+    }
+}
+
+@objcMembers
+final class TideySettingsThemeAdapter: NSObject {
+    let mainWindowBackgroundColor: NSColor
+    let panelBackgroundColor: NSColor
+    let cardBackgroundColor: NSColor
+    let cardBorderColor: NSColor
+    let dividerColor: NSColor
+    let primaryTextColor: NSColor
+    let secondaryTextColor: NSColor
+    let tertiaryTextColor: NSColor
+    let accentColor: NSColor
+    let tabSelectionBackgroundColor: NSColor
+    let tabSelectionTextColor: NSColor
+    let tabTextColor: NSColor
+
+    @nonobjc
+    init(tokens: TideyInterfaceThemeTokens,
+         mainWindowBackgroundColor: NSColor? = nil,
+         panelBackgroundColor: NSColor? = nil,
+         cardBackgroundColor: NSColor? = nil,
+         cardBorderColor: NSColor? = nil,
+         dividerColor: NSColor? = nil,
+         primaryTextColor: NSColor? = nil,
+         secondaryTextColor: NSColor? = nil,
+         tertiaryTextColor: NSColor? = nil,
+         accentColor: NSColor? = nil,
+         tabSelectionBackgroundColor: NSColor? = nil,
+         tabSelectionTextColor: NSColor? = nil,
+         tabTextColor: NSColor? = nil) {
+        self.mainWindowBackgroundColor = mainWindowBackgroundColor ?? tokens.settingsPanelBackgroundColor
+        self.panelBackgroundColor = panelBackgroundColor ?? tokens.settingsPanelBackgroundColor
+        self.cardBackgroundColor = cardBackgroundColor ?? tokens.settingsCardBackgroundColor
+        self.cardBorderColor = cardBorderColor ?? tokens.settingsCardBorderColor
+        self.dividerColor = dividerColor ?? tokens.settingsDividerColor
+        self.primaryTextColor = primaryTextColor ?? tokens.settingsPrimaryTextColor
+        self.secondaryTextColor = secondaryTextColor ?? tokens.settingsSecondaryTextColor
+        self.tertiaryTextColor = tertiaryTextColor ?? tokens.rightPanelTertiaryTextColor
+        self.accentColor = accentColor ?? tokens.sidebarRunningColor
+        self.tabSelectionBackgroundColor = tabSelectionBackgroundColor ?? tokens.settingsCardBackgroundColor
+        self.tabSelectionTextColor = tabSelectionTextColor ?? tokens.sidebarRunningColor
+        self.tabTextColor = tabTextColor ?? tokens.settingsSecondaryTextColor
+        super.init()
+    }
+}
+
+@objcMembers
+final class TideyInterfaceThemeDefinition: NSObject {
+    let identifier: String
+    let displayName: String
+    let tokens: TideyInterfaceThemeTokens
+    let terminalAdapter: TideyTerminalThemeAdapter
+    let editorCanvasAdapter: TideyEditorCanvasThemeAdapter
+    let statusSemanticsAdapter: TideyStatusSemanticsThemeAdapter
+    let settingsAdapter: TideySettingsThemeAdapter
+
+    @nonobjc
+    init(identifier: String,
+         displayName: String,
+         tokens: TideyInterfaceThemeTokens,
+         terminalAdapter: TideyTerminalThemeAdapter? = nil,
+         editorCanvasAdapter: TideyEditorCanvasThemeAdapter? = nil,
+         statusSemanticsAdapter: TideyStatusSemanticsThemeAdapter? = nil,
+         settingsAdapter: TideySettingsThemeAdapter? = nil) {
+        let canonicalIdentifier = identifier.trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+        let resolvedTerminalAdapter = terminalAdapter ?? .themed(tokens: tokens)
+        self.identifier = canonicalIdentifier
+        self.displayName = displayName
+        self.tokens = tokens
+        self.terminalAdapter = resolvedTerminalAdapter
+        self.editorCanvasAdapter = editorCanvasAdapter ?? TideyEditorCanvasThemeAdapter(
+            identifier: canonicalIdentifier,
+            tokens: tokens,
+            terminalAdapter: resolvedTerminalAdapter,
+            usesTerminalPaletteRules: true)
+        self.statusSemanticsAdapter = statusSemanticsAdapter ?? TideyStatusSemanticsThemeAdapter(
+            tokens: tokens,
+            usesSemanticStatusColors: true)
+        self.settingsAdapter = settingsAdapter ?? TideySettingsThemeAdapter(tokens: tokens)
+        super.init()
+    }
+
+    static let classic: TideyInterfaceThemeDefinition = {
+        let tokens = TideyInterfaceThemeTokens.classic
+        let terminal = TideyTerminalThemeAdapter.profileCompatible(tokens: tokens)
+        let editor = TideyEditorCanvasThemeAdapter(identifier: "classic",
+                                                    tokens: tokens,
+                                                    terminalAdapter: terminal,
+                                                    usesTerminalPaletteRules: false)
+        let status = TideyStatusSemanticsThemeAdapter(tokens: tokens,
+                                                      usesSemanticStatusColors: false)
+        let settings = TideySettingsThemeAdapter(
+            tokens: tokens,
+            mainWindowBackgroundColor: NSColor(srgbRed: 0x1a / 255.0,
+                                               green: 0x1a / 255.0,
+                                               blue: 0x1a / 255.0,
+                                               alpha: 1),
+            panelBackgroundColor: NSColor(srgbRed: 0x1e / 255.0,
+                                          green: 0x1e / 255.0,
+                                          blue: 0x1e / 255.0,
+                                          alpha: 1),
+            cardBackgroundColor: NSColor(srgbRed: 0x2a / 255.0,
+                                         green: 0x2a / 255.0,
+                                         blue: 0x2c / 255.0,
+                                         alpha: 1),
+            cardBorderColor: NSColor(white: 1, alpha: 0.06),
+            dividerColor: NSColor(white: 1, alpha: 0.07),
+            primaryTextColor: NSColor(srgbRed: 1, green: 1, blue: 1, alpha: 0.92),
+            secondaryTextColor: NSColor(srgbRed: 235 / 255.0,
+                                        green: 235 / 255.0,
+                                        blue: 245 / 255.0,
+                                        alpha: 0.55),
+            tertiaryTextColor: NSColor(srgbRed: 235 / 255.0,
+                                       green: 235 / 255.0,
+                                       blue: 245 / 255.0,
+                                       alpha: 0.28),
+            accentColor: NSColor(srgbRed: 0x0a / 255.0,
+                                 green: 0x84 / 255.0,
+                                 blue: 0xff / 255.0,
+                                 alpha: 1),
+            tabSelectionBackgroundColor: NSColor(srgbRed: 88 / 255.0,
+                                                 green: 178 / 255.0,
+                                                 blue: 220 / 255.0,
+                                                 alpha: 0.12),
+            tabSelectionTextColor: NSColor(srgbRed: 88 / 255.0,
+                                           green: 178 / 255.0,
+                                           blue: 220 / 255.0,
+                                           alpha: 1),
+            tabTextColor: NSColor(srgbRed: 0x88 / 255.0,
+                                  green: 0x88 / 255.0,
+                                  blue: 0x88 / 255.0,
+                                  alpha: 1))
+        return TideyInterfaceThemeDefinition(identifier: "classic",
+                                             displayName: "Classic · 經典藍調",
+                                             tokens: tokens,
+                                             terminalAdapter: terminal,
+                                             editorCanvasAdapter: editor,
+                                             statusSemanticsAdapter: status,
+                                             settingsAdapter: settings)
+    }()
+
+    static let warm: TideyInterfaceThemeDefinition = {
+        let tokens = TideyInterfaceThemeTokens.warm
+        let terminal = TideyTerminalThemeAdapter.themed(
+            tokens: tokens,
+            colorOverrides: TideyTerminalThemeAdapter.warmColorOverrides)
+        let editor = TideyEditorCanvasThemeAdapter(identifier: "warm",
+                                                    tokens: tokens,
+                                                    terminalAdapter: terminal,
+                                                    usesTerminalPaletteRules: true)
+        return TideyInterfaceThemeDefinition(identifier: "warm",
+                                             displayName: "Amber Night · 琥珀夜色",
+                                             tokens: tokens,
+                                             terminalAdapter: terminal,
+                                             editorCanvasAdapter: editor)
+    }()
+
+    static let sakura: TideyInterfaceThemeDefinition = {
+        let tokens = TideyInterfaceThemeTokens.sakura
+        let terminal = TideyTerminalThemeAdapter.themed(
+            tokens: tokens,
+            colorOverrides: TideyTerminalThemeAdapter.sakuraColorOverrides)
+        let accent = tokens.rightPanelTabSelectionIndicatorColor
+        let settings = TideySettingsThemeAdapter(
+            tokens: tokens,
+            accentColor: accent,
+            tabSelectionBackgroundColor: accent.withAlphaComponent(0.12),
+            tabSelectionTextColor: accent)
+        return TideyInterfaceThemeDefinition(identifier: "sakura",
+                                             displayName: "Sakura Fubuki · 落櫻繽紛",
+                                             tokens: tokens,
+                                             terminalAdapter: terminal,
+                                             settingsAdapter: settings)
+    }()
+}
+
+@objcMembers
+final class TideyInterfaceThemeRegistry: NSObject {
+    static let shared = TideyInterfaceThemeRegistry(
+        themes: [.classic, .warm, .sakura],
+        fallbackIdentifier: "classic")
+
+    private let lock = NSLock()
+    private var orderedThemes: [TideyInterfaceThemeDefinition]
+    private var themesByIdentifier: [String: TideyInterfaceThemeDefinition]
+    let fallbackIdentifier: String
+
+    @nonobjc
+    init(themes: [TideyInterfaceThemeDefinition], fallbackIdentifier: String) {
+        precondition(!themes.isEmpty, "A theme registry needs at least one theme")
+        self.orderedThemes = []
+        self.themesByIdentifier = [:]
+        for theme in themes where Self.isValid(identifier: theme.identifier) {
+            guard self.themesByIdentifier[theme.identifier] == nil else { continue }
+            self.orderedThemes.append(theme)
+            self.themesByIdentifier[theme.identifier] = theme
+        }
+        precondition(!self.orderedThemes.isEmpty, "A theme registry needs at least one valid theme")
+        let canonicalFallback = Self.canonical(identifier: fallbackIdentifier)
+        self.fallbackIdentifier = self.themesByIdentifier[canonicalFallback] != nil
+            ? canonicalFallback
+            : self.orderedThemes[0].identifier
+        super.init()
+    }
+
+    var availableThemes: [TideyInterfaceThemeDefinition] {
+        lock.lock()
+        defer { lock.unlock() }
+        return orderedThemes
+    }
+
+    var supportedThemeIdentifiers: [String] {
+        availableThemes.map(\.identifier)
+    }
+
+    @objc(registerTheme:)
+    @discardableResult
+    func register(_ theme: TideyInterfaceThemeDefinition) -> Bool {
+        guard Self.isValid(identifier: theme.identifier) else { return false }
+        lock.lock()
+        defer { lock.unlock() }
+        guard themesByIdentifier[theme.identifier] == nil else { return false }
+        orderedThemes.append(theme)
+        themesByIdentifier[theme.identifier] = theme
+        return true
+    }
+
+    @objc(themeForIdentifier:)
+    func theme(forIdentifier identifier: String?) -> TideyInterfaceThemeDefinition {
+        let canonical = Self.canonical(identifier: identifier)
+        lock.lock()
+        defer { lock.unlock() }
+        return themesByIdentifier[canonical] ?? themesByIdentifier[fallbackIdentifier] ?? orderedThemes[0]
+    }
+
+    @objc(normalizedThemeIdentifier:)
+    func normalizedThemeIdentifier(_ identifier: String?) -> String {
+        theme(forIdentifier: identifier).identifier
+    }
+
+    private static func canonical(identifier: String?) -> String {
+        (identifier ?? "").trimmingCharacters(in: .whitespacesAndNewlines).lowercased()
+    }
+
+    private static func isValid(identifier: String) -> Bool {
+        guard !identifier.isEmpty else { return false }
+        let allowed = CharacterSet(charactersIn: "abcdefghijklmnopqrstuvwxyz0123456789._-")
+        return identifier.unicodeScalars.allSatisfy { allowed.contains($0) } &&
+               identifier.first?.isLetter == true
+    }
+}
+
+// Geometry and component structure are shared by every theme. Keeping these
+// values outside theme tokens prevents a palette from silently forking layout.
+@objcMembers
+final class TideyChromeLayoutPolicy: NSObject {
+    static let sidebarSelectionCornerRadius: CGFloat = 8
+    static let rightPanelTabCornerRadius: CGFloat = 0
+}
+
+// Browser toolbar geometry is one shared component. Themes provide only the
+// two color tokens used to paint it.
 @objcMembers
 final class TideyBrowserToolbarPolicy: NSObject {
-    @objc(toolbarHeightWithWarmEnabled:)
-    static func toolbarHeight(warmEnabled: Bool) -> CGFloat {
+    static func toolbarHeight() -> CGFloat {
         28
     }
 
-    @objc(urlFieldHeightWithWarmEnabled:)
-    static func urlFieldHeight(warmEnabled: Bool) -> CGFloat {
+    static func urlFieldHeight() -> CGFloat {
         22
     }
 
-    @objc(urlFieldFrameForToolbarHeight:contentWidth:warmEnabled:)
+    @objc(urlFieldFrameForToolbarHeight:contentWidth:)
     static func urlFieldFrame(toolbarHeight: CGFloat,
-                              contentWidth: CGFloat,
-                              warmEnabled: Bool) -> NSRect {
+                              contentWidth: CGFloat) -> NSRect {
         let fieldX: CGFloat = 92
         let fieldRight: CGFloat = 28
-        let fieldHeight = urlFieldHeight(warmEnabled: warmEnabled)
+        let fieldHeight = urlFieldHeight()
         let fieldY = floor((toolbarHeight - fieldHeight) / 2)
         return NSRect(x: fieldX,
                       y: fieldY,
@@ -690,28 +1068,22 @@ final class TideyBrowserToolbarPolicy: NSObject {
                       height: fieldHeight)
     }
 
-    @objc(urlFieldTextRectForFieldBounds:warmEnabled:)
-    static func urlFieldTextRect(fieldBounds: NSRect,
-                                 warmEnabled: Bool) -> NSRect {
-        guard warmEnabled else {
-            return fieldBounds
-        }
-        return NSRect(x: fieldBounds.minX + 4,
-                      y: fieldBounds.minY + 3,
-                      width: max(0, fieldBounds.width - 8),
-                      height: max(0, fieldBounds.height - 6))
+    @objc(urlFieldTextRectForFieldBounds:)
+    static func urlFieldTextRect(fieldBounds: NSRect) -> NSRect {
+        NSRect(x: fieldBounds.minX + 4,
+               y: fieldBounds.minY + 3,
+               width: max(0, fieldBounds.width - 8),
+               height: max(0, fieldBounds.height - 6))
     }
 
-    @objc(toolbarBackgroundColorWithTokens:warmEnabled:)
-    static func toolbarBackgroundColor(tokens: TideyInterfaceThemeTokens,
-                                       warmEnabled: Bool) -> NSColor {
-        warmEnabled
-            ? tokens.rightPanelBackgroundColor
-            : NSColor(white: 0.15, alpha: 1)
+    @objc(toolbarBackgroundColorWithTokens:)
+    static func toolbarBackgroundColor(tokens: TideyInterfaceThemeTokens) -> NSColor {
+        tokens.browserToolbarBackgroundColor
     }
 }
 
-// Shared Warm paper-tab contract. Both the terminal tab bar (PSMMinimalTabStyle)
+// Shared paper-tab contract (every theme; colors come from the theme's
+// tokens). Both the terminal tab bar (PSMMinimalTabStyle)
 // and the right-panel tab strip (TideyEditorTabItemView) render this silhouette:
 // a hairline outline with small top corners, the selected tab full height and
 // open at the bottom so it joins its content, unselected tabs set back behind
@@ -723,7 +1095,8 @@ final class TideyPaperTabPolicy: NSObject {
     static let unselectedTopInset: CGFloat = 2
     static let selectionIndicatorHeight: CGFloat = 2
 
-    /// Short pull bar shown at each resizable vertical boundary in Warm.
+    /// Parked pull-bar experiment (not active in any theme): boundaries are
+    /// full-height 1pt lines; these constants only size a bar wider than 1pt.
     static let pullBarWidth: CGFloat = 2
     static let pullBarLength: CGFloat = 34
 
