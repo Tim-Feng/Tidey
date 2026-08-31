@@ -40,6 +40,71 @@ final class AgentSessionRegistryMonitorTmuxTests: XCTestCase {
         }
     }
 
+    func testRestartReconstructsStagedDoubleStableAndCommittedPaneTransfer() throws {
+        let fileManager = FileManager.default
+        let supportDirectory = fileManager.temporaryDirectory
+            .appendingPathComponent("tidey-handoff-pane-transfer-\(UUID().uuidString)", isDirectory: true)
+        let paths = BridgePaths(supportDirectory: supportDirectory)
+        try paths.ensureSupportDirectoriesExist(fileManager: fileManager)
+        defer { try? fileManager.removeItem(at: supportDirectory) }
+
+        func writeRecord(sessionID: String, paneID: String, createdAt: String) throws {
+            let record = AgentSessionRegistryRecord(version: 1,
+                                                    vendor: "claude",
+                                                    workspaceID: "wrapper-stale-workspace",
+                                                    sessionID: sessionID,
+                                                    panelID: "wrapper-stale-panel",
+                                                    pid: getpid(),
+                                                    cwd: "/tmp",
+                                                    createdAt: createdAt,
+                                                    transcriptPath: nil,
+                                                    tmuxPaneID: paneID,
+                                                    tmuxSocketPath: "/tmp/tidey-handoff-test.sock")
+            let url = paths.claudeAgentSessionsDirectory
+                .appendingPathComponent("claude-\(sessionID).json")
+            try JSONEncoder().encode(record).write(to: url, options: [.atomic])
+        }
+
+        try writeRecord(sessionID: "session-A", paneID: "%1", createdAt: "2026-08-31T00:00:00Z")
+        try writeRecord(sessionID: "session-B", paneID: "%2", createdAt: "2026-08-31T00:01:00Z")
+
+        func resolvedSession(paneSnapshot: String) throws -> String? {
+            // A fresh monitor instance for every phase models a Bridge
+            // restart.  No handoff manifest is consulted: pane options are
+            // the complete source of routing truth.
+            let monitor = AgentSessionRegistryMonitor(
+                paths: paths,
+                fileManager: fileManager,
+                hub: AgentEventHub(),
+                tmuxResolver: TmuxStateResolver(ttl: 0) { socketPath, arguments in
+                    XCTAssertEqual(socketPath, "/tmp/tidey-handoff-test.sock")
+                    XCTAssertEqual(arguments,
+                                   ["list-panes", "-a", "-F", "#{pane_id}|#{@tidey_workspace_id}|#{@tidey_panel_id}"])
+                    return paneSnapshot
+                },
+                parentPIDLookup: { _ in nil }
+            )
+            try monitor.start()
+            return monitor.activeSessionForPanel(workspaceID: "workspace-stable",
+                                                 panelID: "panel-stable")?.sessionID
+        }
+
+        XCTAssertEqual(try resolvedSession(paneSnapshot: """
+        %1|workspace-stable|panel-stable
+        %2|workspace-stable|panel-staging
+        """), "session-A", "prewarmed B cannot steal the stable panel")
+
+        XCTAssertEqual(try resolvedSession(paneSnapshot: """
+        %1|workspace-stable|panel-stable
+        %2|workspace-stable|panel-stable
+        """), "session-B", "the commit's intentional double-stable window deterministically prefers newer B")
+
+        XCTAssertEqual(try resolvedSession(paneSnapshot: """
+        %1|workspace-stable|panel-rollback
+        %2|workspace-stable|panel-stable
+        """), "session-B", "after A is demoted, a restart still reconstructs B as stable")
+    }
+
     func testScanCorrectsStaleRegistryRecordFromTmuxPaneIdentity() throws {
         let fileManager = FileManager.default
         let supportDirectory = fileManager.temporaryDirectory

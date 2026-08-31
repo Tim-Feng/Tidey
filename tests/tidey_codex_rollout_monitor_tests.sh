@@ -106,6 +106,86 @@ run_placeholder_cleanup_test() {
 
 run_placeholder_cleanup_test
 
+run_handoff_token_rollout_lookup_test() {
+    local tmpdir
+    local sqlite_home
+    local expected_rollout
+    local decoy_rollout
+    local token
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-handoff-lookup.XXXXXX")"
+    sqlite_home="$tmpdir/sqlite-home"
+    expected_rollout="$tmpdir/rollout-2026-08-31T08-00-00-01a06666-1111-7222-8333-444444444444.jsonl"
+    decoy_rollout="$tmpdir/rollout-2026-08-31T07-59-00-01a05555-1111-7222-8333-444444444444.jsonl"
+    token="0123456789abcdef0123456789abcdef"
+    mkdir -p "$sqlite_home"
+    printf '%s\n' '{"type":"event_msg","payload":{"message":"neighbor"}}' > "$decoy_rollout"
+    printf '%s\n' "{\"type\":\"event_msg\",\"payload\":{\"message\":\"[handoff_token:$token]\"}}" > "$expected_rollout"
+    python3 - "$sqlite_home/state_5.sqlite" "$decoy_rollout" "$expected_rollout" "$token" <<'PY'
+import sqlite3
+import sys
+
+database, decoy, expected, token = sys.argv[1:]
+with sqlite3.connect(database) as connection:
+    connection.execute(
+        "CREATE TABLE threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, "
+        "first_user_message TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT INTO threads VALUES (?, ?, ?, ?, ?)",
+        ("01a05555-1111-7222-8333-444444444444", decoy, 1, 2, "neighbor"),
+    )
+    connection.execute(
+        "INSERT INTO threads VALUES (?, ?, ?, ?, ?)",
+        (
+            "01a06666-1111-7222-8333-444444444444",
+            expected,
+            2,
+            1,
+            f"continued prompt [handoff_token:{token}]",
+        ),
+    )
+PY
+
+    HANDOFF_SQLITE_HOME="$sqlite_home" HANDOFF_TOKEN="$token" EXPECTED_ROLLOUT="$expected_rollout" CODEX_UNDER_TEST="$CODEX_UNDER_TEST" bash -c '
+        set -euo pipefail
+        source "$CODEX_UNDER_TEST"
+        actual="$(rollout_for_handoff_token "$HANDOFF_SQLITE_HOME" "$HANDOFF_TOKEN")"
+        [[ "$actual" -ef "$EXPECTED_ROLLOUT" ]] || {
+            echo "handoff token selected wrong rollout: $actual" >&2
+            exit 1
+        }
+        [[ -z "$(rollout_for_handoff_token "$HANDOFF_SQLITE_HOME" ffffffffffffffffffffffffffffffff || true)" ]] ||
+            { echo "unknown handoff token selected a rollout" >&2; exit 1; }
+    '
+
+    rm -rf "$tmpdir"
+}
+
+run_handoff_token_rollout_lookup_test
+
+run_handoff_requires_valid_token_test() {
+    local tmpdir
+    local status
+
+    tmpdir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-handoff-token.XXXXXX")"
+    set +e
+    HOME="$tmpdir" \
+        TIDEY_HANDOFF_REPLACEMENT=1 \
+        PATH="/usr/bin:/bin:/usr/sbin:/sbin" \
+        "$CODEX_UNDER_TEST" >"$tmpdir/stdout.log" 2>"$tmpdir/stderr.log"
+    status=$?
+    set -e
+    [[ "$status" == "64" ]] || fail "missing handoff token did not fail closed: status=$status"
+    grep -q 'missing its valid one-shot token' "$tmpdir/stderr.log" ||
+        fail "missing handoff token did not explain the failure"
+    [[ ! -s "$tmpdir/stdout.log" ]] || fail "missing handoff token wrote unexpected stdout"
+    rm -rf "$tmpdir"
+}
+
+run_handoff_requires_valid_token_test
+
 run_stable_profile_paths_test() {
     local tmpdir
 
@@ -772,6 +852,8 @@ FAKE_CODEX
 run_app_server_runtime_disable_path_test
 
 run_app_server_runtime_launch_test() {
+    local expect_stale_registry="${1:-0}"
+    local force_app_server_fallback="${2:-0}"
     local tmpdir
     local fake_home
     local fake_bin
@@ -782,7 +864,14 @@ run_app_server_runtime_launch_test() {
     local app_server_child_pid_file
     local remote_tui_pid_file
     local remote_tui_registry_ok_file
+    local registry_guardian_ok_file
+    local child_handoff_env_file
+    local monitor_alive_file
+    local remote_tui_tty_ok_file
+    local pty_runner
+    local -a wrapper_command
     local stale_registry
+    local handoff_token="0123456789abcdef0123456789abcdef"
 
     tmpdir="$(mktemp -d "/private/tmp/tidey-codex-launch.XXXXXX")"
     fake_home="$tmpdir/home"
@@ -793,6 +882,11 @@ run_app_server_runtime_launch_test() {
     app_server_child_pid_file="$tmpdir/app-server-child.pid"
     remote_tui_pid_file="$tmpdir/remote-tui.pid"
     remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
+    registry_guardian_ok_file="$tmpdir/registry-guardian.ok"
+    child_handoff_env_file="$tmpdir/child-handoff-env.log"
+    monitor_alive_file="$tmpdir/monitor-alive.txt"
+    remote_tui_tty_ok_file="$tmpdir/remote-tui-tty.ok"
+    pty_runner="$tmpdir/run-with-pty.py"
     stale_registry="$registry_root/codex-stale-session.json"
     mkdir -p "$fake_bin" "$registry_root"
 
@@ -805,6 +899,10 @@ if [[ "${1:-}" == "--help" ]]; then
     exit 0
 fi
 if [[ " $* " == *" app-server "* ]]; then
+    printf 'app-server|%s|%s\n' "${TIDEY_HANDOFF_REPLACEMENT-unset}" "${TIDEY_HANDOFF_TOKEN-unset}" >> "$FAKE_CHILD_HANDOFF_ENV_FILE"
+    if [[ "$FAKE_FORCE_APP_SERVER_FALLBACK" == "1" ]]; then
+        exit 33
+    fi
     listen=""
     while [[ $# -gt 0 ]]; do
         if [[ "$1" == "--listen" && $# -ge 2 ]]; then
@@ -819,15 +917,87 @@ if [[ " $* " == *" app-server "* ]]; then
     exit 0
 fi
 if [[ "$*" == *"--remote"* ]]; then
+    printf 'remote|%s|%s\n' "${TIDEY_HANDOFF_REPLACEMENT-unset}" "${TIDEY_HANDOFF_TOKEN-unset}" >> "$FAKE_CHILD_HANDOFF_ENV_FILE"
+    if [[ ! -t 0 ]]; then
+        echo "remote TUI stdin is not a terminal" >&2
+        exit 34
+    fi
+    printf 'ok\n' > "$FAKE_REMOTE_TUI_TTY_OK_FILE"
     printf '%s\n' "$$" > "$FAKE_REMOTE_TUI_PID_FILE"
+    if [[ "$FAKE_EXPECT_STALE_REGISTRY" == "1" ]]; then
+        mkdir -p "$(dirname "$FAKE_DECOY_ROLLOUT_PATH")"
+        exec 9>>"$FAKE_DECOY_ROLLOUT_PATH"
+        printf '%s\n' '{"type":"session_meta","payload":{"message":"neighbor"}}' >&9
+        IFS= read -r handoff_line
+        [[ "$handoff_line" == *"[handoff_token:$FAKE_HANDOFF_TOKEN]"* ]] || {
+            echo "remote TUI did not receive the expected handoff token" >&2
+            exit 36
+        }
+        mkdir -p "$(dirname "$FAKE_FRESH_ROLLOUT_PATH")" "$FAKE_SQLITE_HOME"
+        printf '%s\n' "{\"type\":\"event_msg\",\"payload\":{\"message\":\"$handoff_line\"}}" > "$FAKE_FRESH_ROLLOUT_PATH"
+        python3 - "$FAKE_SQLITE_HOME/state_5.sqlite" "$FAKE_FRESH_THREAD_ID" "$FAKE_FRESH_ROLLOUT_PATH" "$handoff_line" <<'PY'
+import sqlite3
+import sys
+
+database, thread_id, rollout_path, first_user_message = sys.argv[1:]
+with sqlite3.connect(database) as connection:
+    connection.execute(
+        "CREATE TABLE IF NOT EXISTS threads (id TEXT PRIMARY KEY, rollout_path TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL, updated_at_ms INTEGER NOT NULL, "
+        "first_user_message TEXT NOT NULL)"
+    )
+    connection.execute(
+        "INSERT OR REPLACE INTO threads VALUES (?, ?, ?, ?, ?)",
+        (thread_id, rollout_path, 1, 1, first_user_message),
+    )
+PY
+    elif [[ -n "${FAKE_FRESH_ROLLOUT_PATH:-}" ]]; then
+        mkdir -p "$(dirname "$FAKE_FRESH_ROLLOUT_PATH")"
+        exec 9>>"$FAKE_FRESH_ROLLOUT_PATH"
+        printf '%s\n' '{"type":"session_meta"}' >&9
+    fi
     for _ in $(seq 1 50); do
-        if grep -q "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-*.json 2>/dev/null; then
+        if grep -q "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-*.json 2>/dev/null &&
+           grep -q "\"thread_id\":\"$FAKE_FRESH_THREAD_ID\"" "$FAKE_REGISTRY_ROOT"/codex-*.json 2>/dev/null; then
             printf 'ok\n' > "$FAKE_REMOTE_TUI_REGISTRY_OK_FILE"
             break
         fi
         sleep 0.02
     done
-    if [[ -e "$FAKE_STALE_REGISTRY" ]]; then
+    current_registry="$(grep -l "\"remote_tui_pid\":$$" "$FAKE_REGISTRY_ROOT"/codex-*.json 2>/dev/null | head -n 1)"
+    if [[ -n "$current_registry" ]]; then
+        rm -f "$current_registry"
+        for _ in $(seq 1 50); do
+            if [[ -f "$current_registry" ]] &&
+               grep -q "\"remote_tui_pid\":$$" "$current_registry" 2>/dev/null &&
+               grep -q "\"thread_id\":\"$FAKE_FRESH_THREAD_ID\"" "$current_registry" 2>/dev/null; then
+                printf 'ok\n' > "$FAKE_REGISTRY_GUARDIAN_OK_FILE"
+                break
+            fi
+            sleep 0.02
+        done
+    fi
+    [[ -f "$FAKE_REGISTRY_GUARDIAN_OK_FILE" ]] || {
+        echo "live wrapper registry was not republished after external removal" >&2
+        exit 35
+    }
+    sleep 0.1
+    live_siblings=0
+    : > "$FAKE_MONITOR_ALIVE_FILE.details"
+    while IFS= read -r sibling_pid; do
+        sibling_state="$(ps -o stat= -p "$sibling_pid" 2>/dev/null | tr -d ' ' || true)"
+        ps -o pid=,ppid=,stat=,command= -p "$sibling_pid" >> "$FAKE_MONITOR_ALIVE_FILE.details" 2>/dev/null || true
+        if [[ -n "$sibling_state" && "$sibling_state" != Z* ]]; then
+            live_siblings=$((live_siblings + 1))
+        fi
+    done < <(pgrep -P "$PPID" 2>/dev/null || true)
+    printf '%s\n' "$live_siblings" > "$FAKE_MONITOR_ALIVE_FILE"
+    if [[ "$FAKE_EXPECT_STALE_REGISTRY" == "1" ]]; then
+        if [[ ! -e "$FAKE_STALE_REGISTRY" ]]; then
+            echo "handoff replacement removed the original registry" >&2
+            exit 32
+        fi
+    elif [[ -e "$FAKE_STALE_REGISTRY" ]]; then
         echo "stale registry survived current launch" >&2
         exit 31
     fi
@@ -837,6 +1007,57 @@ fi
 sleep 0.2
 FAKE_CODEX
     chmod +x "$fake_bin/codex"
+
+    cat > "$pty_runner" <<'PY'
+#!/usr/bin/env python3
+import os
+import pty
+import select
+import signal
+import sys
+import time
+
+pid, master_fd = pty.fork()
+if pid == 0:
+    os.execv(sys.argv[1], sys.argv[1:])
+
+deadline = time.monotonic() + 20
+status = None
+input_text = os.environ.get("FAKE_PTY_INPUT", "")
+input_sent = False
+input_at = time.monotonic() + 0.5
+while status is None:
+    waited_pid, waited_status = os.waitpid(pid, os.WNOHANG)
+    if waited_pid == pid:
+        status = waited_status
+        break
+    readable, _, _ = select.select([master_fd], [], [], 0.1)
+    if readable:
+        try:
+            output = os.read(master_fd, 4096)
+        except OSError:
+            output = b""
+        if output:
+            os.write(sys.stdout.fileno(), output)
+    if input_text and not input_sent and time.monotonic() >= input_at:
+        os.write(master_fd, input_text.encode())
+        input_sent = True
+    if time.monotonic() >= deadline:
+        os.killpg(pid, signal.SIGTERM)
+        _, status = os.waitpid(pid, 0)
+        os.close(master_fd)
+        raise SystemExit(124)
+
+os.close(master_fd)
+raise SystemExit(os.waitstatus_to_exitcode(status))
+PY
+    chmod +x "$pty_runner"
+
+    if [[ "$force_app_server_fallback" == "1" ]]; then
+        wrapper_command=("$CODEX_UNDER_TEST")
+    else
+        wrapper_command=(python3 "$pty_runner" "$CODEX_UNDER_TEST")
+    fi
 
     python3 -c 'import socket, sys, time; sock = socket.socket(socket.AF_UNIX); sock.bind(sys.argv[1]); time.sleep(10)' "$socket" &
     socket_pid="$!"
@@ -850,25 +1071,75 @@ FAKE_CODEX
 JSON
 
     HOME="$fake_home" \
-        PATH="$fake_bin:/usr/bin:/bin" \
+        PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
         TIDEY_PANEL_ID="panel-1" \
+        TIDEY_HANDOFF_REPLACEMENT="$expect_stale_registry" \
+        TIDEY_HANDOFF_TOKEN="$handoff_token" \
         FAKE_CODEX_LOG="$codex_log" \
         FAKE_APP_SERVER_CHILD_PID_FILE="$app_server_child_pid_file" \
         FAKE_REMOTE_TUI_PID_FILE="$remote_tui_pid_file" \
         FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
+        FAKE_REGISTRY_GUARDIAN_OK_FILE="$registry_guardian_ok_file" \
+        FAKE_CHILD_HANDOFF_ENV_FILE="$child_handoff_env_file" \
+        FAKE_MONITOR_ALIVE_FILE="$monitor_alive_file" \
+        FAKE_REMOTE_TUI_TTY_OK_FILE="$remote_tui_tty_ok_file" \
+        FAKE_FORCE_APP_SERVER_FALLBACK="$force_app_server_fallback" \
+        FAKE_FRESH_THREAD_ID="019f0000-1111-7222-8333-444444444444" \
+        FAKE_FRESH_ROLLOUT_PATH="$fake_home/.codex/sessions/2026/08/31/rollout-2026-08-31T06-20-00-019f0000-1111-7222-8333-444444444444.jsonl" \
+        FAKE_DECOY_ROLLOUT_PATH="$fake_home/.codex/sessions/2026/08/31/rollout-2026-08-31T06-19-00-019f0000-aaaa-7222-8333-444444444444.jsonl" \
+        FAKE_HANDOFF_TOKEN="$handoff_token" \
+        FAKE_PTY_INPUT="[handoff_token:$handoff_token]"$'\n' \
+        FAKE_SQLITE_HOME="$fake_home/.codex/.tmp/tidey-codex-sqlite-panel-workspace-1-panel-1" \
         FAKE_REGISTRY_ROOT="$registry_root" \
         FAKE_STALE_REGISTRY="$stale_registry" \
+        FAKE_EXPECT_STALE_REGISTRY="$expect_stale_registry" \
         TMPDIR="$tmpdir" \
-        "$CODEX_UNDER_TEST"
+        "${wrapper_command[@]}"
 
-    [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "app-server registry file was not cleaned up"
+    expected_registry_count=0
+    if [[ "$expect_stale_registry" == "1" ]]; then
+        expected_registry_count=1
+    fi
+    for _ in $(seq 1 50); do
+        registry_count="$(find "$registry_root" -name "codex-*.json" -print | wc -l | tr -d ' ')"
+        [[ "$registry_count" == "$expected_registry_count" ]] && break
+        sleep 0.02
+    done
+    if [[ "$expect_stale_registry" == "1" ]]; then
+        [[ -f "$stale_registry" ]] || fail "handoff replacement did not preserve the original registry"
+        [[ "$(find "$registry_root" -name "codex-*.json" -print | wc -l | tr -d ' ')" == "1" ]] || fail "replacement registry file was not cleaned up"
+    else
+        [[ -z "$(find "$registry_root" -name "codex-*.json" -print -quit)" ]] || fail "app-server registry file was not cleaned up"
+    fi
     grep -q "app-server" "$codex_log" || fail "app-server was not launched"
-    grep -q -- "--remote" "$codex_log" || fail "remote TUI was not launched"
-    [[ -f "$remote_tui_pid_file" ]] || fail "remote TUI pid was not recorded"
-    [[ -f "$remote_tui_registry_ok_file" ]] || fail "remote TUI pid was not written to registry"
-    [[ -f "$app_server_child_pid_file" ]] || fail "app-server child pid was not recorded"
+    if grep -Evq '^(app-server|remote)\|unset\|unset$' "$child_handoff_env_file"; then
+        fail "one-shot handoff environment leaked into a Codex child runtime: $(tr '\n' ';' < "$child_handoff_env_file")"
+    fi
+    if [[ "$force_app_server_fallback" == "1" ]]; then
+        if grep -q -- "--remote" "$codex_log"; then
+            fail "remote TUI was launched after forced app-server fallback"
+        fi
+        [[ ! -f "$remote_tui_pid_file" ]] || fail "fallback unexpectedly recorded a remote TUI pid"
+        [[ ! -f "$app_server_child_pid_file" ]] || fail "fallback unexpectedly started an app-server child"
+    else
+        grep -q -- "--remote" "$codex_log" || fail "remote TUI was not launched"
+        grep -q -- "check_for_update_on_startup=false" "$codex_log" || fail "remote TUI did not disable the startup update chooser"
+        [[ -f "$remote_tui_pid_file" ]] || fail "remote TUI pid was not recorded"
+        [[ -f "$remote_tui_tty_ok_file" ]] || fail "remote TUI stdin was not attached to the wrapper TTY"
+        [[ -f "$remote_tui_registry_ok_file" ]] || fail "remote TUI pid was not written to registry"
+        [[ -f "$registry_guardian_ok_file" ]] || fail "live wrapper registry was not republished after external removal"
+        [[ -f "$monitor_alive_file" ]] || fail "remote TUI did not inspect the registry monitor lifetime"
+        grep -Fq "$CODEX_UNDER_TEST" "$monitor_alive_file.details" || fail "registry monitor exited before wrapper cleanup: $(tr '\n' ';' < "$monitor_alive_file.details")"
+        [[ -f "$app_server_child_pid_file" ]] || fail "app-server child pid was not recorded"
+    fi
+    if [[ "$force_app_server_fallback" == "1" ]]; then
+        kill "$socket_pid" 2>/dev/null || true
+        wait "$socket_pid" 2>/dev/null || true
+        rm -rf "$tmpdir"
+        return
+    fi
     app_server_child_pid="$(cat "$app_server_child_pid_file")"
     for _ in $(seq 1 50); do
         child_state="$(ps -o stat= -p "$app_server_child_pid" 2>/dev/null | tr -d " " || true)"
@@ -908,7 +1179,8 @@ assert all('mcp_servers.tidey_browser.default_tools_approval_mode="approve"' in 
 assert all(line.count("hooks.state={") == 1 for line in app_server_lines), app_server_lines
 assert all('hooks.state."' not in line for line in app_server_lines), app_server_lines
 assert all(line.count('trusted_hash="sha256:') >= 3 for line in app_server_lines), app_server_lines
-assert all("--profile tidey-codex-panel-workspace-1-panel-1 --remote" in line for line in remote_lines), remote_lines
+assert all("--profile tidey-codex-panel-workspace-1-panel-1" in line for line in remote_lines), remote_lines
+assert all("check_for_update_on_startup=false" in line for line in remote_lines), remote_lines
 PY
 
     kill "$socket_pid" 2>/dev/null || true
@@ -917,7 +1189,9 @@ PY
     rm -rf "$tmpdir"
 }
 
-run_app_server_runtime_launch_test
+run_app_server_runtime_launch_test 0 0
+run_app_server_runtime_launch_test 1 0
+run_app_server_runtime_launch_test 1 1
 
 run_app_server_runtime_resume_launch_test() {
     local tmpdir

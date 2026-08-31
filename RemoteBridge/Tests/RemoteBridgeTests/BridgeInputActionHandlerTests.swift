@@ -260,6 +260,38 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         XCTAssertEqual(delayRecorder.recordedDelays, [chatSubmitEnterDelayNanoseconds])
     }
 
+    func testChatSubmitStopsBeforeEnterWhenRouteChangesDuringDelay() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "claude",
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-A",
+                                                                              panelID: "panel-1"))
+        let handler = BridgeInputActionHandler(
+            socketSender: sender,
+            sessionResolver: resolver,
+            sleep: { _ in
+                resolver.session = ActiveAgentSessionSnapshot(vendor: "claude",
+                                                              workspaceID: "workspace-1",
+                                                              sessionID: "session-B",
+                                                              panelID: "panel-1")
+            }
+        )
+
+        XCTAssertThrowsError(
+            try handler.handle(BridgeRequest(id: "request-handoff",
+                                             action: "chat_submit",
+                                             params: [
+                                                "workspace_id": .string("workspace-1"),
+                                                "panel_id": .string("panel-1"),
+                                                "message": .string("handoff race"),
+                                                "session_id": .string("session-A"),
+                                                "vendor": .string("claude"),
+                                             ]))
+        )
+        XCTAssertEqual(sender.sentRequests.map(\.action), ["send_input"],
+                       "the stale A submission must not send Enter into replacement session B")
+    }
+
     func testChatSubmitForCodexSplitsTextAndEnterWithDelay() throws {
         let sender = MockTideyRequestSender()
         let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: "codex",
@@ -339,6 +371,41 @@ final class BridgeInputActionHandlerTests: XCTestCase {
                                                        text: "hello from remote",
                                                        clientRequestID: "client-1"),
         ])
+    }
+
+    func testCodexAppServerSubmitRejectsRouteThatChangesBeforeDispatch() throws {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(
+            session: ActiveAgentSessionSnapshot(vendor: "codex",
+                                                workspaceID: "workspace-1",
+                                                sessionID: "session-1",
+                                                panelID: "panel-1"),
+            recordsBySessionID: ["session-1": appServerRecord()]
+        )
+        resolver.onActiveRecord = {
+            resolver.session = ActiveAgentSessionSnapshot(vendor: "codex",
+                                                          workspaceID: "workspace-1",
+                                                          sessionID: "session-B",
+                                                          panelID: "panel-1")
+        }
+        let appServerSubmitter = MockCodexAppServerChatSubmitter()
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               codexAppServerChatSubmitter: appServerSubmitter)
+
+        XCTAssertThrowsError(
+            try handler.handle(BridgeRequest(id: "request-handoff",
+                                             action: "chat_submit",
+                                             params: [
+                                                "workspace_id": .string("workspace-1"),
+                                                "panel_id": .string("panel-1"),
+                                                "message": .string("handoff race"),
+                                                "session_id": .string("session-1"),
+                                                "vendor": .string("codex"),
+                                             ]))
+        )
+        XCTAssertTrue(appServerSubmitter.attempts.isEmpty)
+        XCTAssertTrue(sender.sentRequests.isEmpty)
     }
 
     func testChatSubmitForCodexAppServerRuntimeSkipsCanSubmitPrecheck() throws {
@@ -901,7 +968,8 @@ final class BridgeInputActionHandlerTests: XCTestCase {
 }
 
 private final class MockSessionResolver: ActiveAgentSessionResolving {
-    private let session: ActiveAgentSessionSnapshot?
+    var session: ActiveAgentSessionSnapshot?
+    var onActiveRecord: (() -> Void)?
     private let recordsBySessionID: [String: AgentSessionRegistryRecord]
 
     init(session: ActiveAgentSessionSnapshot? = nil,
@@ -915,7 +983,9 @@ private final class MockSessionResolver: ActiveAgentSessionResolving {
     }
 
     func activeRecord(sessionID: String) -> AgentSessionRegistryRecord? {
-        recordsBySessionID[sessionID]
+        let record = recordsBySessionID[sessionID]
+        onActiveRecord?()
+        return record
     }
 }
 

@@ -196,7 +196,9 @@ final class CodexAppServerRuntimeSession {
     }
 
     // Seeds the store's active-turn state from a thread/resume response's
-    // `result.thread.turns` — this is the ONLY way a Bridge attach/re-attach
+    // bounded `result.initialTurnsPage.data`, with `result.thread.turns` as
+    // a compatibility fallback for older response shapes. This is the ONLY
+    // way a Bridge attach/re-attach
     // (especially immediately after a Bridge deploy or a new app-server
     // PID) can learn the exact turn id of an ALREADY-RUNNING turn: nothing
     // guarantees a historical turn/started notification will ever arrive
@@ -222,7 +224,9 @@ final class CodexAppServerRuntimeSession {
               thread["id"]?.stringValue == threadID else {
             return
         }
-        let turns = thread["turns"]?.arrayValue ?? []
+        let turns = payload.objectValue?["initialTurnsPage"]?.objectValue?["data"]?.arrayValue
+            ?? thread["turns"]?.arrayValue
+            ?? []
         let inProgressTurnIDs = turns.compactMap { turn -> String? in
             guard let object = turn.objectValue,
                   object["status"]?.stringValue == "inProgress" else {
@@ -806,7 +810,12 @@ final class CodexAppServerRuntimeSession {
             try connection.sendClientRequest(method: "thread/resume",
                                              params: [
                                                 "threadId": .string(threadID),
-                                                "excludeTurns": .bool(false),
+                                                "excludeTurns": .bool(true),
+                                                "initialTurnsPage": .object([
+                                                    "limit": .number(1),
+                                                    "sortDirection": .string("desc"),
+                                                    "itemsView": .string("summary"),
+                                                ]),
                                              ],
                                              onResponse: { [weak self] response in
                                                 CodexAppServerHeadlessRuntime.logThreadResumeResponse(response,

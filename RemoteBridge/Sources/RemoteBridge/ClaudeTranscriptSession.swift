@@ -612,10 +612,19 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    func scanRegistryForTesting() {
+    func refreshActiveSessionRoutes() {
         queue.sync {
+            // Submit fencing must observe pane-option cutovers immediately.
+            // The ordinary monitor scan may reuse the resolver's short TTL,
+            // but a route capture/validation cannot tolerate that stale
+            // window because it could still dispatch to handoff source A.
+            tmuxResolver.invalidatePaneIdentityCache()
             scanRegistry()
         }
+    }
+
+    func scanRegistryForTesting() {
+        refreshActiveSessionRoutes()
     }
 
     func currentRuntimeResumeAgentRecords()

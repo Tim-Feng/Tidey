@@ -6,6 +6,10 @@ TIDEY_REMOTE_BRIDGE_SUPPORT_ROOT="$HOME/Library/Application Support/Tidey Remote
 REGISTRY_ROOT="$TIDEY_REMOTE_BRIDGE_SUPPORT_ROOT/agent-sessions/codex"
 CODEX_RUNTIME_COMPATIBILITY_FILE="$TIDEY_REMOTE_BRIDGE_SUPPORT_ROOT/codex-runtime-compatibility.json"
 HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]:-$0}")" && pwd)"
+unset _tidey_handoff_replacement_active
+_tidey_handoff_replacement_active=0
+unset _tidey_handoff_token
+_tidey_handoff_token=""
 # shellcheck source=/dev/null
 source "$HOOK_DIR/tidey-tmux-pane-identity"
 
@@ -801,6 +805,10 @@ cleanup_stale_app_server_registry_records() {
     local app_server_pid=""
     local remote_tui_pid=""
 
+    if [[ "$_tidey_handoff_replacement_active" == "1" ]]; then
+        return 0
+    fi
+
     mkdir -p "$REGISTRY_ROOT"
     cleanup_rows="$(python3 - "$REGISTRY_ROOT" <<'PY'
 from pathlib import Path
@@ -971,6 +979,62 @@ codex_rollout_path_for_session_id() {
     find "$sessions_root" -type f -name "rollout-*-$session_id.jsonl" -print 2>/dev/null | sort | tail -n 1
 }
 
+rollout_for_handoff_token() {
+    local sqlite_home="$1"
+    local token="$2"
+    local database="$sqlite_home/state_5.sqlite"
+
+    [[ "$token" =~ ^[[:xdigit:]]{32}$ ]] || return 1
+    [[ -f "$database" && -r "$database" ]] || return 1
+    python3 - "$database" "$token" <<'PY'
+from pathlib import Path
+import re
+import sqlite3
+import sys
+
+database = Path(sys.argv[1])
+token = sys.argv[2]
+marker = f"[handoff_token:{token}]"
+uuid_pattern = re.compile(
+    r"^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-"
+    r"[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$"
+)
+
+try:
+    connection = sqlite3.connect(f"file:{database}?mode=ro", uri=True, timeout=0.05)
+    connection.execute("PRAGMA query_only=ON")
+    connection.execute("PRAGMA busy_timeout=50")
+    rows = connection.execute(
+        "SELECT id, rollout_path, first_user_message FROM threads "
+        "WHERE first_user_message <> '' "
+        "ORDER BY created_at DESC, id DESC LIMIT 16"
+    ).fetchall()
+except (OSError, sqlite3.Error):
+    raise SystemExit(1)
+finally:
+    try:
+        connection.close()
+    except (NameError, sqlite3.Error):
+        pass
+
+for thread_id, raw_path, first_user_message in rows:
+    if not isinstance(first_user_message, str) or marker not in first_user_message:
+        continue
+    if not isinstance(thread_id, str) or not uuid_pattern.fullmatch(thread_id):
+        continue
+    if not isinstance(raw_path, str) or not raw_path:
+        continue
+    path = Path(raw_path)
+    if not path.is_absolute() or not path.is_file():
+        continue
+    if not path.name.endswith(f"-{thread_id}.jsonl"):
+        continue
+    print(path)
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+}
+
 rollout_for_pid_tree() {
     local root_pid="$1"
     local queue=("$root_pid")
@@ -1050,6 +1114,68 @@ monitor_rollout_and_registry() {
     fi
 }
 
+monitor_app_server_thread_registry() {
+    local owner_pid="$1"
+    local workspace_id="$2"
+    local panel_id="$3"
+    local session_id="$4"
+    local cwd="$5"
+    local created_at="$6"
+    local registry_file="$7"
+    local app_server_socket="$8"
+    local app_server_pid="$9"
+    local remote_tui_pid="${10}"
+    local monitor_identity_file="${11}"
+    local rollout_path="${12:-}"
+    local thread_id="${13:-}"
+    local sqlite_home="${14:-}"
+    local handoff_token="${15:-}"
+    local monitor_pid=""
+    local monitor_parent=""
+    local monitor_interval="0.05"
+    local published=0
+
+    for _ in $(seq 1 100); do
+        if [[ -s "$monitor_identity_file" ]]; then
+            monitor_pid="$(tr -d '[:space:]' < "$monitor_identity_file")"
+            break
+        fi
+        kill -0 "$owner_pid" 2>/dev/null || return 0
+        sleep 0.05
+    done
+    [[ "$monitor_pid" =~ ^[0-9]+$ ]] || return 0
+    if [[ -z "$handoff_token" && -n "$rollout_path" ]] && is_uuid "$thread_id"; then
+        published=1
+    fi
+    if [[ -n "$handoff_token" ]]; then
+        monitor_interval="0.25"
+    fi
+
+    while true; do
+        monitor_parent="$(ps -o ppid= -p "$monitor_pid" 2>/dev/null | tr -d '[:space:]')"
+        [[ "$monitor_parent" == "$owner_pid" ]] || return 0
+        if [[ "$published" == "1" && ! -f "$registry_file" ]]; then
+            write_registry_file "$registry_file" "$workspace_id" "$session_id" "$panel_id" "$owner_pid" "$cwd" "$created_at" "$rollout_path" "codex_app_server" "$app_server_socket" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
+        fi
+        if [[ "$published" == "0" ]] && kill -0 "$remote_tui_pid" 2>/dev/null; then
+            if [[ -n "$handoff_token" ]]; then
+                rollout_path="$(rollout_for_handoff_token "$sqlite_home" "$handoff_token" || true)"
+            else
+                rollout_path="$(rollout_for_pid_tree "$owner_pid" || true)"
+            fi
+            if [[ -n "$rollout_path" ]]; then
+                thread_id="$(derive_session_id_from_rollout "$rollout_path")"
+            fi
+            if is_uuid "$thread_id"; then
+                write_registry_file "$registry_file" "$workspace_id" "$session_id" "$panel_id" "$owner_pid" "$cwd" "$created_at" "$rollout_path" "codex_app_server" "$app_server_socket" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
+                published=1
+                monitor_interval="0.05"
+            fi
+        fi
+        sleep "$monitor_interval"
+    done
+}
+
 start_rollout_monitor_if_needed() {
     local pid="$1"
     local workspace_id="$2"
@@ -1118,8 +1244,11 @@ run_codex_app_server_runtime() {
     local socket_path=""
     local app_server_pid=""
     local remote_tui_pid=""
+    local registry_monitor_pid=""
+    local registry_monitor_identity_file=""
     local app_server_log=""
     local remote_status=0
+    local remote_tui_tty=""
     local socket_wait_attempts="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_ATTEMPTS:-1200}"
     local socket_wait_interval="${TIDEY_CODEX_APP_SERVER_SOCKET_WAIT_INTERVAL:-0.05}"
     local socket_wait_iteration=0
@@ -1128,8 +1257,14 @@ run_codex_app_server_runtime() {
     socket_dir="$(mktemp -d "${TMPDIR:-/tmp}/tidey-codex-app-server.XXXXXX")"
     socket_path="$socket_dir/app.sock"
     app_server_log="$socket_dir/app-server.log"
+    registry_monitor_identity_file="$socket_dir/registry-monitor.pid"
 
     cleanup_codex_app_server_artifacts() {
+        if [[ -n "${registry_monitor_pid:-}" ]]; then
+            kill "$registry_monitor_pid" 2>/dev/null || true
+            wait "$registry_monitor_pid" 2>/dev/null || true
+            registry_monitor_pid=""
+        fi
         if [[ -n "${remote_tui_pid:-}" ]]; then
             kill_pid_tree "$remote_tui_pid"
         fi
@@ -1215,11 +1350,23 @@ run_codex_app_server_runtime() {
         "$HOOK_DIR/tidey" codex-hook session-start || true
     fi
 
+    remote_tui_tty="$(tty 2>/dev/null || true)"
+    if [[ ( -z "$remote_tui_tty" || "$remote_tui_tty" == "not a tty" || ! -c "$remote_tui_tty" ) && -n "${TMUX_PANE:-}" ]] && command -v tmux >/dev/null 2>&1; then
+        remote_tui_tty="$(tmux display-message -p -t "$TMUX_PANE" '#{pane_tty}' 2>/dev/null || true)"
+    fi
+
     set +e
-    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" --remote "unix://$socket_path" "$@" &
+    if [[ -n "$remote_tui_tty" && "$remote_tui_tty" != "not a tty" && -c "$remote_tui_tty" ]]; then
+        env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" -c 'check_for_update_on_startup=false' --remote "unix://$socket_path" "$@" <"$remote_tui_tty" &
+    else
+        env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" -c 'check_for_update_on_startup=false' --remote "unix://$socket_path" "$@" &
+    fi
     remote_tui_pid="$!"
     tidey_hydrate_tmux_pane_identity
     write_registry_file "$registry_file" "$TIDEY_WORKSPACE_ID" "$session_id" "${TIDEY_PANEL_ID:-}" "$$" "$PWD" "$created_at" "$rollout_path" "codex_app_server" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$thread_id" "$thread_id"
+    monitor_app_server_thread_registry "$$" "$TIDEY_WORKSPACE_ID" "${TIDEY_PANEL_ID:-}" "$session_id" "$PWD" "$created_at" "$registry_file" "$socket_path" "$app_server_pid" "$remote_tui_pid" "$registry_monitor_identity_file" "$rollout_path" "$thread_id" "$sqlite_home" "$_tidey_handoff_token" &
+    registry_monitor_pid="$!"
+    printf '%s\n' "$registry_monitor_pid" > "$registry_monitor_identity_file"
     wait "$remote_tui_pid"
     remote_status=$?
     remote_tui_pid=""
@@ -1254,6 +1401,19 @@ main() {
     local use_app_server_runtime=0
     local registry_file=""
     local profile_flag=""
+
+    _tidey_handoff_replacement_active=0
+    _tidey_handoff_token=""
+    if [[ "${TIDEY_HANDOFF_REPLACEMENT:-}" == "1" ]]; then
+        _tidey_handoff_replacement_active=1
+        _tidey_handoff_token="${TIDEY_HANDOFF_TOKEN:-}"
+    fi
+    unset TIDEY_HANDOFF_REPLACEMENT TIDEY_HANDOFF_TOKEN
+    if [[ "$_tidey_handoff_replacement_active" == "1" ]] &&
+       ! [[ "$_tidey_handoff_token" =~ ^[[:xdigit:]]{32}$ ]]; then
+        echo "Error: Tidey handoff replacement is missing its valid one-shot token" >&2
+        exit 64
+    fi
 
     real_codex="$(find_real_codex)" || { echo "Error: codex not found in PATH" >&2; exit 127; }
     # Tidey Dev is a UI sandbox. Keep its agent commands outside the

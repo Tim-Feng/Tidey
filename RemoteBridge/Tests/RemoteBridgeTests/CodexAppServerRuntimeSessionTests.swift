@@ -192,7 +192,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
         let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
         XCTAssertEqual(resumeParams["threadId"]?.stringValue, "thread-live")
-        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, true)
         XCTAssertEqual(activeThreadIDs, ["thread-live"])
 
         let turnStart = try awaitSubmitMessage(session, text: "hello from remote", transport: transport)
@@ -200,6 +200,57 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         let turnParams = try XCTUnwrap(turnStart["params"]?.objectValue)
         XCTAssertEqual(turnParams["threadId"]?.stringValue, "thread-live")
         XCTAssertEqual(turnParams["input"]?.arrayValue?.first?.objectValue?["text"]?.stringValue, "hello from remote")
+    }
+
+    func testSubscriptionResumeRequestsOnlyLatestSummaryTurn() throws {
+        let (_, transport) = try makeLoadedAttachedSession()
+
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
+        let params = try XCTUnwrap(resume["params"]?.objectValue)
+        XCTAssertEqual(params["threadId"]?.stringValue, "thread-live")
+        XCTAssertEqual(params["excludeTurns"]?.boolValue, true)
+
+        let initialTurnsPage = try XCTUnwrap(params["initialTurnsPage"]?.objectValue)
+        XCTAssertEqual(initialTurnsPage["limit"]?.intValue, 1)
+        XCTAssertEqual(initialTurnsPage["sortDirection"]?.stringValue, "desc")
+        XCTAssertEqual(initialTurnsPage["itemsView"]?.stringValue, "summary")
+    }
+
+    func testBoundedThreadResumePageSeedsExistingActiveTurnForSteer() throws {
+        let (session, transport) = try makeLoadedAttachedSession()
+        let resume = try Self.object(from: try XCTUnwrap(transport.sentLines().dropFirst(3).first))
+        let resumeID = try XCTUnwrap(resume["id"])
+
+        transport.emitLine(try Self.responseText(id: resumeID, result: .object([
+            "thread": .object([
+                "id": .string("thread-live"),
+                "status": .object([
+                    "type": .string("active"),
+                    "activeFlags": .array([.string("turn")]),
+                ]),
+                "turns": .array([]),
+            ]),
+            "initialTurnsPage": .object([
+                "data": .array([
+                    .object([
+                        "id": .string("turn-bounded"),
+                        "status": .string("inProgress"),
+                        "items": .array([]),
+                        "itemsView": .string("summary"),
+                    ]),
+                ]),
+                "nextCursor": .null,
+                "backwardsCursor": .null,
+            ]),
+        ])))
+
+        let steer = try awaitSubmitMessage(session,
+                                           text: "continue after bounded resume",
+                                           transport: transport,
+                                           respondWithResult: .object(["turnId": .string("turn-bounded")]))
+        XCTAssertEqual(steer["method"]?.stringValue, "turn/steer")
+        XCTAssertEqual(steer["params"]?.objectValue?["expectedTurnId"]?.stringValue, "turn-bounded")
     }
 
     func testThreadResumeWithUnambiguousInProgressTurnSeedsSteerTarget() throws {
@@ -541,7 +592,7 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
         XCTAssertEqual(resume["method"]?.stringValue, "thread/resume")
         let resumeParams = try XCTUnwrap(resume["params"]?.objectValue)
         XCTAssertEqual(resumeParams["threadId"]?.stringValue, "thread-late")
-        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, false)
+        XCTAssertEqual(resumeParams["excludeTurns"]?.boolValue, true)
         XCTAssertNil(resumeParams["approvalsReviewer"])
 
         let resumeID = try XCTUnwrap(resume["id"])
@@ -2614,8 +2665,20 @@ final class CodexAppServerRuntimeSessionTests: XCTestCase {
             }
             completion.fulfill()
         }
-        XCTAssertTrue(Self.waitForSentLineCount(startCount + 1, transport: transport), file: file, line: line)
-        let requestObject = try Self.object(from: try XCTUnwrap(transport.sentLines()[startCount], file: file, line: line),
+        let didSendRequest = Self.waitForSentLineCount(startCount + 1, transport: transport)
+        XCTAssertTrue(didSendRequest, file: file, line: line)
+        guard didSendRequest else {
+            wait(for: [completion], timeout: 5)
+            if let thrown {
+                throw thrown
+            }
+            throw BridgeInternalError.invalidRequest("submitMessage completed without sending an app-server request")
+        }
+        let requestLine = try XCTUnwrap(transport.sentLines().dropFirst(startCount).first,
+                                        "expected submitMessage to send one app-server request",
+                                        file: file,
+                                        line: line)
+        let requestObject = try Self.object(from: requestLine,
                                             file: file,
                                             line: line)
         let effectiveResult: JSONValue

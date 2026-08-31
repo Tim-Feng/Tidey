@@ -12,9 +12,69 @@ extension TideySocketClient: TideyRequestSending {}
 protocol ActiveAgentSessionResolving {
     func activeSessionForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionSnapshot?
     func activeRecord(sessionID: String) -> AgentSessionRegistryRecord?
+    func activeRouteForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionRoute?
+    func isRouteCurrent(_ token: ActiveAgentSessionRouteToken) -> Bool
 }
 
-extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {}
+struct ActiveAgentSessionRouteToken: Equatable {
+    let workspaceID: String
+    let panelID: String
+    let sessionID: String
+    let vendor: String
+}
+
+struct ActiveAgentSessionRoute {
+    let session: ActiveAgentSessionSnapshot
+    let token: ActiveAgentSessionRouteToken
+}
+
+extension ActiveAgentSessionResolving {
+    func activeRouteForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionRoute? {
+        guard let session = activeSessionForPanel(workspaceID: workspaceID, panelID: panelID) else {
+            return nil
+        }
+        return ActiveAgentSessionRoute(
+            session: session,
+            token: ActiveAgentSessionRouteToken(workspaceID: workspaceID,
+                                                panelID: panelID,
+                                                sessionID: session.sessionID,
+                                                vendor: session.vendor)
+        )
+    }
+
+    func isRouteCurrent(_ token: ActiveAgentSessionRouteToken) -> Bool {
+        guard let session = activeSessionForPanel(workspaceID: token.workspaceID,
+                                                  panelID: token.panelID) else {
+            return false
+        }
+        return session.sessionID == token.sessionID && session.vendor == token.vendor
+    }
+}
+
+extension AgentSessionRegistryMonitor: ActiveAgentSessionResolving {
+    func activeRouteForPanel(workspaceID: String, panelID: String) -> ActiveAgentSessionRoute? {
+        refreshActiveSessionRoutes()
+        guard let session = activeSessionForPanel(workspaceID: workspaceID, panelID: panelID) else {
+            return nil
+        }
+        return ActiveAgentSessionRoute(
+            session: session,
+            token: ActiveAgentSessionRouteToken(workspaceID: workspaceID,
+                                                panelID: panelID,
+                                                sessionID: session.sessionID,
+                                                vendor: session.vendor)
+        )
+    }
+
+    func isRouteCurrent(_ token: ActiveAgentSessionRouteToken) -> Bool {
+        refreshActiveSessionRoutes()
+        guard let session = activeSessionForPanel(workspaceID: token.workspaceID,
+                                                  panelID: token.panelID) else {
+            return false
+        }
+        return session.sessionID == token.sessionID && session.vendor == token.vendor
+    }
+}
 
 protocol CodexAppServerChatSubmitting: AnyObject {
     func canSubmitMessage(sessionID: String) -> Bool
@@ -129,8 +189,9 @@ struct BridgeInputActionHandler {
 
         let requestedSessionID = params["session_id"]?.stringValue
         let requestedVendor = params["vendor"]?.stringValue
-        let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID,
-                                                                  panelID: panelID)
+        let activeRoute = sessionResolver.activeRouteForPanel(workspaceID: workspaceID,
+                                                              panelID: panelID)
+        let activeSession = activeRoute?.session
         if let requestedSessionID,
            let activeSession,
            activeSession.sessionID != requestedSessionID {
@@ -157,7 +218,8 @@ struct BridgeInputActionHandler {
                                                        vendor: vendor,
                                                        panelID: panelID,
                                                        request: request,
-                                                       action: "tui_command_submit") {
+                                                       action: "tui_command_submit",
+                                                       routeToken: activeRoute?.token) {
             return failure
         }
         return Self.submittedResponse(for: request,
@@ -178,7 +240,8 @@ struct BridgeInputActionHandler {
         let requestedSessionID = params["session_id"]?.stringValue
         let requestedVendor = params["vendor"]?.stringValue
         let clientRequestID = params["client_request_id"]?.stringValue
-        let activeSession = sessionResolver.activeSessionForPanel(workspaceID: workspaceID, panelID: panelID)
+        let activeRoute = sessionResolver.activeRouteForPanel(workspaceID: workspaceID, panelID: panelID)
+        let activeSession = activeRoute?.session
         BridgeLogger.input.info("resolve action=chat_submit request_id=\(request.id, privacy: .public) workspace_id=\(workspaceID, privacy: .public) panel_id=\(panelID, privacy: .public) requested_session_id=\(requestedSessionID ?? "-", privacy: .public) requested_vendor=\(requestedVendor ?? "-", privacy: .public) active_session_id=\(activeSession?.sessionID ?? "-", privacy: .public) active_vendor=\(activeSession?.vendor ?? "-", privacy: .public)")
 
         if let requestedSessionID,
@@ -267,6 +330,13 @@ struct BridgeInputActionHandler {
                                              sessionID: appServerSessionID)
             }
 
+            if let routeToken = activeRoute?.token,
+               sessionResolver.isRouteCurrent(routeToken) == false {
+                throw BridgeInternalError.panelContextUnavailable(
+                    "The active agent session changed during message delivery."
+                )
+            }
+
             do {
                 try codexAppServerChatSubmitter.submitMessage(sessionID: appServerSessionID,
                                                               text: message,
@@ -307,6 +377,7 @@ struct BridgeInputActionHandler {
                                                        panelID: panelID,
                                                        request: request,
                                                        action: "chat_submit",
+                                                       routeToken: activeRoute?.token,
                                                        stepDidDispatch: {
                                                            finalSubmissionState = .indeterminate
                                                        }) {
@@ -335,6 +406,7 @@ struct BridgeInputActionHandler {
                                            panelID: String,
                                            request: BridgeRequest,
                                            action: String,
+                                           routeToken: ActiveAgentSessionRouteToken? = nil,
                                            stepDidDispatch: () -> Void = {}) throws -> BridgeResponse? {
         let inputSubmissionID = UUID().uuidString
         defer {
@@ -351,6 +423,12 @@ struct BridgeInputActionHandler {
                                                      action: action)
             if index > 0 {
                 try sleep(effectiveDelay)
+            }
+            if let routeToken,
+               sessionResolver.isRouteCurrent(routeToken) == false {
+                throw BridgeInternalError.panelContextUnavailable(
+                    "The active agent session changed during message delivery."
+                )
             }
             if action == "tui_command_submit",
                step.role == .submitEnter,

@@ -179,6 +179,12 @@ final class TmuxStateResolver {
         }
     }
 
+    func invalidatePaneIdentityCache() {
+        queue.sync {
+            paneIdentityCache.removeAll()
+        }
+    }
+
     private func loadSnapshot(socketPath: String, forceRefresh: Bool) -> TmuxSnapshot? {
         if !forceRefresh,
            let entry = cache[socketPath],
