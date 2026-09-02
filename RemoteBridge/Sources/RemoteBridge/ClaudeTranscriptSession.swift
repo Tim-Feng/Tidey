@@ -4512,12 +4512,14 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
 
         var ordinal = 0
+        var containsTextBlock = false
         for (index, block) in content.enumerated() {
             guard let contentType = block["type"] as? String else {
                 continue
             }
             switch contentType {
             case "text":
+                containsTextBlock = true
                 let text = Self.compactString(block["text"])
                 guard !text.isEmpty else {
                     continue
@@ -4628,7 +4630,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             }
         }
 
-        if let stopReason = message["stop_reason"] as? String,
+        if containsTextBlock,
+           let stopReason = message["stop_reason"] as? String,
            stopReason == "end_turn" || stopReason == "stop_sequence" {
             // Resume and restore can end with a terminal assistant record
             // without appending turn_duration or firing a hook. Attribute

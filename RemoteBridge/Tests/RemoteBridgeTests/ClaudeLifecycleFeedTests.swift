@@ -148,8 +148,18 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
     private func assistantTextLine(uuid: String,
                                    text: String,
                                    stopReason: String,
+                                   messageID: String? = nil,
                                    parentUuid: String? = nil) -> String {
-        #"{"type":"assistant","uuid":"\#(uuid)",\#(parentField(parentUuid))"sessionId":"session","version":"2.1.0","message":{"role":"assistant","content":[{"type":"text","text":\#(jsonString(text))}],"stop_reason":"\#(stopReason)"}}"#
+        let id = messageID.map { #""id":"\#($0)","# } ?? ""
+        return #"{"type":"assistant","uuid":"\#(uuid)",\#(parentField(parentUuid))"sessionId":"session","version":"2.1.0","message":{\#(id)"role":"assistant","content":[{"type":"text","text":\#(jsonString(text))}],"stop_reason":"\#(stopReason)"}}"#
+    }
+
+    private func assistantThinkingLine(uuid: String,
+                                       thinking: String,
+                                       stopReason: String,
+                                       messageID: String,
+                                       parentUuid: String? = nil) -> String {
+        #"{"type":"assistant","uuid":"\#(uuid)",\#(parentField(parentUuid))"sessionId":"session","version":"2.1.0","message":{"id":"\#(messageID)","role":"assistant","content":[{"type":"thinking","thinking":\#(jsonString(thinking))}],"stop_reason":"\#(stopReason)"}}"#
     }
 
     private func turnDurationLine(uuid: String, parentUuid: String? = nil) -> String {
@@ -196,6 +206,45 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
                               parentUuid: "turn-a"),
         ])
         waitForState(.idle)
+    }
+
+    func testSplitTerminalAssistantEndsOnlyOnTextBlock() throws {
+        try startSessionAndWaitForTail()
+
+        try appendTranscript([userLine(uuid: "turn-a", text: "finish the task")])
+        waitForState(.working)
+
+        let lock = NSLock()
+        var observedStates = [AgentSessionDisplayState]()
+        store.onChange = { snapshot in
+            lock.lock()
+            observedStates.append(snapshot.state)
+            lock.unlock()
+        }
+
+        try appendTranscript([
+            assistantThinkingLine(uuid: "assistant-thinking-a",
+                                  thinking: "Preparing the final answer",
+                                  stopReason: "end_turn",
+                                  messageID: "message-a",
+                                  parentUuid: "turn-a"),
+        ])
+        XCTAssertFalse(waitUntil(timeout: 0.5) { self.state() == .idle },
+                       "a thinking-only line must not publish a false Idle edge")
+
+        try appendTranscript([
+            assistantTextLine(uuid: "assistant-text-a",
+                              text: "Done.",
+                              stopReason: "end_turn",
+                              messageID: "message-a",
+                              parentUuid: "assistant-thinking-a"),
+        ])
+        waitForState(.idle)
+        XCTAssertTrue(waitUntil {
+            lock.lock()
+            defer { lock.unlock() }
+            return observedStates == [.idle]
+        }, "a split terminal message must publish exactly one Working-to-Idle edge")
     }
 
     func testBootstrapTerminalAssistantStopSequenceReconcilesToIdle() throws {
