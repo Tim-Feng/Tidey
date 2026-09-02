@@ -53,7 +53,13 @@ case "$*" in
     fi
     ;;
   "show-options -p -v -t %42 @tidey_socket_path")
-    printf '%s\n' "${TIDEY_TEST_SOCKET_PATH:?}"
+    count=0
+    if [[ -f "${TIDEY_TEST_IDENTITY_COUNT_FILE:?}" ]]; then
+        count="$(<"$TIDEY_TEST_IDENTITY_COUNT_FILE")"
+    fi
+    if [[ "$count" -gt "${TIDEY_TEST_SOCKET_READY_AFTER:-0}" ]]; then
+        printf '%s\n' "${TIDEY_TEST_SOCKET_PATH:?}"
+    fi
     ;;
   "show-options -p -v -t %42 @tidey_bin_dir")
     printf '%s\n' "${TIDEY_TEST_TIDEY_BIN_DIR:?}"
@@ -198,6 +204,38 @@ PY
 if grep -q -x -- '--strict-mcp-config' "$real_claude_log"; then
     fail "interactive invocation unexpectedly isolated Claude from other MCP configs"
 fi
+
+# A restored managed-runtime pane may start the wrapper before Tidey has
+# projected even the socket option. It must wait for the complete pane
+# context instead of passing through to an untracked raw Claude process.
+delayed_runtime_count_file="$TMP_ROOT/delayed-runtime.identity-count"
+delayed_runtime_marker="$TMP_ROOT/delayed-runtime.wait-entered"
+delayed_runtime_log="$TMP_ROOT/delayed-runtime.real-claude.log"
+managed_runtime_socket="$TMP_ROOT/home/Library/Application Support/Tidey/Runtime/tmux-restore.sock"
+printf '0' > "$delayed_runtime_count_file"
+
+env -u TIDEY_SOCKET_PATH -u TIDEY_BIN_DIR -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID \
+    HOME="$TMP_ROOT/home" \
+    PATH="$MOCK_BIN:$REAL_BIN:/usr/bin:/bin" \
+    TMUX="$managed_runtime_socket,1,0" \
+    TMUX_PANE=%42 \
+    TIDEY_TEST_IDENTITY_COUNT_FILE="$delayed_runtime_count_file" \
+    TIDEY_TEST_IDENTITY_READY_AFTER=0 \
+    TIDEY_TEST_SOCKET_READY_AFTER=2 \
+    TIDEY_TEST_WAIT_MARKER="$delayed_runtime_marker" \
+    TIDEY_TEST_SOCKET_PATH="$SOCKET_PATH" \
+    TIDEY_TEST_TIDEY_BIN_DIR="$(dirname "$WRAPPER")" \
+    TIDEY_TEST_REAL_CLAUDE_LOG="$delayed_runtime_log" \
+    TIDEY_TMUX_IDENTITY_WAIT_ATTEMPTS=4 \
+    TIDEY_TMUX_IDENTITY_WAIT_INTERVAL=0 \
+    "$WRAPPER" --resume 7cad5da9-644b-4254-a112-c4e1d9763aa9
+
+grep -q -x -- '--settings' "$delayed_runtime_log" ||
+    fail "restored managed-runtime invocation passed through before socket projection"
+grep -q -x -- '--mcp-config' "$delayed_runtime_log" ||
+    fail "restored managed-runtime invocation lost Tidey Browser MCP"
+[[ "$(<"$delayed_runtime_count_file")" -gt 2 ]] ||
+    fail "restored managed-runtime invocation did not wait for delayed socket projection"
 
 # A live Tidey socket alone is insufficient. Without a workspace identity,
 # Claude still gets Tidey's hooks but must not get a browser server that would

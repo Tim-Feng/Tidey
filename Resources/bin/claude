@@ -275,12 +275,6 @@ fi
 # whether this invocation belongs to Tidey.
 tidey_hydrate_tmux_runtime_environment
 
-# Pass through if not in a Tidey terminal or socket is unavailable.
-if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" ]]; then
-    REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude not found in PATH" >&2; exit 127; }
-    exec "$REAL_CLAUDE" "$@"
-fi
-
 REAL_CLAUDE="$(find_real_claude)" || { echo "Error: claude not found in PATH" >&2; exit 127; }
 
 # Pass through subcommands that don't support hooks.
@@ -288,13 +282,25 @@ case "${1:-}" in
     mcp|config|api-key) exec "$REAL_CLAUDE" "$@" ;;
 esac
 
-# Interactive Claude runtimes need the projected pane identity for Bridge
-# registration. Wait only after non-runtime passthrough subcommands have exited.
+# Interactive Claude runtimes restored inside Tidey's app-owned tmux server can
+# start before all pane options have been projected. Wait for the complete
+# runtime context before deciding whether this is a Tidey-managed invocation;
+# otherwise a healthy resumed Claude process is left without hooks or registry
+# and Tidey Remote can only expose it as a plain terminal.
 if [[ -n "${TMUX_PANE:-}" ]] &&
-   [[ -n "${TIDEY_SOCKET_PATH:-}" && -S "${TIDEY_SOCKET_PATH:-}" ]] &&
-   [[ -z "${TIDEY_WORKSPACE_ID:-}" || -z "${TIDEY_PANEL_ID:-}" ]]; then
-    tidey_wait_for_tmux_pane_identity || true
+   { [[ "${TMUX:-}" == "$HOME/Library/Application Support/Tidey/Runtime/"* ]] ||
+     [[ -n "${TIDEY_SOCKET_PATH:-}" && -S "${TIDEY_SOCKET_PATH:-}" ]]; } &&
+   { [[ -z "${TIDEY_WORKSPACE_ID:-}" ]] ||
+     [[ -z "${TIDEY_PANEL_ID:-}" ]] ||
+     [[ -z "${TIDEY_SOCKET_PATH:-}" ]] ||
+     [[ ! -S "${TIDEY_SOCKET_PATH:-}" ]]; }; then
+    tidey_wait_for_tmux_runtime_context || true
     tidey_hydrate_tmux_runtime_environment
+fi
+
+# Pass through if not in a Tidey terminal or socket is unavailable.
+if [[ -z "${TIDEY_SOCKET_PATH:-}" || ! -S "${TIDEY_SOCKET_PATH:-}" ]]; then
+    exec "$REAL_CLAUDE" "$@"
 fi
 
 SESSION_ID=""

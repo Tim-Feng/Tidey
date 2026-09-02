@@ -126,3 +126,31 @@ tidey_wait_for_tmux_pane_identity() {
     done
     return 1
 }
+
+tidey_wait_for_tmux_runtime_context() {
+    attempts="${TIDEY_TMUX_IDENTITY_WAIT_ATTEMPTS:-300}"
+    interval="${TIDEY_TMUX_IDENTITY_WAIT_INTERVAL:-0.05}"
+    attempt=0
+
+    case "$attempts" in
+        ''|*[!0-9]*) attempts=300 ;;
+    esac
+    if [ "$attempts" -lt 1 ]; then
+        attempts=1
+    fi
+
+    while [ "$attempt" -lt "$attempts" ]; do
+        tidey_hydrate_tmux_runtime_environment
+        if [ -n "${TIDEY_WORKSPACE_ID:-}" ] &&
+           [ -n "${TIDEY_PANEL_ID:-}" ] &&
+           [ -n "${TIDEY_SOCKET_PATH:-}" ] &&
+           [ -S "$TIDEY_SOCKET_PATH" ]; then
+            return 0
+        fi
+        attempt=$((attempt + 1))
+        if [ "$attempt" -lt "$attempts" ]; then
+            sleep "$interval"
+        fi
+    done
+    return 1
+}
