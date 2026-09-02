@@ -4627,6 +4627,15 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 continue
             }
         }
+
+        if let stopReason = message["stop_reason"] as? String,
+           stopReason == "end_turn" || stopReason == "stop_sequence" {
+            // Resume and restore can end with a terminal assistant record
+            // without appending turn_duration or firing a hook. Attribute
+            // the terminal through this line's parentUuid chain so a late
+            // turn A response cannot end a newer active turn B.
+            lifecycleEndTurn(expectedTurnID: lifecycleOwningTurnID(for: uuid))
+        }
     }
 
     private static func askUserQuestionPrompt(from block: [String: Any],

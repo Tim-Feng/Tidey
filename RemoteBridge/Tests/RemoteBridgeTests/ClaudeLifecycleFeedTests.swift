@@ -142,7 +142,14 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
     }
 
     private func assistantToolUseLine(uuid: String, toolCallID: String, name: String, input: String = "{}", parentUuid: String? = nil) -> String {
-        #"{"type":"assistant","uuid":"\#(uuid)",\#(parentField(parentUuid))"sessionId":"session","version":"2.1.0","message":{"role":"assistant","content":[{"type":"tool_use","id":"\#(toolCallID)","name":"\#(name)","input":\#(input)}]}}"#
+        #"{"type":"assistant","uuid":"\#(uuid)",\#(parentField(parentUuid))"sessionId":"session","version":"2.1.0","message":{"role":"assistant","content":[{"type":"tool_use","id":"\#(toolCallID)","name":"\#(name)","input":\#(input)}],"stop_reason":"tool_use"}}"#
+    }
+
+    private func assistantTextLine(uuid: String,
+                                   text: String,
+                                   stopReason: String,
+                                   parentUuid: String? = nil) -> String {
+        #"{"type":"assistant","uuid":"\#(uuid)",\#(parentField(parentUuid))"sessionId":"session","version":"2.1.0","message":{"role":"assistant","content":[{"type":"text","text":\#(jsonString(text))}],"stop_reason":"\#(stopReason)"}}"#
     }
 
     private func turnDurationLine(uuid: String, parentUuid: String? = nil) -> String {
@@ -173,6 +180,60 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
         waitForState(.working)
 
         try appendTranscript([turnDurationLine(uuid: "s1")])
+        waitForState(.idle)
+    }
+
+    func testTerminalAssistantStopSequenceEndsTurnWithoutTurnDurationOrHook() throws {
+        try startSessionAndWaitForTail()
+
+        try appendTranscript([userLine(uuid: "turn-a", text: "resume the task")])
+        waitForState(.working)
+
+        try appendTranscript([
+            assistantTextLine(uuid: "assistant-a",
+                              text: "No response requested.",
+                              stopReason: "stop_sequence",
+                              parentUuid: "turn-a"),
+        ])
+        waitForState(.idle)
+    }
+
+    func testBootstrapTerminalAssistantStopSequenceReconcilesToIdle() throws {
+        try appendTranscript([
+            userLine(uuid: "turn-a", text: "resume the task"),
+            assistantTextLine(uuid: "assistant-a",
+                              text: "No response requested.",
+                              stopReason: "stop_sequence",
+                              parentUuid: "turn-a"),
+        ])
+
+        session.start()
+        waitForState(.idle)
+    }
+
+    func testLateTerminalAssistantCannotEndNewerTurn() throws {
+        try startSessionAndWaitForTail()
+
+        try appendTranscript([userLine(uuid: "turn-a", text: "task A")])
+        waitForState(.working)
+        try appendTranscript([userLine(uuid: "turn-b", text: "task B")])
+        waitForState(.working)
+
+        try appendTranscript([
+            assistantTextLine(uuid: "assistant-a",
+                              text: "A completed late",
+                              stopReason: "end_turn",
+                              parentUuid: "turn-a"),
+        ])
+        XCTAssertEqual(state(), .working,
+                       "turn A's terminal must not end the newer turn B")
+
+        try appendTranscript([
+            assistantTextLine(uuid: "assistant-b",
+                              text: "B completed",
+                              stopReason: "end_turn",
+                              parentUuid: "turn-b"),
+        ])
         waitForState(.idle)
     }
 
