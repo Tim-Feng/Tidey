@@ -151,7 +151,7 @@ final class TideyInterfaceThemeTokens: NSObject {
                                              alpha: 1),
         hairlineColor: NSColor(white: 0.25, alpha: 1),
         sidebarPinColor: NSColor(white: 0.90, alpha: 1),
-        sidebarUnreadTitleColor: .controlAccentColor,
+        sidebarUnreadTitleColor: color(hex: 0x7FA6D9),
         sidebarSelectedUnreadTitleColor: .white,
         browserToolbarBackgroundColor: NSColor(white: 0.15, alpha: 1),
         browserToolbarControlColor: .secondaryLabelColor,
@@ -755,11 +755,15 @@ final class TideyEditorCanvasThemeAdapter: NSObject {
 final class TideyStatusSemanticsThemeAdapter: NSObject {
     let tokens: TideyInterfaceThemeTokens
     let usesSemanticStatusColors: Bool
+    let needsInputOverrideColor: NSColor?
 
     @nonobjc
-    init(tokens: TideyInterfaceThemeTokens, usesSemanticStatusColors: Bool) {
+    init(tokens: TideyInterfaceThemeTokens,
+         usesSemanticStatusColors: Bool,
+         needsInputOverrideColor: NSColor? = nil) {
         self.tokens = tokens
         self.usesSemanticStatusColors = usesSemanticStatusColors
+        self.needsInputOverrideColor = needsInputOverrideColor
         super.init()
     }
 
@@ -767,6 +771,9 @@ final class TideyStatusSemanticsThemeAdapter: NSObject {
     func color(forStatusValues values: [String],
                producerColor: NSColor?,
                selected: Bool) -> NSColor {
+        if values.contains("Needs input"), let needsInputOverrideColor {
+            return needsInputOverrideColor
+        }
         guard usesSemanticStatusColors else {
             return selected ? tokens.sidebarSelectedSecondaryTextColor
                             : (producerColor ?? NSColor.secondaryLabelColor)
@@ -872,8 +879,10 @@ final class TideyInterfaceThemeDefinition: NSObject {
                                                     tokens: tokens,
                                                     terminalAdapter: terminal,
                                                     usesTerminalPaletteRules: false)
-        let status = TideyStatusSemanticsThemeAdapter(tokens: tokens,
-                                                      usesSemanticStatusColors: false)
+        let status = TideyStatusSemanticsThemeAdapter(
+            tokens: tokens,
+            usesSemanticStatusColors: false,
+            needsInputOverrideColor: tokens.sidebarUnreadTitleColor)
         let settings = TideySettingsThemeAdapter(
             tokens: tokens,
             mainWindowBackgroundColor: NSColor(srgbRed: 0x1a / 255.0,

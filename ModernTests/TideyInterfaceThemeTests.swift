@@ -42,6 +42,8 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(tokens.sidebarSelectedPrimaryTextColor, hex: 0xF2F5FA)
         assertColor(tokens.sidebarSelectedSecondaryTextColor, hex: 0xB7C3D6)
         assertColor(tokens.sidebarSelectedIdleColor, hex: 0x8E9AAE)
+        assertColor(tokens.sidebarUnreadTitleColor, hex: 0x7FA6D9)
+        assertColor(tokens.sidebarSelectedUnreadTitleColor, white: 1.0)
         // Classic palette for the shared modern components.
         assertColor(tokens.paneBoundaryColor, white: 1, alpha: 0.14)
         assertColor(tokens.paneResizerPullBarColor, white: 1, alpha: 0.08)
@@ -714,6 +716,35 @@ final class TideyInterfaceThemeTests: XCTestCase {
         assertColor(settings.accentColor, hex: 0xE8A0B4)
         assertColor(settings.tabSelectionBackgroundColor, hex: 0xE8A0B4, alpha: 0.12)
         assertColor(settings.tabSelectionTextColor, hex: 0xE8A0B4)
+    }
+
+    func testClassicNeedsInputUsesMutedThemeColorWithoutChangingOtherProducerStatuses() {
+        let status = TideyInterfaceThemeDefinition.classic.statusSemanticsAdapter
+        let needsInputProducerColor = NSColor(srgbRed: 0x4C / 255.0,
+                                              green: 0x8D / 255.0,
+                                              blue: 1,
+                                              alpha: 1)
+        let runningProducerColor = NSColor(srgbRed: 0,
+                                           green: 0x7A / 255.0,
+                                           blue: 1,
+                                           alpha: 1)
+
+        assertColor(status.color(forStatusValues: ["Needs input"],
+                                 producerColor: needsInputProducerColor,
+                                 selected: false),
+                    hex: 0x7FA6D9)
+        assertColor(status.color(forStatusValues: ["Needs input"],
+                                 producerColor: needsInputProducerColor,
+                                 selected: true),
+                    hex: 0x7FA6D9)
+        assertColor(status.color(forStatusValues: ["Running"],
+                                 producerColor: runningProducerColor,
+                                 selected: false),
+                    hex: 0x007AFF)
+        assertColor(status.color(forStatusValues: ["Running"],
+                                 producerColor: runningProducerColor,
+                                 selected: true),
+                    hex: 0xB7C3D6)
     }
 
     func testTerminalTabUnderlineUsesWarmSeaglassAndClassicSystemFallback() {
