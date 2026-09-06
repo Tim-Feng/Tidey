@@ -66,6 +66,33 @@ final class OrdinaryTmuxRouteResolverTests: XCTestCase {
         XCTAssertNil(resolved)
     }
 
+    func testNativeSessionIDNeverRebuildsFromAuthorizedTarget() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()
+        registry.replaceRoutes(
+            workspaceID: route.workspaceID,
+            routes: [route],
+            observedAt: Date(timeIntervalSince1970: 0)
+        )
+        registry.replaceRoutes(
+            workspaceID: route.workspaceID,
+            routes: [],
+            observedAt: Date(timeIntervalSince1970: 1)
+        )
+        let resolver = OrdinaryTmuxRouteResolver(
+            registry: registry,
+            adapter: StubAdapter(rebuiltRoute: route),
+            now: { Date(timeIntervalSince1970: 2) }
+        )
+
+        let resolved = try resolver.route(
+            forPanelID: "native-session:C4E11D2C-9842-4891-A420-68D0D1F9EA7B:2FECE9CD-CFED-4EF4-80A8-3DB98785801F",
+            workspaceID: route.workspaceID
+        )
+
+        XCTAssertNil(resolved)
+    }
+
     func testExpiredAuthorizationDoesNotRebuildRoute() throws {
         let registry = OrdinaryTmuxPanelRegistry(authorizationTTL: 10)
         let route = ordinaryRoute()

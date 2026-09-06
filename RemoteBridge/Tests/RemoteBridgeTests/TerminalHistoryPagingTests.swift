@@ -14,6 +14,31 @@ final class TerminalHistoryPagingTests: XCTestCase {
         }
     }
 
+    private struct UncheckedResolver: OrdinaryTmuxRouteResolving {
+        let route: OrdinaryTmuxPanelRoute
+
+        func route(forPanelID panelID: String, workspaceID: String?) throws -> OrdinaryTmuxPanelRoute? {
+            route
+        }
+    }
+
+    private struct RejectingResolver: OrdinaryTmuxRouteResolving {
+        func route(forPanelID panelID: String, workspaceID: String?) throws -> OrdinaryTmuxPanelRoute? {
+            XCTFail("Malformed request reached the route resolver")
+            return nil
+        }
+    }
+
+    private struct ProjectingAdapter: OrdinaryTmuxWindowProjecting {
+        let panels: [OrdinaryTmuxProjectedPanel]
+
+        func projectedPanels(for metadata: OrdinaryTmuxAttachMetadata) throws -> [OrdinaryTmuxProjectedPanel] {
+            panels
+        }
+
+        func setPaneIdentity(route: OrdinaryTmuxPanelRoute) throws {}
+    }
+
     private struct StubPageServer: OrdinaryTmuxHistoryPageServing {
         let expectedRoute: OrdinaryTmuxPanelRoute
 
@@ -219,6 +244,161 @@ final class TerminalHistoryPagingTests: XCTestCase {
         XCTAssertNil(native, "native history requests must continue to the Tidey socket")
     }
 
+    func testBridgeHistoryPageActionAcceptsRegisteredStableNativeCarrierRoute() throws {
+        let route = stableNativeCarrierRoute()
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.storeRoute(route)
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: OrdinaryTmuxRouteResolver(registry: registry),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+
+        let response = try XCTUnwrap(handler.handle(historyRequest(
+            id: "history-stable-carrier",
+            workspaceID: route.workspaceID,
+            panelID: route.panelID
+        )))
+
+        XCTAssertTrue(response.ok)
+        XCTAssertEqual(response.result?["workspace_id"]?.stringValue, route.workspaceID)
+        XCTAssertEqual(response.result?["panel_id"]?.stringValue, route.panelID)
+        XCTAssertEqual(
+            response.result?["rows"]?.arrayValue?.compactMap(\.stringValue),
+            [Data("OLDER".utf8).base64EncodedString(), Data("OLD".utf8).base64EncodedString()]
+        )
+    }
+
+    func testBridgeHistoryPageActionPagesSingleWindowRoutePublishedByProjector() throws {
+        let stablePanelID = stableNativeCarrierRoute().panelID
+        let registry = OrdinaryTmuxPanelRegistry()
+        let projector = OrdinaryTmuxPanelProjector(
+            adapter: ProjectingAdapter(panels: [projectedPanel()]),
+            registry: registry
+        )
+        let projected = projector.projectPanelListResult([
+            "workspace_id": .string("workspace-1"),
+            "selected_panel_id": .string(stablePanelID),
+            "panels": .array([
+                .object([
+                    "panel_id": .string(stablePanelID),
+                    "workspace_id": .string("workspace-1"),
+                    "selected": .bool(true),
+                    "ordinary_tmux": .object([
+                        "client_tty": .string("/dev/ttys010"),
+                        "target_session": .string("tidey-codex"),
+                    ]),
+                ]),
+            ]),
+        ])
+        XCTAssertEqual(
+            projected["panels"]?.arrayValue?.first?.objectValue?["panel_id"]?.stringValue,
+            stablePanelID
+        )
+        let route = try XCTUnwrap(registry.route(forPanelID: stablePanelID))
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: OrdinaryTmuxRouteResolver(registry: registry),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+
+        let response = try XCTUnwrap(handler.handle(historyRequest(
+            id: "history-projected-stable-carrier",
+            workspaceID: "workspace-1",
+            panelID: stablePanelID
+        )))
+
+        XCTAssertEqual(response.result?["panel_id"]?.stringValue, stablePanelID)
+    }
+
+    func testBridgeHistoryPageActionRejectsUnregisteredStableNativeCarrierRoute() throws {
+        let route = stableNativeCarrierRoute()
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: OrdinaryTmuxRouteResolver(registry: OrdinaryTmuxPanelRegistry()),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+
+        XCTAssertThrowsError(try handler.handle(historyRequest(
+            id: "history-unknown-carrier",
+            workspaceID: route.workspaceID,
+            panelID: route.panelID
+        ))) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("Expected notFound, got \(error)")
+            }
+        }
+    }
+
+    func testBridgeHistoryPageActionRejectsStableNativeCarrierFromAnotherWorkspace() throws {
+        let route = stableNativeCarrierRoute()
+        let registry = OrdinaryTmuxPanelRegistry()
+        registry.storeRoute(route)
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: OrdinaryTmuxRouteResolver(registry: registry),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+
+        XCTAssertThrowsError(try handler.handle(historyRequest(
+            id: "history-foreign-workspace",
+            workspaceID: "workspace-2",
+            panelID: route.panelID
+        ))) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("Expected notFound, got \(error)")
+            }
+        }
+    }
+
+    func testBridgeHistoryPageActionRejectsResolverIdentityMismatch() throws {
+        let route = ordinaryRoute()
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: UncheckedResolver(route: route),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+
+        XCTAssertThrowsError(try handler.handle(historyRequest(
+            id: "history-mismatched-route",
+            workspaceID: route.workspaceID,
+            panelID: stableNativeCarrierRoute().panelID
+        ))) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("Expected notFound, got \(error)")
+            }
+        }
+    }
+
+    func testBridgeHistoryPageActionRejectsResolverWorkspaceMismatch() throws {
+        let route = ordinaryRoute()
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: UncheckedResolver(route: route),
+            tmuxPageServer: StubPageServer(expectedRoute: route)
+        )
+
+        XCTAssertThrowsError(try handler.handle(historyRequest(
+            id: "history-mismatched-workspace",
+            workspaceID: "workspace-2",
+            panelID: route.panelID
+        ))) { error in
+            guard case BridgeInternalError.notFound = error else {
+                return XCTFail("Expected notFound, got \(error)")
+            }
+        }
+    }
+
+    func testBridgeHistoryPageActionRejectsEmptyPanelIDBeforeResolution() throws {
+        let handler = TerminalHistoryPageActionHandler(
+            routeResolver: RejectingResolver()
+        )
+
+        XCTAssertThrowsError(try handler.handle(historyRequest(
+            id: "history-empty-panel",
+            workspaceID: "workspace-1",
+            panelID: ""
+        ))) { error in
+            guard case BridgeInternalError.invalidRequest = error else {
+                return XCTFail("Expected invalidRequest, got \(error)")
+            }
+        }
+    }
+
     func testBridgeHistoryPageActionPreservesInteractiveAttachBoundary() throws {
         let route = ordinaryRoute()
         let handler = TerminalHistoryPageActionHandler(
@@ -285,6 +465,60 @@ final class TerminalHistoryPagingTests: XCTestCase {
             activePaneID: "%16",
             cwd: "/Users/timfeng/GitHub/mother_nature",
             currentCommand: "codex"
+        )
+    }
+
+    private func stableNativeCarrierRoute() -> OrdinaryTmuxPanelRoute {
+        OrdinaryTmuxPanelRoute(
+            workspaceID: "workspace-1",
+            panelID: "native-session:C4E11D2C-9842-4891-A420-68D0D1F9EA7B:2FECE9CD-CFED-4EF4-80A8-3DB98785801F",
+            carrierPanelID: "native-session:C4E11D2C-9842-4891-A420-68D0D1F9EA7B:2FECE9CD-CFED-4EF4-80A8-3DB98785801F",
+            socket: .path("/tmp/tmux-\(getuid())/stable-carrier"),
+            sessionID: "$7",
+            sessionName: "tidey-codex",
+            windowID: "@16",
+            windowIndex: 1,
+            activePaneID: "%16",
+            cwd: "/Users/timfeng/GitHub/Tidey",
+            currentCommand: "codex"
+        )
+    }
+
+    private func projectedPanel() -> OrdinaryTmuxProjectedPanel {
+        OrdinaryTmuxProjectedPanel(
+            panelID: "ordinary-tmux:/tmp/tmux-\(getuid())/stable-carrier:$7:@16",
+            socketPath: "/tmp/tmux-\(getuid())/stable-carrier",
+            sessionID: "$7",
+            sessionName: "tidey-codex",
+            windowID: "@16",
+            windowIndex: 0,
+            windowName: "tidey-codex",
+            isCurrentWindow: true,
+            activePaneID: "%16",
+            activePanePID: 1016,
+            cwd: "/Users/timfeng/GitHub/Tidey",
+            currentCommand: "codex",
+            title: "tidey-codex",
+            subtitle: "/Users/timfeng/GitHub/Tidey"
+        )
+    }
+
+    private func historyRequest(
+        id: String,
+        workspaceID: String,
+        panelID: String
+    ) -> BridgeRequest {
+        BridgeRequest(
+            id: id,
+            action: "get_terminal_history_page",
+            params: [
+                "source": .string("tmux"),
+                "workspace_id": .string(workspaceID),
+                "panel_id": .string(panelID),
+                "route_generation": .number(9),
+                "page_lines": .number(2),
+                "cursor": .object(["offset": .number(0)]),
+            ]
         )
     }
 }

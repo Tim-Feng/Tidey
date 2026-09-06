@@ -181,7 +181,7 @@ struct TerminalHistoryPageActionHandler {
         guard let workspaceID = request.params?["workspace_id"]?.stringValue,
               workspaceID.isEmpty == false,
               let panelID = request.params?["panel_id"]?.stringValue,
-              panelID.hasPrefix("\(OrdinaryTmuxLogicalPanelID.prefix):"),
+              panelID.isEmpty == false,
               let routeGeneration = request.params?["route_generation"]?.intValue,
               routeGeneration >= 0,
               let pageLines = request.params?["page_lines"]?.intValue,
@@ -197,7 +197,9 @@ struct TerminalHistoryPageActionHandler {
         guard let route = try routeResolver.route(
             forPanelID: panelID,
             workspaceID: workspaceID
-        ) else {
+        ),
+              route.workspaceID == workspaceID,
+              route.panelID == panelID else {
             throw BridgeInternalError.notFound(
                 "ordinary tmux logical panel is not authorized"
             )
