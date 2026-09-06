@@ -6,19 +6,17 @@ A terminal-first IDE for AI agents. Run agents in workspaces, edit code side by 
 
 ![Tidey main window](docs/screenshots/hero-main.png)
 
-## Latest in 0.7.0
+## Latest in 0.7.1
 
-- **Three extensible interface themes** — switch the complete workspace, terminal, editor, browser, and settings palette between Classic · 經典藍調, Amber Night · 琥珀夜色, and Sakura Fubuki · 落櫻繽紛.
-- **Paper tabs and focused resizing** — terminal and editor tabs share the raised paper treatment; compact pull bars keep pane boundaries quiet, and double-clicking one restores its default size.
-- **Streamlined workspace and browser chrome** — workspace cards keep only name and status in a fixed-height layout, while the in-app browser adds a compact address bar and a configurable homepage.
-- **Complete terminal history on iPhone** — Tidey Remote can page through the same retained terminal scrollback available on the Mac, without loading an unbounded transcript at once.
-- **More reliable workspace status** — serialized socket updates and bounded retries prevent transient Bridge pressure from leaving an idle workspace stuck on Running.
-- **Stable interactive terminal resume** — history paging stays anchored when an iPhone attaches or reconnects, so live output does not shift underneath older scrollback.
-- **New Tidey identity** — the app and menu bar now use the balanced three-wave Tidey icon.
+- **Reliable Remote history paging** — terminal scrollback now follows stable workspace panels, and Codex 0.153.4 usage records no longer block older conversation history.
+- **Seamless agent handoff** — Claude Code and Codex sessions can move to fresh runtimes while preserving their workspace, panel, and durable conversation identity.
+- **Accurate Claude lifecycle state** — completed and split assistant replies now return the workspace to Idle without ending thinking-only records early.
+- **Restored Claude chat mode** — managed tmux sessions wait for their Tidey runtime identity before choosing terminal passthrough after restoration.
+- **Softer Classic notifications** — unread workspace titles and “Needs input” status use a calmer steel blue while other status colors remain unchanged.
 
 ## Install
 
-**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.7.0/Tidey.dmg) (macOS 12.4+, Apple Silicon)
+**Download:** [Tidey.dmg](https://github.com/Tim-Feng/Tidey/releases/download/v0.7.1/Tidey.dmg) (macOS 12.4+, Apple Silicon)
 
 Tidey Remote requires macOS 13 or later.
 
