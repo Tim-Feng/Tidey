@@ -1265,11 +1265,13 @@ final class CodexTranscriptSession: AgentTranscriptSession {
     // Legal rollout record kinds Tidey deliberately ignores (from real
     // rollouts). `default` is NEVER an allowlist: anything outside the
     // producing set and these catalogs poisons semantic trust.
+    // Full local rollout inventory refreshed 2026-09-05 for Codex 0.153.4.
     private static let knownIgnoredTopLevelTypes: Set<String> = [
         "turn_context",
         "compacted",
         "world_state",
         "inter_agent_communication_metadata",
+        "token_usage_record",
     ]
     // Union of the current real catalog (~/.codex/sessions inventory,
     // 2026-07-26) and legacy entries already supported by parser history.

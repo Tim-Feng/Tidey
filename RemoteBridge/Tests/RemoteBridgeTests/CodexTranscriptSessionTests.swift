@@ -1820,6 +1820,139 @@ final class CodexTranscriptSessionTests: XCTestCase {
         }
     }
 
+    func testCodexTokenUsageRecordInBootstrapWindowKeepsTrust() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        var lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant", content: "bootstrap-\($0)")
+        }
+        lines[lineCount - 10] = makeCodexTokenUsageRecordLine()
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            transcriptURL,
+            hub: hub,
+            readySentinel: "bootstrap-\(lineCount - 1)"
+        )
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("bootstrap-") == true }
+                .map(\.seq)
+                .min()
+        )
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 40)
+
+        XCTAssertTrue(result.didBackfill)
+        XCTAssertNotEqual(result.rawContinuation, .unavailable)
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+    }
+
+    func testCodexTokenUsageRecordAppendedLiveKeepsHistoryAvailable() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let lineCount = transcriptBootstrapLineLimit + 20
+        let lines = (0..<lineCount).map {
+            makeCodexMessageLine(role: "assistant", content: "live-\($0)")
+        }
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            transcriptURL,
+            hub: hub,
+            readySentinel: "live-\(lineCount - 1)"
+        )
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("live-") == true }
+                .map(\.seq)
+                .min()
+        )
+
+        let handle = try FileHandle(forWritingTo: transcriptURL)
+        try handle.seekToEnd()
+        try handle.write(contentsOf: Data((makeCodexTokenUsageRecordLine() + "\n").utf8))
+        try handle.write(contentsOf: Data(
+            (makeCodexMessageLine(role: "assistant", content: "live-after-token-usage") + "\n").utf8
+        ))
+        try handle.close()
+        XCTAssertTrue(waitUntil {
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 10)
+                .events
+                .contains { $0.text == "live-after-token-usage" }
+        })
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 40)
+
+        XCTAssertTrue(result.didBackfill)
+        XCTAssertNotEqual(result.rawContinuation, .unavailable)
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+    }
+
+    func testCodexBeforeCursorPageCrossingTokenUsageRecordServesPage() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("CodexTranscriptSessionTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let transcriptURL = directory.appendingPathComponent("rollout.jsonl", isDirectory: false)
+        let recent = (0..<transcriptBootstrapLineLimit).map {
+            makeCodexMessageLine(role: "assistant", content: "recent-\($0)")
+        }
+        let lines = [
+            makeCodexMessageLine(role: "assistant", content: "older-than-token-usage"),
+            makeCodexTokenUsageRecordLine(),
+        ] + recent
+        try (lines.joined(separator: "\n") + "\n")
+            .write(to: transcriptURL, atomically: true, encoding: .utf8)
+
+        let hub = AgentEventHub()
+        let session = makeStartedCodexSession(
+            transcriptURL,
+            hub: hub,
+            readySentinel: "recent-\(transcriptBootstrapLineLimit - 1)"
+        )
+        defer { session.stop() }
+        let epoch = hub.currentHistoryEpoch(sessionID: "session")
+        let beforeSeq = try XCTUnwrap(
+            hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 2000)
+                .events
+                .filter { $0.text?.hasPrefix("recent-") == true }
+                .map(\.seq)
+                .min()
+        )
+
+        let result = session.beforeCursorBackfill(beforeSeq: beforeSeq, limit: 500)
+
+        XCTAssertTrue(result.didBackfill)
+        XCTAssertEqual(result.rawContinuation, .end)
+        XCTAssertTrue(
+            hub.fetch(workspaceID: "workspace",
+                      sessionID: "session",
+                      limit: 2000,
+                      beforeSeq: beforeSeq)
+                .events
+                .contains { $0.text == "older-than-token-usage" }
+        )
+        XCTAssertTrue(session.validateHistoryEpoch(epoch))
+    }
+
     // Guard: the known-ignored catalog must NOT poison — these appear in
     // real rollouts and are legal eventless raw progress.
     func testCodexKnownIgnoredTopLevelRecordsAdvanceWithoutPoison() throws {
@@ -1833,9 +1966,13 @@ final class CodexTranscriptSessionTests: XCTestCase {
             makeCodexMessageLine(role: "assistant",
                                  content: "deep-\($0)-" + String(repeating: "x", count: 160))
         }
-        for (index, ignoredType) in ["turn_context", "compacted", "world_state",
-                                     "inter_agent_communication_metadata"].enumerated() {
-            lines[3 + index] = "{\"type\":\"\(ignoredType)\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{}}"
+        var ignoredLines = ["turn_context", "compacted", "world_state",
+                            "inter_agent_communication_metadata"].map {
+            "{\"type\":\"\($0)\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{}}"
+        }
+        ignoredLines.append(makeCodexTokenUsageRecordLine())
+        for (index, ignoredLine) in ignoredLines.enumerated() {
+            lines[3 + index] = ignoredLine
         }
         try (lines.joined(separator: "\n") + "\n").write(to: transcriptURL, atomically: true, encoding: .utf8)
         let hub = AgentEventHub()
@@ -1875,6 +2012,12 @@ final class CodexTranscriptSessionTests: XCTestCase {
              "{\"type\":\"response_item\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"future_item\"}}"),
             ("event_msg-unknown-payload-type",
              "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"quantum_event\"}}"),
+            ("token-usage-record-near-match",
+             makeCodexTokenUsageRecordLine(topLevelType: "token_usage_records")),
+            ("thread-rolled-back-remains-semantic",
+             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"thread_rolled_back\",\"num_turns\":1}}"),
+            ("terminal-error-remains-semantic",
+             "{\"type\":\"event_msg\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"type\":\"error\",\"message\":\"model unavailable\",\"codex_error_info\":\"server_overloaded\"}}"),
             ("session_meta-non-string-cli-version",
              "{\"type\":\"session_meta\",\"timestamp\":\"2026-05-15T00:00:00Z\",\"payload\":{\"id\":\"session\",\"cli_version\":123}}"),
             ("session_meta-foreign-id",
@@ -4899,6 +5042,29 @@ final class CodexTranscriptSessionTests: XCTestCase {
                     ],
                 ],
             ],
+        ]
+        let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
+        return String(data: data, encoding: .utf8)!
+    }
+
+    private func makeCodexTokenUsageRecordLine(
+        topLevelType: String = "token_usage_record"
+    ) -> String {
+        let payload: [String: Any] = [
+            "thread_id": "thread-1",
+            "turn_id": "turn-1",
+            "session_id": "session",
+            "root_turn_id": "turn-1",
+            "response_id": "response-1",
+            "usage": ["input_tokens": 1, "output_tokens": 1],
+            "turn_token_usage": ["input_tokens": 1, "output_tokens": 1],
+            "thread_token_usage": ["input_tokens": 1, "output_tokens": 1],
+        ]
+        let object: [String: Any] = [
+            "timestamp": "2026-09-05T07:19:16.590Z",
+            "type": topLevelType,
+            "payload": payload,
+            "ordinal": 1,
         ]
         let data = try! JSONSerialization.data(withJSONObject: object, options: [.sortedKeys])
         return String(data: data, encoding: .utf8)!
