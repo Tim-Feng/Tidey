@@ -7,6 +7,7 @@
 	objects = {
 
 /* Begin PBXBuildFile section */
+		00465F71C9B47CC8506056CB /* TideyNativeOrphanAdoption.swift in Sources */ = {isa = PBXBuildFile; fileRef = B426666CB68D7D680E443CEE /* TideyNativeOrphanAdoption.swift */; };
 		06E0C88E1DF9695400AA061B /* iTermServiceProvider.h in Headers */ = {isa = PBXBuildFile; fileRef = 06E0C88C1DF9695400AA061B /* iTermServiceProvider.h */; };
 		084F626684E68821BAEC7D9B /* iTermNonTextPasteHelper.swift in Sources */ = {isa = PBXBuildFile; fileRef = ED49EE365D629DAE80503BFD /* iTermNonTextPasteHelper.swift */; };
 		0E917DB125F460B221026B56 /* iTermCharacterSourceTestHelper.h in Sources */ = {isa = PBXBuildFile; fileRef = 2491A846A993798FA4963536 /* iTermCharacterSourceTestHelper.h */; };
@@ -666,6 +667,7 @@
 		29C503BA29752DF6A4DB2A02 /* iTermBlurRowBuffer.swift in Sources */ = {isa = PBXBuildFile; fileRef = 19537E68A2ADEB03B3086882 /* iTermBlurRowBuffer.swift */; };
 		2AB0AC886DE3F1F616F92D2F /* CharacterAtomIterator.swift in Sources */ = {isa = PBXBuildFile; fileRef = 02CF16386D8605E6BC44ED81 /* CharacterAtomIterator.swift */; };
 		3157D8ABBEF7A0F04A98783D /* PSMMinimalTabStyleTests.m in Sources */ = {isa = PBXBuildFile; fileRef = ADB243DDA021CE90C5EC7CE4 /* PSMMinimalTabStyleTests.m */; };
+		351CE68C62C559BFAA9B2DD1 /* TideyNativeOrphanAdoptionTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 780810C7C5CBC2C9C8407E33 /* TideyNativeOrphanAdoptionTests.swift */; };
 		3538DE1D25D0E62BBD3612E3 /* TideyBrowserNavigationGateTests.swift in Sources */ = {isa = PBXBuildFile; fileRef = 5E7CB72F3080AE0F6D5AADD7 /* TideyBrowserNavigationGateTests.swift */; };
 		4705C05130977E2C81FD75E8 /* iTermUnicodeNormalization.h in Sources */ = {isa = PBXBuildFile; fileRef = 3335AD96138BA74CC79D25A8 /* iTermUnicodeNormalization.h */; };
 		4887C7B3CAB5465296225860 /* MenuTips.xcassets in Resources */ = {isa = PBXBuildFile; fileRef = 904AE312A0E0489899D9ECB8 /* MenuTips.xcassets */; };
@@ -6345,6 +6347,7 @@
 		759637A02593AE0700E278CC /* main.m */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.c.objc; path = main.m; sourceTree = "<group>"; };
 		759637A22593AE0700E278CC /* Info.plist */ = {isa = PBXFileReference; lastKnownFileType = text.plist.xml; path = Info.plist; sourceTree = "<group>"; };
 		76421C2E762130B690D1ADC5 /* RegexAtomIterator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = RegexAtomIterator.swift; sourceTree = "<group>"; };
+		780810C7C5CBC2C9C8407E33 /* TideyNativeOrphanAdoptionTests.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyNativeOrphanAdoptionTests.swift; sourceTree = "<group>"; };
 		7BF1E9C79C30008CC546F987 /* iTermWordExtractor.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermWordExtractor.swift; sourceTree = "<group>"; };
 		7C74C12959E7040AF3A3B12F /* iTermAnnotatedScreenshot.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermAnnotatedScreenshot.swift; sourceTree = "<group>"; };
 		7EA289FFE2BF4090A65931BA /* PillBackgroundGenerator.swift */ = {isa = PBXFileReference; lastKnownFileType = sourcecode.swift; path = PillBackgroundGenerator.swift; sourceTree = "<group>"; };
@@ -9257,6 +9260,7 @@
 		AE6718DDCFD2CA382391CDFD /* iTermScreenshotPreviewOverlay.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermScreenshotPreviewOverlay.swift; sourceTree = "<group>"; };
 		AF19E441FF824539A275D8DA /* iTermLayoutCalculator.m */ = {isa = PBXFileReference; fileEncoding = 4; lastKnownFileType = sourcecode.c.objc; path = iTermLayoutCalculator.m; sourceTree = "<group>"; };
 		B231EDB860248C368A511B42 /* iTermEventTriggerEvaluator.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = iTermEventTriggerEvaluator.swift; sourceTree = "<group>"; };
+		B426666CB68D7D680E443CEE /* TideyNativeOrphanAdoption.swift */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.swift; path = TideyNativeOrphanAdoption.swift; sourceTree = "<group>"; };
 		BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideyRightPanelTabComponentParityTests.m; sourceTree = "<group>"; };
 		BC3C36C01A55D7615DFCC054 /* TideySidebarViews.h */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.h; path = TideySidebarViews.h; sourceTree = "<group>"; };
 		BF293383B49E6E491594E918 /* TideySidebarPresentationCharacterizationTests.m */ = {isa = PBXFileReference; includeInIndex = 1; lastKnownFileType = sourcecode.c.objc; path = TideySidebarPresentationCharacterizationTests.m; sourceTree = "<group>"; };
@@ -9710,6 +9714,7 @@
 				A19ACAEE2C87340ED56E653E /* TideySidebarRowPresentation.h */,
 				22DADE95B337C77AA2358E8B /* TideySidebarRowPresentation.m */,
 				41620A4E4DDCB9672BCB9FC8 /* TideyInterfaceTheme.swift */,
+				B426666CB68D7D680E443CEE /* TideyNativeOrphanAdoption.swift */,
 			);
 			name = Classes;
 			path = sources/;
@@ -10118,6 +10123,7 @@
 				9B060E519B9C7F7D84874A62 /* TideyApplicationEnvironmentPolicyTests.swift */,
 				37F7673A9AA91C4DAEC898D4 /* TideyInterfaceThemeTests.swift */,
 				BA5F0AF6156C359BC682EC12 /* TideyRightPanelTabComponentParityTests.m */,
+				780810C7C5CBC2C9C8407E33 /* TideyNativeOrphanAdoptionTests.swift */,
 			);
 			path = ModernTests;
 			sourceTree = "<group>";
@@ -20460,6 +20466,7 @@
 				84D0E4A7C563506B0880B189 /* TideySidebarViews.m in Sources */,
 				551519642B90B2D5B0207FD3 /* TideySidebarRowPresentation.m in Sources */,
 				D922FE28535D3755ADC629FD /* TideyInterfaceTheme.swift in Sources */,
+				00465F71C9B47CC8506056CB /* TideyNativeOrphanAdoption.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};
@@ -20538,6 +20545,7 @@
 				92B3FC50E8D302E881489506 /* TideyApplicationEnvironmentPolicyTests.swift in Sources */,
 				5FDFE8EB3CADAD614FCF6E53 /* TideyInterfaceThemeTests.swift in Sources */,
 				C8951ECCFF64C23E3B1CA8EE /* TideyRightPanelTabComponentParityTests.m in Sources */,
+				351CE68C62C559BFAA9B2DD1 /* TideyNativeOrphanAdoptionTests.swift in Sources */,
 			);
 			runOnlyForDeploymentPostprocessing = 0;
 		};

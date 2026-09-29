@@ -2,6 +2,156 @@ import XCTest
 @testable import iTerm2SharedARC
 
 final class TideyRuntimeResumeDescriptorTests: XCTestCase {
+    func testRestartDatabaseReadbackUsesIsolatedSQLiteAndRejectsMissingGraph() throws {
+        let directory = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let database = directory.appendingPathComponent("state.sqlite")
+        let graph: [String: Any] = ["schema_version": 1, "workspaces": [], "runtime_descriptors_by_panel_id": [:]]
+        let data = try NSKeyedArchiver.archivedData(withRootObject: graph, requiringSecureCoding: false)
+        let hex = data.map { String(format: "%02x", $0) }.joined()
+        let process = Process(); process.executableURL = URL(fileURLWithPath: "/usr/bin/sqlite3")
+        process.arguments = [database.path, "CREATE TABLE Node(key TEXT,data BLOB); INSERT INTO Node VALUES('Tidey Workspace Restoration State',X'\(hex)');"]
+        try process.run(); process.waitUntilExit(); XCTAssertEqual(process.terminationStatus, 0)
+        // This non-public Objective-C owner is linked into the test host, not
+        // exported by iTerm2SharedARC's Swift module (same seam as PathTests).
+        let owner = try XCTUnwrap(NSClassFromString("iTermRestorableStateController"))
+        let selector = NSSelectorFromString("tideyReadRestartDatabaseAtPath:expectedGraphs:")
+        let method = try XCTUnwrap(class_getClassMethod(owner, selector))
+        typealias Readback = @convention(c) (AnyClass, Selector, NSString, NSArray) -> Unmanaged<NSDictionary>
+        let readback = unsafeBitCast(method_getImplementation(method), to: Readback.self)
+        func read(_ path: String, _ graphs: [[String: Any]]) -> NSDictionary {
+            readback(owner, selector, path as NSString, graphs as NSArray).takeUnretainedValue()
+        }
+        let valid = read(database.path, [graph])
+        XCTAssertEqual(valid["technical_ready"] as? Bool, true)
+        XCTAssertEqual(valid["database_integrity"] as? String, "ok")
+        let mismatch = read(database.path, [])
+        XCTAssertEqual(mismatch["technical_ready"] as? Bool, false)
+        let missing = directory.appendingPathComponent("missing.sqlite")
+        let absent = read(missing.path, [])
+        XCTAssertEqual(absent["technical_ready"] as? Bool, false)
+        XCTAssertFalse(FileManager.default.fileExists(atPath: missing.path), "readback must never create a database")
+    }
+
+    func testRestartCheckpointRejectsRevisionDriftPendingEvidenceAndSavedGraphMismatch() throws {
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let payload = directSocketUpdatePayload(durableResumeID: "current-B", workingDirectory: "/tmp/project")
+        let binding = try XCTUnwrap(payload["binding"] as? [String: String])
+        let workspace = try XCTUnwrap(binding["workspace_id"])
+        let panel = try XCTUnwrap(binding["panel_id"])
+        XCTAssertTrue(gate.acceptUpdatePayload(payload, currentWorkspaceID: workspace, currentPanelID: panel).accepted)
+        let current = gate.runtimeAgentDescriptorSnapshots(currentWorkspaceIDByPanelID: [panel: workspace])
+        XCTAssertTrue(TideyRestartCheckpointValidator.preflight(expected: current, current: current).isEmpty)
+        var stale = current; stale[0]["revision"] = 0
+        XCTAssertEqual(TideyRestartCheckpointValidator.preflight(expected: stale, current: current).first?["code"], "descriptor_changed")
+        var pending = current; pending[0]["awaiting_runtime_evidence"] = true
+        XCTAssertEqual(TideyRestartCheckpointValidator.preflight(expected: pending, current: pending).first?["code"], "awaiting_runtime_evidence")
+        let graph: [String: Any] = ["schema_version": 1, "workspaces": [["workspace_id": workspace, "panel_ids": [panel]]],
+                                     "runtime_descriptors_by_panel_id": [panel: ["revision": 1, "durable_id": "current-B"]]]
+        XCTAssertTrue(TideyRestartCheckpointValidator.savedGraphBlockers(saved: [graph], expected: [graph]).isEmpty)
+        var wrong = graph; wrong["runtime_descriptors_by_panel_id"] = [:]
+        XCTAssertEqual(TideyRestartCheckpointValidator.savedGraphBlockers(saved: [wrong], expected: [graph]).first?["code"], "saved_graph_mismatch")
+        XCTAssertFalse(TideyRestartCheckpointValidator.savedGraphBlockers(saved: [], expected: [graph]).isEmpty)
+    }
+
+    func testDirectCarrierCurrentUUIDPersistsAndReopensWithoutChangingOtherDescriptors() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("direct-carrier-save-\(UUID().uuidString)")
+        try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let savedURL = directory.appendingPathComponent("SavedState.archive")
+        let planner = TideyWorkspaceRestorationPlanner()
+        let codec = TideyWorkspaceRestorationStateDictionaryCodec()
+        let descriptorCodec = TideyRuntimeResumeDescriptorDictionaryCodec()
+        let gate = TideyRuntimeResumeDescriptorUpdateGate()
+        let carrierID = "carrier-learning"
+
+        func payload(_ threadID: String, panelID: String = "carrier-learning") -> [String: Any] {
+            var value = directSocketUpdatePayload(durableResumeID: threadID,
+                                                 workingDirectory: "/tmp/direct-project")
+            value["binding"] = ["workspace_id": "workspace-direct", "panel_id": panelID]
+            return value
+        }
+        func accept(_ owner: TideyRuntimeResumeDescriptorUpdateGate, _ threadID: String)
+            -> TideyRuntimeResumeDescriptorUpdateResult {
+            owner.acceptUpdatePayload(payload(threadID), currentWorkspaceID: "workspace-direct",
+                                      currentPanelID: carrierID)
+        }
+        func saveAndRestore(_ owner: TideyRuntimeResumeDescriptorUpdateGate) throws
+            -> TideyWorkspaceRestorationState {
+            let panels = try [carrierID, "panel-other"].map { panelID in
+                TideyWorkspaceRestorationPanelInput(
+                    panelID: panelID, hasSessions: true, isNativeTmux: false,
+                    runtimeResumeDescriptor: try XCTUnwrap(owner.descriptor(forPanelID: panelID))
+                )
+            }
+            let workspace = TideyWorkspaceRestorationWorkspaceInput(
+                workspaceID: "workspace-direct", title: "Preserved workspace", pinned: true,
+                panels: panels, selectedPanelID: carrierID
+            )
+            let capture = planner.capturePlan(workspaces: [workspace], visiblePanels: panels,
+                                              selectedWorkspaceID: "workspace-direct")
+            let encoded = try codec.encode(capture.state)
+            try NSKeyedArchiver.archivedData(withRootObject: encoded, requiringSecureCoding: false)
+                .write(to: savedURL, options: .atomic)
+            let disk = try XCTUnwrap(NSKeyedUnarchiver.unarchiveTopLevelObjectWithData(
+                Data(contentsOf: savedURL)) as? [String: Any])
+            let decoded = try codec.decode(disk)
+            XCTAssertEqual(decoded.workspaces.first?.panelIDs, [carrierID, "panel-other"])
+            XCTAssertEqual(decoded.selectedWorkspaceID, "workspace-direct")
+            XCTAssertEqual(decoded.workspaces.first?.selectedPanelID, carrierID)
+            return planner.hydrationState(savedState: decoded,
+                                          availablePanelIDs: [carrierID, "panel-other"], panelIDRemap: [:])
+        }
+
+        let rejected = gate.acceptUpdatePayload(
+            payload("thread-A", panelID: "native-session:carrier-learning:native-learning"),
+            currentWorkspaceID: "workspace-direct", currentPanelID: carrierID
+        )
+        XCTAssertFalse(rejected.accepted)
+        XCTAssertEqual(rejected.errorCode, "stale_binding")
+        XCTAssertNil(gate.descriptor(forPanelID: carrierID))
+        XCTAssertTrue(accept(gate, "thread-A").accepted)
+        let other = try XCTUnwrap(gate.acceptUpdatePayload(
+            payload("unrelated-thread", panelID: "panel-other"),
+            currentWorkspaceID: "workspace-direct", currentPanelID: "panel-other"
+        ).descriptor)
+        let originalOther = try descriptorCodec.encode(other) as NSDictionary
+        let restoredA = try saveAndRestore(gate)
+        let reopenedGate = TideyRuntimeResumeDescriptorUpdateGate()
+        reopenedGate.restoreDescriptorsByPanelIDAwaitingRuntimeEvidence(restoredA.runtimeDescriptorsByPanelID)
+        func pending(_ owner: TideyRuntimeResumeDescriptorUpdateGate) -> Bool? {
+            owner.runtimeAgentDescriptorSnapshots(currentWorkspaceIDByPanelID: [carrierID: "workspace-direct"])
+                .first?["awaiting_runtime_evidence"] as? Bool
+        }
+        XCTAssertEqual(pending(reopenedGate), true)
+        let ack = accept(reopenedGate, "thread-A")
+        XCTAssertTrue(ack.accepted)
+        XCTAssertFalse(ack.changed)
+        XCTAssertEqual(ack.descriptor?.revision, 1)
+        XCTAssertNil(pending(reopenedGate))
+        let changed = accept(reopenedGate, "thread-B")
+        XCTAssertTrue(changed.accepted)
+        XCTAssertTrue(changed.changed)
+        XCTAssertEqual(changed.descriptor?.revision, 2)
+        let restoredB = try saveAndRestore(reopenedGate)
+        let savedB = try XCTUnwrap(restoredB.runtimeDescriptorsByPanelID[carrierID])
+        XCTAssertEqual(savedB.agent?.durableResumeID, "thread-B")
+        XCTAssertEqual(savedB.agent?.launch.arguments, ["resume", "thread-B"])
+        XCTAssertEqual(savedB.revision, 2)
+        XCTAssertEqual(try descriptorCodec.encode(XCTUnwrap(
+            restoredB.runtimeDescriptorsByPanelID["panel-other"])) as NSDictionary, originalOther)
+        let reopenedB = TideyRuntimeResumeDescriptorUpdateGate()
+        reopenedB.restoreDescriptorsByPanelIDAwaitingRuntimeEvidence(restoredB.runtimeDescriptorsByPanelID)
+        XCTAssertEqual(pending(reopenedB), true)
+        let ackB = accept(reopenedB, "thread-B")
+        XCTAssertTrue(ackB.accepted)
+        XCTAssertFalse(ackB.changed)
+        XCTAssertEqual(ackB.descriptor?.revision, 2)
+        XCTAssertNil(pending(reopenedB))
+    }
+
     func testLegacyDefaultSocketTargetResolverSeamCompiles() {
         let target = TideyRuntimeResumeTarget(
             socketPath: "/private/tmp/tmux-501/default",

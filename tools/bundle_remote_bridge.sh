@@ -27,6 +27,15 @@ fi
 mkdir -p "$RESOURCES_DIR"
 cp -f "$BRIDGE_BINARY" "$RESOURCES_DIR/tidey-remote-bridge"
 chmod 755 "$RESOURCES_DIR/tidey-remote-bridge"
+# Resources are sealed by the enclosing App's later signing step. Sign this
+# executable first, using the identity Xcode selected for that same build.
+# Unsigned/ad-hoc development builds must not request a signing identity.
+if [[ "${CODE_SIGNING_ALLOWED:-YES}" != "NO" &&
+      -n "${EXPANDED_CODE_SIGN_IDENTITY:-}" &&
+      "$EXPANDED_CODE_SIGN_IDENTITY" != "-" ]]; then
+    codesign --force --options runtime --timestamp \
+        --sign "$EXPANDED_CODE_SIGN_IDENTITY" "$RESOURCES_DIR/tidey-remote-bridge"
+fi
 cp -f "$BRIDGE_DIR/com.tidey.remote-bridge.plist" "$RESOURCES_DIR/com.tidey.remote-bridge.plist.template"
 cp -f "$BRIDGE_DIR/com.tidey.remote-bridge.cloudflared.plist" "$RESOURCES_DIR/com.tidey.remote-bridge.cloudflared.plist.template"
 

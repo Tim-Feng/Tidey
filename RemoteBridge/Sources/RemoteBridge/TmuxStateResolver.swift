@@ -134,6 +134,21 @@ final class TmuxStateResolver {
         }
     }
 
+    /// One fresh observation binds a rollback option to its exact pane and root.
+    /// Restart decisions must not combine a cached option with a different root.
+    func restartPaneEvidence(forPaneID paneID: String, socketPath: String) -> (identity: TmuxPaneIdentity, rootPID: Int32)? {
+        queue.sync {
+            guard paneID.hasPrefix("%"), !paneID.dropFirst().isEmpty,
+                  paneID.dropFirst().allSatisfy(\.isNumber), socketPath.hasPrefix("/"),
+                  let text = try? commandRunner(socketPath, ["display-message", "-p", "-t", paneID,
+                      "#{pane_id}|#{pane_pid}|#{@tidey_workspace_id}|#{@tidey_panel_id}"]) else { return nil }
+            let fields = text.trimmingCharacters(in: .whitespacesAndNewlines).components(separatedBy: "|")
+            guard fields.count == 4, fields[0] == paneID, let root = Int32(fields[1]), root > 1,
+                  !fields[2].isEmpty, !fields[3].isEmpty, !fields[3].contains("\n") else { return nil }
+            return (.init(workspaceID: fields[2], panelID: fields[3]), root)
+        }
+    }
+
     func sessionName(forPaneID paneID: String, socketPath: String) -> String? {
         queue.sync {
             if let snapshot = loadSnapshot(socketPath: socketPath, forceRefresh: false),

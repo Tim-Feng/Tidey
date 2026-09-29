@@ -51,20 +51,26 @@ tmux_socket_path_from_env() {
     fi
 }
 
-registry_file_matches_tmux_metadata() {
-    local path="$1"
-    local tmux_pane_id="$2"
-    local tmux_socket_path="$3"
-
+registry_file_matches_owner() {
+    local path="$1" pid="$2" workspace_id="$3" panel_id="$4"
     [[ -f "$path" ]] || return 1
+    # Parse exact typed values: a numeric prefix or another panel is not this owner.
+    [[ "$(/usr/bin/plutil -extract pid raw -expect integer -o - "$path" 2>/dev/null)" == "$pid" ]] || return 1
+    [[ "$(/usr/bin/plutil -extract workspace_id raw -expect string -o - "$path" 2>/dev/null)" == "$workspace_id" ]] || return 1
+    [[ "$(/usr/bin/plutil -extract panel_id raw -expect string -o - "$path" 2>/dev/null)" == "$panel_id" ]] || return 1
+    [[ "$(/usr/bin/plutil -extract vendor raw -expect string -o - "$path" 2>/dev/null)" == claude ]] || return 1
+    local session_id=""
+    session_id="$(/usr/bin/plutil -extract session_id raw -expect string -o - "$path" 2>/dev/null)" || return 1
+    [[ -n "$session_id" && "${path##*/}" == "claude-$session_id.json" ]]
+}
 
-    if [[ -n "$tmux_pane_id" ]]; then
-        grep -q "\"tmux_pane_id\":\"$(json_escape "$tmux_pane_id")\"" "$path" 2>/dev/null || return 1
-    fi
-    if [[ -n "$tmux_socket_path" ]]; then
-        grep -q "\"tmux_socket_path\":\"$(json_escape "$tmux_socket_path")\"" "$path" 2>/dev/null || return 1
-    fi
-    return 0
+remove_owned_registry_files() {
+    local pid="$1" workspace_id="$2" panel_id="$3" path=""
+    for path in "$REGISTRY_ROOT"/claude-*.json; do
+        if registry_file_matches_owner "$path" "$pid" "$workspace_id" "$panel_id"; then
+            rm -f "$path"
+        fi
+    done
 }
 
 write_registry_file() {
@@ -108,67 +114,33 @@ write_registry_file() {
     }
 }
 
-read_session_id_from_registry_file() {
-    local path="$1"
-    [[ -f "$path" ]] || return 1
-    sed -n 's/.*"session_id":"\([^"]*\)".*/\1/p' "$path" | head -n1
-}
-
 find_registry_file_for_pid() {
-    local pid="$1"
-    local path=""
-    shopt -s nullglob
+    local pid="$1" workspace_id="$2" panel_id="$3" path="" matched=""
     for path in "$REGISTRY_ROOT"/claude-*.json; do
-        if grep -q "\"pid\":$pid" "$path" 2>/dev/null; then
-            printf '%s' "$path"
-            shopt -u nullglob
-            return 0
+        if registry_file_matches_owner "$path" "$pid" "$workspace_id" "$panel_id"; then
+            # Without a current SessionStart event, multiple aliases are ambiguous.
+            [[ -z "$matched" ]] || return 1
+            matched="$path"
         fi
     done
-    shopt -u nullglob
-    return 1
+    [[ -n "$matched" ]] || return 1
+    printf '%s' "$matched"
 }
 
 monitor_registry_file() {
-    local pid="$1"
-    local workspace_id="$2"
-    local panel_id="$3"
-    local cwd="$4"
-    local created_at="$5"
-    local current_session_id="${6:-}"
+    local pid="$1" workspace_id="$2" panel_id="$3"
     local registry_file="${7:-}"
 
     while kill -0 "$pid" 2>/dev/null; do
-        if [[ -z "$current_session_id" || -z "$registry_file" || ! -f "$registry_file" ]]; then
-            local discovered_registry=""
-            if discovered_registry="$(find_registry_file_for_pid "$pid")"; then
-                registry_file="$discovered_registry"
-                local discovered_session_id=""
-                discovered_session_id="$(read_session_id_from_registry_file "$registry_file" || true)"
-                if [[ -n "$discovered_session_id" ]]; then
-                    current_session_id="$discovered_session_id"
-                fi
-            fi
+        if [[ -z "$registry_file" || ! -f "$registry_file" ]]; then
+            registry_file="$(find_registry_file_for_pid "$pid" "$workspace_id" "$panel_id" || true)"
         fi
-
-        if [[ -n "$current_session_id" ]]; then
-            if [[ -z "$registry_file" ]]; then
-                registry_file="$REGISTRY_ROOT/claude-$current_session_id.json"
-            fi
-            local tmux_pane_id=""
-            local tmux_socket_path=""
-            tmux_pane_id="$(tmux_pane_id_from_env)"
-            tmux_socket_path="$(tmux_socket_path_from_env)"
-            if [[ ! -f "$registry_file" ]] || ! registry_file_matches_tmux_metadata "$registry_file" "$tmux_pane_id" "$tmux_socket_path"; then
-                write_registry_file "$registry_file" "$workspace_id" "$current_session_id" "$panel_id" "$pid" "$cwd" "$created_at"
-            fi
-        fi
+        # Bootstrap is written before Claude starts. Lifecycle hooks own all
+        # later writes, including tmux metadata: repairing a retired file here
+        # can resurrect the old UUID during or after SessionStart's handover.
         sleep 2
     done
-
-    if [[ -n "$registry_file" ]]; then
-        rm -f "$registry_file"
-    fi
+    remove_owned_registry_files "$pid" "$workspace_id" "$panel_id"
 }
 
 shell_quote() {
@@ -376,8 +348,8 @@ cleanup() {
         kill "$MONITOR_PID" 2>/dev/null || true
         wait "$MONITOR_PID" 2>/dev/null || true
     fi
-    if [[ -n "${REGISTRY_FILE:-}" ]]; then
-        rm -f "$REGISTRY_FILE"
+    if [[ -n "${TIDEY_WORKSPACE_ID:-}" ]]; then
+        remove_owned_registry_files "$$" "$TIDEY_WORKSPACE_ID" "${TIDEY_PANEL_ID:-}"
     fi
     if [[ -n "${HOOK_JOURNAL_FILE:-}" ]]; then
         # A newer wrapper's later claim on the marker is respected — its

@@ -99,6 +99,21 @@ final class TideyCLICommandFormatter: NSObject {
         }
     }
 
+    /// Managed app-server Codex (`TIDEY_CODEX_STATUS_OWNER=lifecycle`, set by Resources/bin/codex
+    /// for its app-server and remote TUI) has its state owned by the Bridge session lifecycle.
+    /// Its hooks keep notifications and titles but must not write the shared owner-less
+    /// shell_state cell, which outranks session-owned Idle and outlives interrupted turns.
+    static func messages(forCodexHookEvent event: String,
+                         workspaceID: String,
+                         payloadJSON: String?,
+                         lifecycleOwnsState: Bool) -> [String] {
+        let messages = messages(forCodexHookEvent: event, workspaceID: workspaceID, payloadJSON: payloadJSON)
+        guard lifecycleOwnsState else {
+            return messages
+        }
+        return messages.filter { !$0.hasPrefix("report_shell_state ") }
+    }
+
     @objc(messagesForCodexHookEvent:workspaceID:payloadJSON:)
     static func messages(forCodexHookEvent event: String,
                          workspaceID: String,
@@ -292,12 +307,12 @@ final class TideyCLICommandFormatter: NSObject {
                                         cwd: String,
                                         createdAt: String,
                                         transcriptPath: String?,
+                                        tmuxPaneID: String? = nil,
+                                        tmuxSocketPath: String? = nil,
                                         fileManager: FileManager = .default) throws -> URL {
         try fileManager.createDirectory(at: registryRoot, withIntermediateDirectories: true)
 
         let registryURL = registryRoot.appendingPathComponent("claude-\(sessionID).json", isDirectory: false)
-        let tempURL = registryRoot.appendingPathComponent(".claude-registry.\(UUID().uuidString)", isDirectory: false)
-
         var payload: [String: Any] = [
             "version": 1,
             "vendor": "claude",
@@ -312,13 +327,51 @@ final class TideyCLICommandFormatter: NSObject {
             payload["transcript_path"] = transcriptPath
         }
 
-        let data = try JSONSerialization.data(withJSONObject: payload)
-        try data.write(to: tempURL, options: .atomic)
-        if fileManager.fileExists(atPath: registryURL.path) {
-            try fileManager.removeItem(at: registryURL)
+        if let tmuxPaneID, !tmuxPaneID.isEmpty {
+            payload["tmux_pane_id"] = tmuxPaneID
         }
-        try fileManager.moveItem(at: tempURL, to: registryURL)
+        if let tmuxSocketPath, !tmuxSocketPath.isEmpty {
+            payload["tmux_socket_path"] = tmuxSocketPath
+        }
+        let data = try JSONSerialization.data(withJSONObject: payload)
+        try data.write(to: registryURL, options: .atomic)
         return registryURL
+    }
+
+    // SessionStart is the authority for this wrapper's current UUID. A monitor
+    // without that event must leave ambiguous aliases alone.
+    static func supersedeClaudeRegistryFiles(registryRoot: URL,
+                                             currentSessionID: String,
+                                             wrapperPID: Int32,
+                                             workspaceID: String,
+                                             panelID: String,
+                                             fileManager: FileManager = .default) throws -> [URL] {
+        func ownedRecord(at url: URL) -> [String: Any]? {
+            guard let data = try? Data(contentsOf: url),
+                  let record = (try? JSONSerialization.jsonObject(with: data)) as? [String: Any],
+                  record["pid"] as? Int32 == wrapperPID,
+                  record["workspace_id"] as? String == workspaceID,
+                  record["panel_id"] as? String == panelID,
+                  record["vendor"] as? String == "claude",
+                  let sessionID = record["session_id"] as? String,
+                  url.lastPathComponent == "claude-\(sessionID).json" else {
+                return nil
+            }
+            return record
+        }
+        let currentURL = registryRoot.appendingPathComponent("claude-\(currentSessionID).json")
+        guard wrapperPID > 0, !currentSessionID.isEmpty,
+              ownedRecord(at: currentURL) != nil else {
+            return []
+        }
+        var removed = [URL]()
+        for url in try fileManager.contentsOfDirectory(at: registryRoot, includingPropertiesForKeys: nil) {
+            guard let record = ownedRecord(at: url),
+                  record["session_id"] as? String != currentSessionID else { continue }
+            try fileManager.removeItem(at: url)
+            removed.append(url)
+        }
+        return removed
     }
 
     static func removeClaudeRegistryFile(registryRoot: URL,

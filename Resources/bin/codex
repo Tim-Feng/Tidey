@@ -1317,7 +1317,9 @@ run_codex_app_server_runtime() {
         socket_wait_attempts=1200
     fi
 
-    env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" app-server \
+    # App-server Codex state is owned by the Bridge session lifecycle; hooks from this runtime and
+    # its remote TUI send notifications only (TIDEY_CODEX_STATUS_OWNER, see TideyCLICommandFormatter).
+    env TIDEY_CODEX_HOOKS_ENABLED=1 TIDEY_CODEX_STATUS_OWNER=lifecycle CODEX_HOME="$real_codex_home" "$real_codex" app-server \
         -c "sqlite_home=$(toml_inline_string "$sqlite_home")" \
         -c 'features.hooks=true' \
         -c "mcp_servers.tidey_browser.command=$(toml_inline_string "$HOOK_DIR/tidey-browser-mcp")" \
@@ -1357,9 +1359,9 @@ run_codex_app_server_runtime() {
 
     set +e
     if [[ -n "$remote_tui_tty" && "$remote_tui_tty" != "not a tty" && -c "$remote_tui_tty" ]]; then
-        env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" -c 'check_for_update_on_startup=false' --remote "unix://$socket_path" "$@" <"$remote_tui_tty" &
+        env TIDEY_CODEX_HOOKS_ENABLED=1 TIDEY_CODEX_STATUS_OWNER=lifecycle CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" -c 'check_for_update_on_startup=false' --remote "unix://$socket_path" "$@" <"$remote_tui_tty" &
     else
-        env TIDEY_CODEX_HOOKS_ENABLED=1 CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" -c 'check_for_update_on_startup=false' --remote "unix://$socket_path" "$@" &
+        env TIDEY_CODEX_HOOKS_ENABLED=1 TIDEY_CODEX_STATUS_OWNER=lifecycle CODEX_HOME="$real_codex_home" "$real_codex" "$profile_flag" "$profile_name" -c 'check_for_update_on_startup=false' --remote "unix://$socket_path" "$@" &
     fi
     remote_tui_pid="$!"
     tidey_hydrate_tmux_pane_identity

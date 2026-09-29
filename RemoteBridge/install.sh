@@ -29,10 +29,11 @@ codesign --force --sign - "$TARGET_BINARY" >/dev/null 2>&1
 echo "Installing launchd plist..."
 mkdir -p "$LOG_DIR"
 mkdir -p "$PLIST_DIR"
-sed "s|__HOME__|$HOME|g" "$SCRIPT_DIR/$LABEL.plist" > "$PLIST_DIR/$LABEL.plist"
-sed -e "s|__HOME__|$HOME|g" \
-    -e "s|__LABEL__|$SUPERVISOR_LABEL|g" \
-    "$SCRIPT_DIR/com.tidey.remote-bridge.cloudflared.plist" > "$PLIST_DIR/$SUPERVISOR_LABEL.plist"
+python3 "$SCRIPT_DIR/tools/render_launch_agent.py" "$SCRIPT_DIR/$LABEL.plist" \
+    "$PLIST_DIR/$LABEL.plist" "$HOME" "$LABEL"
+python3 "$SCRIPT_DIR/tools/render_launch_agent.py" \
+    "$SCRIPT_DIR/com.tidey.remote-bridge.cloudflared.plist" \
+    "$PLIST_DIR/$SUPERVISOR_LABEL.plist" "$HOME" "$SUPERVISOR_LABEL"
 
 if [[ "$LOAD_SERVICE" == "1" ]]; then
   echo "Loading service..."

@@ -402,8 +402,9 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         sidebarLock.lock()
         let deliveredSidebarMessages = sidebarMessages
         sidebarLock.unlock()
-        XCTAssertEqual(deliveredSidebarMessages.last,
-                       "report_shell_state running --workspace_id=workspace-1")
+        // Managed Codex state is owned by the session lifecycle; the app-server path writes no
+        // shared owner-less shell_state cell that could outlive a turn.
+        XCTAssertFalse(deliveredSidebarMessages.contains { $0.contains("report_shell_state") })
     }
 
     func testConcurrentSyncPassesKeepNewestGeneration() throws {
@@ -1180,15 +1181,14 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertTrue(Self.waitUntil {
             sidebarLock.lock()
             defer { sidebarLock.unlock() }
-            return sidebarMessages.count == 3
+            return sidebarMessages.contains { $0.contains(#""action":"notification.create""#) }
         })
+        Thread.sleep(forTimeInterval: 0.2)  // let any trailing sidebar message arrive
         sidebarLock.lock()
         let messages = sidebarMessages
         sidebarLock.unlock()
-        XCTAssertEqual(messages[0], "report_shell_state running --workspace_id=workspace-1")
-        XCTAssertTrue(messages[1].contains(#""action":"notification.create""#))
-        XCTAssertTrue(messages[1].contains(#""body":"received""#))
-        XCTAssertEqual(messages[2], "report_shell_state prompt --workspace_id=workspace-1")
+        XCTAssertEqual(messages.count, 1, "completion keeps its notification and writes no owner-less state: \(messages)")
+        XCTAssertTrue(messages[0].contains(#""body":"received""#))
     }
 
     func testAttachedRuntimeStillPublishesApprovalPromptEventsToHub() throws {
@@ -1289,15 +1289,15 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertTrue(Self.waitUntil {
             sidebarLock.lock()
             defer { sidebarLock.unlock() }
-            return sidebarMessages.count == 2
+            return sidebarMessages.contains { $0.contains(#""action":"notification.create""#) }
         })
+        Thread.sleep(forTimeInterval: 0.2)  // let any trailing sidebar message arrive
         sidebarLock.lock()
         let messages = sidebarMessages
         sidebarLock.unlock()
-        XCTAssertTrue(messages[0].contains(#""action":"notification.create""#))
+        XCTAssertEqual(messages.count, 1, "\(messages)")
         XCTAssertTrue(messages[0].contains(#""title":"Codex""#))
         XCTAssertTrue(messages[0].contains(#""body":"Approve Codex command?""#))
-        XCTAssertEqual(messages[1], "report_shell_state needs_input --workspace_id=workspace-1")
     }
 
     func testApprovalPromptResolvedClearsSidebarPromptStateAndAllowsFutureNotification() throws {
@@ -1360,16 +1360,14 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         XCTAssertTrue(Self.waitUntil {
             sidebarLock.lock()
             defer { sidebarLock.unlock() }
-            return sidebarMessages.count == 5
+            return sidebarMessages.filter { $0.contains(#""action":"notification.create""#) }.count == 2
         })
+        Thread.sleep(forTimeInterval: 0.2)  // let any trailing sidebar message arrive
         sidebarLock.lock()
         let messages = sidebarMessages
         sidebarLock.unlock()
-        XCTAssertTrue(messages[0].contains(#""action":"notification.create""#))
-        XCTAssertEqual(messages[1], "report_shell_state needs_input --workspace_id=workspace-1")
-        XCTAssertEqual(messages[2], "report_shell_state running --workspace_id=workspace-1")
-        XCTAssertTrue(messages[3].contains(#""action":"notification.create""#))
-        XCTAssertEqual(messages[4], "report_shell_state needs_input --workspace_id=workspace-1")
+        XCTAssertEqual(messages.count, 2, "\(messages)")
+        XCTAssertTrue(messages.allSatisfy { $0.contains(#""action":"notification.create""#) })
     }
 
     func testReplacementPromptLifecycleSidebarEffectsAreExactlyOnce() throws {
@@ -1435,10 +1433,8 @@ final class CodexAppServerRegistryRuntimeSyncerTests: XCTestCase {
         sidebarLock.unlock()
         XCTAssertEqual(messages.filter { $0.contains("notification.create") }.count, 2,
                        "each capability-token attempt must notify once")
-        XCTAssertEqual(messages.filter {
-            $0 == "report_shell_state running --workspace_id=workspace-1"
-        }.count, 2,
-                       "the retired A lifecycle and current B lifecycle must each resolve exactly once")
+        XCTAssertFalse(messages.contains { $0.contains("report_shell_state") },
+                       "prompt resolution state belongs to the session lifecycle, not a shared cell")
     }
 
     func testPendingApprovalPromptEventsAreScopedToWorkspaceAndSession() {

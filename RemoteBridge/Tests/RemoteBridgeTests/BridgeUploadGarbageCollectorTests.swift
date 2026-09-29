@@ -3,6 +3,22 @@ import XCTest
 @testable import RemoteBridge
 
 final class BridgeUploadGarbageCollectorTests: XCTestCase {
+    func testRealStorageSweepExcludesDurableOriginalsSubdirectory() throws {
+        let root = FileManager.default.temporaryDirectory.appendingPathComponent(UUID().uuidString)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let originals = root.appendingPathComponent("originals")
+        try FileManager.default.createDirectory(at: originals, withIntermediateDirectories: true)
+        let temporary = root.appendingPathComponent("expired.jpg"), original = originals.appendingPathComponent("keep.heic")
+        for url in [temporary, original] {
+            try Data([1, 2, 3]).write(to: url)
+            try FileManager.default.setAttributes([.modificationDate: Date.distantPast], ofItemAtPath: url.path)
+        }
+        let collector = BridgeUploadGarbageCollector(uploadDirectory: root)
+        _ = try collector.sweep()
+        XCTAssertFalse(FileManager.default.fileExists(atPath: temporary.path))
+        XCTAssertEqual(try Data(contentsOf: original), Data([1, 2, 3]))
+    }
+
     func testStatsReturnsFileCountTotalBytesAndOldestModificationDate() throws {
         let fixture = UploadGCFixture(files: [
             .file("new.jpg", modifiedAt: fixtureDate(100), bytes: 10),

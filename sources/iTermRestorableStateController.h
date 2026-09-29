@@ -39,6 +39,9 @@ NS_ASSUME_NONNULL_BEGIN
 
 - (void)saveRestorableState;
 - (void)tideyRequestSaveSoon;
+- (NSDictionary *)tideyCheckpointForRestartWithExpectedGraphs:(NSArray<NSDictionary *> *)expectedGraphs;
+// Pure readback seam; callers cannot choose a save destination.
++ (NSDictionary *)tideyReadRestartDatabaseAtPath:(NSString *)path expectedGraphs:(NSArray<NSDictionary *> *)expectedGraphs;
 
 // Call exactly one of these at startup:
 - (void)restoreWindowsWithCompletion:(void (^)(void))completion;

@@ -7,6 +7,7 @@
 #import "TideySocketConnection.h"
 #import "NSFileManager+iTerm.h"
 #import "iTermController.h"
+#import "iTermRestorableStateController.h"
 #import "iTermSocket.h"
 #import "iTermSocketAddress.h"
 #import "iTerm2SharedARC-Swift.h"
@@ -729,6 +730,41 @@ typedef NSDictionary * _Nullable (^TideySocketTerminalHistoryPageHandler)(
         return;
     }
 
+    if ([action isEqualToString:@"checkpoint_for_restart"]) {
+        if (![NSThread isMainThread]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self handleRequestMessage:message onConnection:connection];
+            });
+            return;
+        }
+        NSArray *expected = [source[@"expected_descriptors"] isKindOfClass:[NSArray class]]
+            ? source[@"expected_descriptors"] : nil;
+        for (id entry in expected) {
+            if (![entry isKindOfClass:[NSDictionary class]]) { expected = nil; break; }
+        }
+        NSMutableArray *current = [NSMutableArray array];
+        NSMutableArray *graphs = [NSMutableArray array];
+        BOOL captureComplete = YES;
+        for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+            [current addObjectsFromArray:[term tideyRuntimeAgentDescriptorSnapshots]];
+            NSDictionary *graph = [term tideyRestartGraphExpectation];
+            if (graph) { [graphs addObject:graph]; } else { captureComplete = NO; }
+        }
+        NSArray *blockers = expected
+            ? [TideyRestartCheckpointValidator preflightWithExpected:expected current:current]
+            : @[@{ @"code": @"invalid_request", @"detail": @"expected_descriptors is required." }];
+        if (!captureComplete) {
+            blockers = @[@{ @"code": @"capture_unavailable", @"detail": @"A current workspace capture plan was unavailable." }];
+        }
+        NSDictionary *result = blockers.count
+            ? @{ @"technical_ready": @NO, @"blockers": blockers }
+            : [[iTermRestorableStateController sharedInstance] tideyCheckpointForRestartWithExpectedGraphs:graphs];
+        NSMutableDictionary *response = [NSMutableDictionary dictionaryWithDictionary:result];
+        response[@"descriptors"] = current;
+        [self sendSuccessResponseForRequestID:requestID result:response onConnection:connection];
+        return;
+    }
+
     if ([action isEqualToString:@"list_runtime_resume_descriptors"]) {
         if (![NSThread isMainThread]) {
             dispatch_async(dispatch_get_main_queue(), ^{
@@ -966,6 +1002,35 @@ typedef NSDictionary * _Nullable (^TideySocketTerminalHistoryPageHandler)(
                                                  @"workspace_id": panelSummary[@"workspace_id"] ?: @"",
                                                  @"key": key }
                                   onConnection:connection];
+        return;
+    }
+
+    if ([action isEqualToString:@"adopt_native_orphan_into_carrier"]) {
+        // Exact one-shot recovery of an orphaned native agent session (TideyNativeOrphanAdoption).
+        NSString *carrierPanelID = TideySocketStringParam(source, @"carrier_panel_id");
+        NSString *nativeSessionID = TideySocketStringParam(source, @"native_session_id");
+        if (carrierPanelID.length == 0 || nativeSessionID.length == 0 ||
+            ![source[@"confirm"] isEqual:@YES]) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"invalid_params"
+                                        message:@"adopt_native_orphan_into_carrier requires carrier_panel_id, native_session_id and confirm=true."
+                                   onConnection:connection];
+            return;
+        }
+        NSString *logicalPanelID =
+            [NSString stringWithFormat:@"native-session:%@:%@", carrierPanelID, nativeSessionID];
+        PseudoTerminal *term = [self tideyTerminalForPanelIdentifier:logicalPanelID];
+        if (!term) {
+            [self sendErrorResponseForRequestID:requestID
+                                           code:@"panel_not_found"
+                                        message:@"No native panel matched carrier_panel_id and native_session_id."
+                                   onConnection:connection];
+            return;
+        }
+        __weak __typeof(self) weakSelf = self;
+        [term tideyAdoptNativeOrphanWithParameters:source completion:^(NSDictionary *result) {
+            [weakSelf sendSuccessResponseForRequestID:requestID result:result onConnection:connection];
+        }];
         return;
     }
 

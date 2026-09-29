@@ -6,6 +6,21 @@ import XCTest
 @testable import RemoteBridge
 
 final class BridgeImageReadHandlerTests: XCTestCase {
+    func testReadsOriginalHEICAsBoundedJPEGWithoutChangingOriginal() throws {
+        let fixture = try makeFixture()
+        let folder = fixture.uploadsURL.appendingPathComponent("originals")
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let path = folder.appendingPathComponent("phone.heic")
+        let original = Self.makeImageData(width: 80, height: 40, type: .heic)
+        try original.write(to: path)
+        let handled = try fixture.handler.handle(Self.request(path: path.path))
+        let response = try XCTUnwrap(handled)
+        XCTAssertEqual(response.result?["source_mime_type"]?.stringValue, "image/heic")
+        XCTAssertEqual(response.result?["preview_mime_type"]?.stringValue, "image/jpeg")
+        _ = try Self.decodePreview(response)
+        XCTAssertEqual(try Data(contentsOf: path), original)
+    }
+
     func testReadsPNGInsideRoot() throws {
         let fixture = try makeFixture()
         let fileURL = fixture.rootURL.appendingPathComponent("shot.png")

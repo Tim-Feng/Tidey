@@ -7,6 +7,7 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
     private let store: AgentSessionLifecycleStore
     private let socketIdentityProvider: SocketIdentityProvider
     private let commandSender: CommandSender
+    private let monotonicNow: () -> TimeInterval
     private let lock = NSLock()
     private var observerToken: UUID?
     private var activeIdentities = Set<AgentSessionLifecycleIdentity>()
@@ -14,10 +15,18 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
     private var pendingWorkspaceResets = Set<String>()
     private var deliveredCommands = [AgentSessionLifecycleIdentity: String]()
     private var socketIdentity: String?
+    private var lastReassertion: TimeInterval?
+    // A successful one-way send is not proof that the receiver still holds the state: another
+    // writer (e.g. a second Bridge process's owner-less workspace reset) can clear it while this
+    // sender's state is unchanged. Reassert current owner state at this low rate on the existing
+    // registry sync cadence; the receiver ignores identical values. Never clears or times out.
+    static let reassertionInterval: TimeInterval = 30
 
     init(store: AgentSessionLifecycleStore,
          socketIdentityProvider: @escaping SocketIdentityProvider,
-         commandSender: @escaping CommandSender) {
+         commandSender: @escaping CommandSender,
+         monotonicNow: @escaping () -> TimeInterval = { ProcessInfo.processInfo.systemUptime }) {
+        self.monotonicNow = monotonicNow
         self.store = store
         self.socketIdentityProvider = socketIdentityProvider
         self.commandSender = commandSender
@@ -86,6 +95,13 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
     }
 
     private func reconcileLocked() {
+        let now = monotonicNow()
+        if lastReassertion.map({ now - $0 >= Self.reassertionInterval }) ?? true {
+            lastReassertion = now
+            for identity in activeIdentities {
+                deliveredCommands.removeValue(forKey: identity)
+            }
+        }
         for workspaceID in pendingWorkspaceResets.sorted() {
             deliverWorkspaceResetLocked(workspaceID: workspaceID)
         }
@@ -153,13 +169,18 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
         case .idle:
             state = "prompt"
         }
-        guard isPlaintextToken(identity.workspaceID),
-              isPlaintextToken(identity.sessionID),
-              identity.panelID.isEmpty || isPlaintextToken(identity.panelID) else {
-            return nil
+        var message: [String: String] = [
+            "action": "report_shell_state",
+            "state": state,
+            "workspace_id": identity.workspaceID,
+            "session_id": identity.sessionID,
+        ]
+        if !identity.panelID.isEmpty {
+            message["panel_id"] = identity.panelID
         }
-        let panelArgument = identity.panelID.isEmpty ? "" : " --panel_id=\(identity.panelID)"
-        return "report_shell_state \(state) --workspace_id=\(identity.workspaceID)\(panelArgument) --session_id=\(identity.sessionID)"
+        // JSON keeps exact identities: ordinary-tmux panel IDs contain socket paths with spaces,
+        // which the plaintext `report_shell_state` form cannot carry.
+        return jsonCommand(message)
     }
 
     private static func clearCommand(for identity: AgentSessionLifecycleIdentity) -> String? {
@@ -192,8 +213,12 @@ final class AgentLifecycleSidebarSyncer: AgentSessionRuntimeSyncing {
         return String(data: data, encoding: .utf8)
     }
 
-    private static func isPlaintextToken(_ value: String) -> Bool {
-        !value.isEmpty && !value.contains(where: { $0.isWhitespace })
+    private static func jsonCommand(_ message: [String: String]) -> String? {
+        guard JSONSerialization.isValidJSONObject(message),
+              let data = try? JSONSerialization.data(withJSONObject: message, options: [.sortedKeys]) else {
+            return nil
+        }
+        return String(data: data, encoding: .utf8)
     }
 
     private static func sorted(_ identities: Set<AgentSessionLifecycleIdentity>)

@@ -296,6 +296,7 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 // Returns agent-only runtime descriptors with their stable binding and
 // native revision for Bridge reconciliation.
 - (NSArray<NSDictionary *> *)tideyRuntimeAgentDescriptorSnapshots;
+- (NSDictionary *)tideyRestartGraphExpectation;
 
 // Removes an agent descriptor only when the stable binding, revision, and
 // canonical descriptor still match the current native state.
@@ -323,6 +324,9 @@ extern NSString *const PseudoTerminalTideyWorkspaceEventNotification;
 
 // Sends a terminal key press to the selected session for the given panel. Returns YES on success.
 - (BOOL)tideySendKey:(NSString *)key toPanelWithIdentifier:(NSString *)panelIdentifier;
+// Exact recovery: attach one orphaned native multiserver child into its original carrier (see TideyNativeOrphanAdoption.swift).
+- (void)tideyAdoptNativeOrphanWithParameters:(NSDictionary *)parameters
+                                  completion:(void (^)(NSDictionary *result))completion;
 
 // Sends terminal input to the selected session for the given workspace. Returns YES on success.
 - (BOOL)tideySendInput:(NSString *)input toWorkspaceWithIdentifier:(NSString *)workspaceIdentifier;

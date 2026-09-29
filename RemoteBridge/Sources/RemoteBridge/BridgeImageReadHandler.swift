@@ -38,7 +38,7 @@ struct BridgeImageReadLimits {
 /// `BridgeDocumentFilePolicy` so image extensions can never leak into the
 /// document write allowlist.
 struct BridgeImageFilePolicy: BridgeLocalFileContentPolicy {
-    static let allowedExtensions: Set<String> = ["png", "jpg", "jpeg"]
+    static let allowedExtensions: Set<String> = ["png", "jpg", "jpeg", "heic", "heif"]
 
     let uploadsDirectoryURL: URL
     let notInAllowlistMessage = "這個檔案類型目前不支援圖片預覽。"
@@ -311,16 +311,16 @@ struct BridgeImageReadHandler {
               let sourceType = UTType(typeIdentifier as String) else {
             throw BridgeInternalError.imageDecodeFailed("這個檔案無法解讀為圖片。")
         }
-        guard let matchedType = [UTType.png, UTType.jpeg].first(where: { sourceType.conforms(to: $0) }) else {
+        guard let matchedType = [UTType.png, UTType.jpeg, UTType.heic, UTType.heif].first(where: { sourceType.conforms(to: $0) }) else {
             throw BridgeInternalError.imageFormatUnsupported("這個圖片格式目前不支援預覽。")
         }
         // Exactly one frame: an APNG or other multi-frame container must not
         // slip through on its first frame's properties.
-        guard CGImageSourceGetCount(imageSource) == 1 else {
+        guard matchedType == .heic || matchedType == .heif || CGImageSourceGetCount(imageSource) == 1 else {
             throw BridgeInternalError.imageFormatUnsupported("這個圖片格式目前不支援預覽。")
         }
 
-        guard let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, 0, noCacheOptions) as? [CFString: Any],
+        guard let properties = CGImageSourceCopyPropertiesAtIndex(imageSource, CGImageSourceGetPrimaryImageIndex(imageSource), noCacheOptions) as? [CFString: Any],
               let pixelWidth = properties[kCGImagePropertyPixelWidth] as? Int,
               let pixelHeight = properties[kCGImagePropertyPixelHeight] as? Int,
               pixelWidth > 0, pixelHeight > 0 else {
@@ -379,7 +379,7 @@ struct BridgeImageReadHandler {
                 kCGImageSourceShouldCacheImmediately: true,
                 kCGImageSourceThumbnailMaxPixelSize: dimension,
             ] as CFDictionary
-            guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, 0, thumbnailOptions) else {
+            guard let thumbnail = CGImageSourceCreateThumbnailAtIndex(imageSource, CGImageSourceGetPrimaryImageIndex(imageSource), thumbnailOptions) else {
                 throw BridgeInternalError.imageDecodeFailed("這個檔案無法解讀為圖片。")
             }
             // PNG first for PNG sources to keep sharp UI captures lossless.
@@ -437,6 +437,6 @@ struct BridgeImageReadHandler {
     }
 
     private static func mimeType(for type: UTType) -> String {
-        type == .png ? "image/png" : "image/jpeg"
+        type.preferredMIMEType ?? "image/jpeg"
     }
 }

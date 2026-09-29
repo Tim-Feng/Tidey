@@ -394,6 +394,7 @@ final class AgentSessionRegistryMonitor {
     private let livePanelSnapshotRefreshInterval: TimeInterval
     private let now: @Sendable () -> Date
     private let runtimeSyncer: AgentSessionRuntimeSyncing?
+    private let restartOwnerReceipt: RestartRetainedOwnerReceipt?
     private let queue = DispatchQueue(label: "com.tidey.remote-bridge.agent-registry")
     private var timer: DispatchSourceTimer?
     private var watchers = [String: DispatchSourceFileSystemObject]()
@@ -423,8 +424,10 @@ final class AgentSessionRegistryMonitor {
          livePanelListProjector: @escaping LivePanelListProjector = { $0 },
          livePanelSnapshotRefreshInterval: TimeInterval = 5,
          now: @escaping @Sendable () -> Date = { Date() },
-         runtimeSyncer: AgentSessionRuntimeSyncing? = nil) {
+         runtimeSyncer: AgentSessionRuntimeSyncing? = nil,
+         restartOwnerReceipt: RestartRetainedOwnerReceipt? = nil) {
         self.paths = paths
+        self.restartOwnerReceipt = restartOwnerReceipt
         self.fileManager = fileManager
         self.hub = hub
         self.socketClient = socketClient
@@ -627,6 +630,75 @@ final class AgentSessionRegistryMonitor {
         refreshActiveSessionRoutes()
     }
 
+    /// A fresh, metadata-only preparation read. Never starts transcript tailers,
+    /// synthesizes records, or cleans up another process's registry lease.
+    func refreshRuntimeResumeEvidence() -> RuntimeResumeAgentRegistrySnapshot {
+        queue.sync {
+            tmuxResolver.invalidatePaneIdentityCache()
+            lastLivePanelSnapshotRefreshAt = nil
+            scanRegistry(metadataOnly: true)
+        }
+        return currentRuntimeResumeAgentSnapshot()
+    }
+
+    func restartDurabilityBlockers() -> [RestartBlocker] {
+        queue.sync {
+            var blockers = [RestartBlocker]()
+            guard let processTable = RestartWriterEvidence.processTable() else {
+                return [.init(code: "producer_inventory_unavailable", detail: "Process inventory could not be read.")]
+            }
+            for panel in livePanelsByWorkspace.values.flatMap({ $0 }) {
+                guard let root = panel.effectiveShellPID else { continue }
+                let covered = activeRecords.values.contains { $0.workspaceID == panel.workspaceID &&
+                    $0.panelID == panel.panelID && $0.tmuxPaneID == panel.tmuxPaneID }
+                if !covered, processTable.hasAgent(under: root) {
+                    blockers.append(.init(code: "unregistered_agent", detail: panel.panelID))
+                }
+            }
+            let superseded = verifiedClaudeAliases()
+            let retained = verifiedOwnerRetainedRecords()
+            if let receipt = restartOwnerReceipt, retained.count != receipt.document.retained.count {
+                blockers.append(.init(code: "owner_receipt_mismatch", detail: "Explicit owner receipt no longer matches live identities or evidence."))
+            }
+            for record in activeRecords.values.sorted(by: { $0.sessionID < $1.sessionID }) {
+                if retained[record.sessionID] != nil || verifiedRollbackRecord(record) != nil || superseded[record.sessionID] != nil { continue }
+                let panels = livePanelsByWorkspace[record.workspaceID] ?? []
+                guard let panel = panels.first(where: { $0.panelID == record.panelID && $0.tmuxPaneID == record.tmuxPaneID }),
+                      let root = panel.effectiveShellPID,
+                      processExists(record.pid), processIsDescendantOrSelf(of: root, candidate: record.pid) else {
+                    blockers.append(.init(code: "writer_binding_mismatch", detail: record.sessionID)); continue
+                }
+                let durableID = Self.restoreSessionID(for: record)
+                if record.vendor == "codex" {
+                    guard let path = record.transcriptPath,
+                          Self.codexSessionID(fromRolloutPath: path) == durableID,
+                          fileManager.fileExists(atPath: path),
+                          let writers = RestartWriterEvidence.openWriterPIDs(path: path),
+                          writers.count == 1, let writer = writers.first,
+                          processIsDescendantOrSelf(of: record.pid, candidate: writer) else {
+                        blockers.append(.init(code: "durable_writer_unconfirmed", detail: durableID)); continue
+                    }
+                    if Self.isCodexAppServerRuntimeRecord(record) {
+                        guard let socket = record.appServerSocket,
+                              RestartWriterEvidence.isSocketEndpoint(at: socket, fileManager: fileManager) else {
+                            blockers.append(.init(code: "runtime_socket_unavailable", detail: durableID)); continue
+                        }
+                    }
+                } else {
+                    let project = record.cwd.replacingOccurrences(of: "/", with: "-")
+                    let legacy = fileManager.homeDirectoryForCurrentUser.appendingPathComponent(".claude/projects")
+                        .appendingPathComponent(project).appendingPathComponent(durableID + ".jsonl").path
+                    let path = record.transcriptPath ?? legacy
+                    if URL(fileURLWithPath: path).deletingPathExtension().lastPathComponent != durableID ||
+                        !fileManager.fileExists(atPath: path) {
+                        blockers.append(.init(code: "durable_identity_unavailable", detail: durableID))
+                    }
+                }
+            }
+            return blockers
+        }
+    }
+
     func currentRuntimeResumeAgentRecords()
         -> [RuntimeResumeAgentRegistryRecord] {
         currentRuntimeResumeAgentSnapshot().records
@@ -638,10 +710,17 @@ final class AgentSessionRegistryMonitor {
             let sourceRecords = Array(activeRecords.values)
             var resolvedCandidates =
                 [RuntimeResumeAgentRegistryRecord]()
+            var nonRestoringRecords = [RuntimeResumeNonRestoringRecord]()
             var candidatesByBinding =
                 [RuntimeResumeDescriptorBinding:
                     [RuntimeResumeAgentRegistryRecord]]()
+            let superseded = verifiedClaudeAliases()
+            let retained = verifiedOwnerRetainedRecords()
             for record in sourceRecords {
+                if let rollback = retained[record.sessionID] ?? superseded[record.sessionID] ?? verifiedRollbackRecord(record) {
+                    nonRestoringRecords.append(rollback)
+                    continue
+                }
                 guard let candidate =
                         runtimeResumeAgentRecord(
                             fromCurrentRecord: record
@@ -684,9 +763,92 @@ final class AgentSessionRegistryMonitor {
                     resolvedCandidates.count,
                 records: records,
                 sourceScanIsComplete:
-                    lastRegistrySourceScanWasComplete
+                    lastRegistrySourceScanWasComplete && (restartOwnerReceipt.map {
+                        retained.count == $0.document.retained.count
+                    } ?? true),
+                nonRestoringRecords: nonRestoringRecords.sorted { $0.sessionID < $1.sessionID }
             )
         }
+    }
+
+    private func verifiedClaudeAliases() -> [String: RuntimeResumeNonRestoringRecord] {
+        var result = [String: RuntimeResumeNonRestoringRecord]()
+        let groups = Dictionary(grouping: activeRecords.values.filter { $0.vendor == "claude" }, by: \.pid)
+        for (pid, group) in groups where group.count > 1 {
+            guard processExists(pid), let first = group.first,
+                  let birth = ClaudeCurrentHookEvidence.processBirthNanoseconds(pid),
+                  let evidence = ClaudeCurrentHookEvidence.read(directory: paths.claudeAgentSessionsDirectory,
+                                                                pid: pid, birth: birth),
+                  evidence.cwd == first.cwd,
+                  group.filter({ $0.sessionID == evidence.sessionID }).count == 1,
+                  let binding = runtimeResumeAgentRecord(fromCurrentRecord: first)?.binding,
+                  group.allSatisfy({ record in
+                      guard record.workspaceID == first.workspaceID, record.cwd == first.cwd,
+                            ClaudeCurrentHookEvidence.createdDuringProcess(record.createdAt, birth: birth),
+                            runtimeResumeAgentRecord(fromCurrentRecord: record)?.binding == binding,
+                            let panel = (livePanelsByWorkspace[record.workspaceID] ?? []).first(where: {
+                                $0.panelID == record.panelID && $0.tmuxPaneID == record.tmuxPaneID
+                            }), let root = panel.effectiveShellPID else { return false }
+                      return processIsDescendantOrSelf(of: root, candidate: pid)
+                  }), ClaudeCurrentHookEvidence.processBirthNanoseconds(pid) == birth else { continue }
+            for record in group where record.sessionID != evidence.sessionID {
+                result[record.sessionID] = .init(sessionID: record.sessionID, vendor: record.vendor,
+                    durableResumeID: record.sessionID, workspaceID: record.workspaceID,
+                    panelID: record.panelID ?? "", tmuxPaneID: record.tmuxPaneID ?? "",
+                    reason: "superseded_same_wrapper_alias")
+            }
+        }
+        return result
+    }
+
+    private func verifiedOwnerRetainedRecords() -> [String: RuntimeResumeNonRestoringRecord] {
+        guard let receipt = restartOwnerReceipt, receipt.evidenceIsUnchanged(),
+              let successor = activeRecords[receipt.document.successor.registrySessionId],
+              receipt.matches(receipt.document.successor, record: successor),
+              successor.cwd.hasPrefix("/"), runtimeResumeAgentRecord(fromCurrentRecord: successor) != nil else { return [:] }
+        let panels = (livePanelsByWorkspace[successor.workspaceID] ?? []).filter {
+            $0.panelID == successor.panelID && $0.tmuxPaneID == successor.tmuxPaneID
+        }
+        guard panels.count == 1, let panel = panels.first, panel.logicalKind == .nativeSession,
+              panel.tmuxPaneID == nil, let root = panel.effectiveShellPID,
+              processIsDescendantOrSelf(of: root, candidate: successor.pid) else { return [:] }
+        var result = [String: RuntimeResumeNonRestoringRecord]()
+        for approved in receipt.document.retained {
+            guard let record = activeRecords[approved.identity.registrySessionId],
+                  receipt.matches(approved.identity, record: record),
+                  record.workspaceID == successor.workspaceID, record.cwd == successor.cwd,
+                  runtimeResumeAgentRecord(fromCurrentRecord: record) == nil,
+                  let pane = record.tmuxPaneID, let socket = record.tmuxSocketPath,
+                  let evidence = tmuxResolver.restartPaneEvidence(forPaneID: pane, socketPath: socket),
+                  evidence.identity.workspaceID == successor.workspaceID,
+                  evidence.identity.panelID == approved.resolvedPanelId,
+                  processIsDescendantOrSelf(of: evidence.rootPID, candidate: record.pid) else { return [:] }
+            result[record.sessionID] = .init(sessionID: record.sessionID, vendor: record.vendor,
+                durableResumeID: approved.identity.durableResumeId, workspaceID: record.workspaceID,
+                panelID: evidence.identity.panelID, tmuxPaneID: pane, reason: "owner_confirmed_retained_rollback")
+        }
+        // All or nothing, including the successor. PID generations and the owner
+        // choice are rechecked after tmux I/O and on every publication snapshot.
+        guard receipt.evidenceIsUnchanged(), ([receipt.document.successor] + receipt.document.retained.map(\.identity)).allSatisfy({
+            guard let record = activeRecords[$0.registrySessionId] else { return false }
+            return receipt.matches($0, record: record)
+        }) else { return [:] }
+        return result
+    }
+
+    private func verifiedRollbackRecord(_ record: AgentSessionRegistryRecord) -> RuntimeResumeNonRestoringRecord? {
+        guard let pane = record.tmuxPaneID, let socket = record.tmuxSocketPath,
+              let identity = tmuxResolver.paneIdentity(forPaneID: pane, socketPath: socket),
+              identity.workspaceID == record.workspaceID, identity.panelID == record.panelID else { return nil }
+        let parts = identity.panelID.components(separatedBy: ":handoff-rollback:")
+        guard parts.count == 2, parts[1].count == 32, parts[1].allSatisfy(\.isHexDigit),
+              parts[0].hasPrefix("native-session:"),
+              (livePanelsByWorkspace[record.workspaceID] ?? []).contains(where: {
+                  $0.panelID == parts[0] && $0.tmuxPaneID != pane &&
+                      Self.socketPathsMatch($0.tmuxSocketPath ?? "", socket)
+              }) else { return nil }
+        return .init(sessionID: record.sessionID, vendor: record.vendor, durableResumeID: Self.restoreSessionID(for: record), workspaceID: record.workspaceID,
+                     panelID: identity.panelID, tmuxPaneID: pane, reason: "handoff_rollback_owner_review")
     }
 
     deinit {
@@ -770,16 +932,16 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func scanRegistry() {
+    private func scanRegistry(metadataOnly: Bool = false) {
         let loadedScans = AgentVendorRegistry.all.map { vendor in
             loadRecordEntries(at: paths.agentSessionsDirectory(for: vendor.registryDirectoryName),
-                              vendor: vendor.id)
+                              vendor: vendor.id, removeStale: !metadataOnly)
         }
         let loadedRecords = loadedScans.flatMap(\.records)
         lastRegistrySourceScanWasComplete =
             loadedScans.allSatisfy(\.isComplete)
         let sourceRecords = loadedRecords.map(\.record)
-        refreshLivePanelSnapshotsIfNeeded(for: sourceRecords)
+        refreshLivePanelSnapshotsIfNeeded(for: sourceRecords, force: metadataOnly)
         let activeSessionIDs = Set(sourceRecords.map(\.sessionID))
         resolvedPanelBindings = resolvedPanelBindings.filter { activeSessionIDs.contains($0.key) }
         lastLoggedPaneIdentityCorrectionKeyBySessionID = lastLoggedPaneIdentityCorrectionKeyBySessionID
@@ -794,7 +956,7 @@ final class AgentSessionRegistryMonitor {
         }
         let effectiveEntries = paneCorrectedEntries
             .map { LoadedAgentSessionRegistryRecord(record: effectiveRecord(for: $0.record), url: $0.url) }
-        let activeEntries = recordsWithObsoleteCodexAppServerPanelRecordsRemoved(effectiveEntries)
+        let activeEntries = metadataOnly ? effectiveEntries : recordsWithObsoleteCodexAppServerPanelRecordsRemoved(effectiveEntries)
         let activeRecords = activeEntries.map(\.record)
         let appServerRecords = activeRecords.filter {
             $0.vendor == "codex" && $0.runtime == "codex_app_server"
@@ -804,8 +966,12 @@ final class AgentSessionRegistryMonitor {
             BridgeLogger.server.info("codex app-server diagnostic scan registry app_server_count=\(appServerRecords.count, privacy: .public) session_ids=\(appServerRecords.map(\.sessionID).joined(separator: ","), privacy: .public)")
             lastLoggedAppServerSessionIDs = appServerSessionIDs
         }
-        syncRecords(activeRecords)
-        self.activeRecords = Dictionary(uniqueKeysWithValues: activeRecords.map { ($0.sessionID, $0) })
+        if !metadataOnly { syncRecords(activeRecords) }
+        if Set(activeRecords.map(\.sessionID)).count != activeRecords.count {
+            lastRegistrySourceScanWasComplete = false
+        }
+        self.activeRecords = Dictionary(activeRecords.map { ($0.sessionID, $0) }, uniquingKeysWith: { first, _ in first })
+        if metadataOnly { return }
         runtimeSyncer?.sync(records: activeRecords)
         for record in activeRecords where resolvedPanelBindings[record.sessionID] != nil {
             applyResolvedBinding(sessionID: record.sessionID,
@@ -814,8 +980,8 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func refreshLivePanelSnapshotsIfNeeded(for records: [AgentSessionRegistryRecord]) {
-        guard records.contains(where: recordMayNeedLivePanelSnapshotRefresh(_:)),
+    private func refreshLivePanelSnapshotsIfNeeded(for records: [AgentSessionRegistryRecord], force: Bool = false) {
+        guard (force || records.contains(where: recordMayNeedLivePanelSnapshotRefresh(_:))),
               let livePanelSnapshotRequestSender else {
             return
         }
@@ -832,6 +998,7 @@ final class AgentSessionRegistryMonitor {
                                                                                     params: nil))
             guard workspaceResponse.ok,
                   let workspaces = workspaceResponse.result?["workspaces"]?.arrayValue else {
+                lastRegistrySourceScanWasComplete = false
                 return
             }
             let workspaceIDs = Set(workspaces.compactMap { workspace -> String? in
@@ -845,15 +1012,18 @@ final class AgentSessionRegistryMonitor {
                                                                                     params: ["workspace_id": .string(workspaceID)]))
                 guard panelResponse.ok,
                       let result = panelResponse.result else {
+                    lastRegistrySourceScanWasComplete = false
                     continue
                 }
                 let projectedResult = livePanelListProjector(result)
                 guard let extracted = AgentPanelProcessSnapshotExtractor.snapshots(fromPanelListResult: projectedResult) else {
+                    lastRegistrySourceScanWasComplete = false
                     continue
                 }
                 livePanelsByWorkspace[extracted.workspaceID] = extracted.snapshots
             }
         } catch {
+            lastRegistrySourceScanWasComplete = false
             BridgeLogger.server.debug("agent registry live panel snapshot refresh failed error=\(String(describing: error), privacy: .public)")
         }
     }
@@ -1436,6 +1606,18 @@ final class AgentSessionRegistryMonitor {
               let matchingPanel = matchingPanels.first else {
             return nil
         }
+        // Native restore descriptors belong to the carrier tab. Keep the
+        // registry's logical panel identity for chat routing only.
+        let descriptorPanelID: String
+        if tmuxPaneID == nil, matchingPanel.logicalKind == .nativeSession {
+            guard let carrierPanelID = matchingPanel.carrierPanelID,
+                  carrierPanelID.isEmpty == false else {
+                return nil
+            }
+            descriptorPanelID = carrierPanelID
+        } else {
+            descriptorPanelID = panelID
+        }
         if tmuxPaneID != nil,
            let persistedSocketPath = record.tmuxSocketPath,
            persistedSocketPath.isEmpty == false {
@@ -1476,7 +1658,7 @@ final class AgentSessionRegistryMonitor {
         return RuntimeResumeAgentRegistryRecord(
             binding: RuntimeResumeDescriptorBinding(
                 workspaceID: record.workspaceID,
-                panelID: panelID,
+                panelID: descriptorPanelID,
                 tmuxPaneID: tmuxPaneID
             ),
             vendor: vendor,
@@ -1896,7 +2078,7 @@ final class AgentSessionRegistryMonitor {
         }
     }
 
-    private func loadRecordEntries(at directory: URL, vendor: String) -> LoadedAgentSessionRegistryScan {
+    private func loadRecordEntries(at directory: URL, vendor: String, removeStale: Bool = true) -> LoadedAgentSessionRegistryScan {
         var isComplete = true
         guard let enumerator = fileManager.enumerator(at: directory,
                                                       includingPropertiesForKeys: [.isRegularFileKey],
@@ -1934,7 +2116,7 @@ final class AgentSessionRegistryMonitor {
             }
             if recordProcessExists(record) {
                 records.append(LoadedAgentSessionRegistryRecord(record: record, url: url))
-            } else {
+            } else if removeStale {
                 try? fileManager.removeItem(at: url)
             }
         }

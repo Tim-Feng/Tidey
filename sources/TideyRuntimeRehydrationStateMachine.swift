@@ -1391,13 +1391,9 @@ final class TideyRuntimeRehydrationReducer:
         descriptor: TideyRuntimeResumeDescriptor
     ) -> TideyRuntimeRehydrationTransition {
         switch (phase, event) {
-        case (.awaitingNativeRestore, .nativeReattachSucceeded)
-            where descriptor.kind == .agent &&
-                  descriptor.restorePolicy == .directResume:
-            return transition(
-                .resumingAgent,
-                effect: .resumeDirectAgent
-            )
+        // A successful native reattach (the iTermServer daemon survived a GUI-only restart) means
+        // the agent is still running in the reattached session; relaunching it would start a
+        // second writer and orphan the original. Direct agents are relaunched only on failure.
         case (.awaitingNativeRestore, .nativeReattachSucceeded):
             return transition(.nativeAttached)
         case (.awaitingNativeRestore, .nativeReattachFailed)

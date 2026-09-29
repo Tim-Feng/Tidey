@@ -16,6 +16,9 @@
 #import "iTermRestorableStateDriver.h"
 #import "iTermRestorableStateSQLite.h"
 #import "iTermUserDefaults.h"
+#import "FMDatabase.h"
+#import "NSData+iTerm.h"
+#import <sqlite3.h>
 
 static BOOL gShouldIgnoreOpenUntitledFile;
 extern NSString *const iTermApplicationWillTerminate;
@@ -339,6 +342,61 @@ static BOOL gForceSaveState;
 }
 
 #pragma mark - TideyRestorableStatePeriodicSaveRequesting
+
+- (NSDictionary *)tideyCheckpointForRestartWithExpectedGraphs:(NSArray<NSDictionary *> *)expectedGraphs {
+    assert([NSThread isMainThread]);
+    NSDictionary *(^failure)(NSString *) = ^NSDictionary *(NSString *code) {
+        return @{ @"technical_ready": @NO, @"blockers": @[@{ @"code": code, @"detail": @"Native restart checkpoint was not confirmed." }] };
+    };
+    // All durable save entrances share the same hydration gate.
+    if (![self canRequestPeriodicSave]) {
+        return failure(@"restoration_not_ready");
+    }
+    if (![_saver isKindOfClass:[iTermRestorableStateSQLite class]] || ![_driver saveSynchronously]) {
+        return failure(@"save_unavailable");
+    }
+    NSString *path = [[[NSFileManager defaultManager] applicationSupportDirectory]
+        stringByAppendingPathComponent:@"SavedState/restorable-state.sqlite"];
+    return [[self class] tideyReadRestartDatabaseAtPath:path expectedGraphs:expectedGraphs];
+}
+
++ (NSDictionary *)tideyReadRestartDatabaseAtPath:(NSString *)path expectedGraphs:(NSArray<NSDictionary *> *)expectedGraphs {
+    NSDictionary *(^failure)(NSString *) = ^NSDictionary *(NSString *code) {
+        return @{ @"technical_ready": @NO, @"blockers": @[@{ @"code": code, @"detail": @"Native restart database readback was not confirmed." }] };
+    };
+    FMDatabase *database = [FMDatabase databaseWithPath:path];
+    if (![database openWithFlags:SQLITE_OPEN_READONLY]) {
+        return failure(@"database_unavailable");
+    }
+    [database setMaxBusyRetryTimeInterval:2];
+    FMResultSet *check = [database executeQuery:@"PRAGMA quick_check"];
+    BOOL healthy = check && [check next] && [[check stringForColumnIndex:0] isEqualToString:@"ok"] && ![check next];
+    [check close];
+    if (!healthy) {
+        [database close];
+        return failure(@"database_integrity_failed");
+    }
+    FMResultSet *rows = [database executeQuery:@"SELECT data FROM Node WHERE key='Tidey Workspace Restoration State'"];
+    NSMutableArray<NSDictionary *> *savedGraphs = [NSMutableArray array];
+    BOOL decoded = rows != nil;
+    while (rows && [rows next]) {
+        NSError *error = nil;
+        id graph = [[rows dataForColumnIndex:0] it_unarchivedObjectOfBasicClassesWithError:&error];
+        if (error || ![graph isKindOfClass:[NSDictionary class]]) {
+            decoded = NO;
+            break;
+        }
+        [savedGraphs addObject:graph];
+    }
+    [rows close];
+    [database close];
+    if (!decoded) {
+        return failure(@"saved_graph_invalid");
+    }
+    NSArray *blockers = [TideyRestartCheckpointValidator savedGraphBlockersWithSaved:savedGraphs expected:expectedGraphs];
+    return @{ @"technical_ready": @(blockers.count == 0), @"blockers": blockers,
+              @"database_integrity": @"ok", @"saved_graphs": savedGraphs };
+}
 
 - (BOOL)canRequestPeriodicSave {
     return ([iTermRestorableStateController stateRestorationEnabled] &&

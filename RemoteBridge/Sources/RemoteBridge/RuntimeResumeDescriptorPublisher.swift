@@ -189,23 +189,49 @@ struct RuntimeResumeAgentRegistrySnapshot:
     let sourceRecordCount: Int
     let resolvedCandidateCount: Int
     let records: [RuntimeResumeAgentRegistryRecord]
+    let nonRestoringRecords: [RuntimeResumeNonRestoringRecord]
 
     init(
         sourceRecordCount: Int,
         resolvedCandidateCount: Int,
         records: [RuntimeResumeAgentRegistryRecord],
-        sourceScanIsComplete: Bool = true
+        sourceScanIsComplete: Bool = true,
+        nonRestoringRecords: [RuntimeResumeNonRestoringRecord] = []
     ) {
         self.sourceScanIsComplete = sourceScanIsComplete
         self.sourceRecordCount = sourceRecordCount
         self.resolvedCandidateCount = resolvedCandidateCount
         self.records = records
+        self.nonRestoringRecords = nonRestoringRecords
     }
 
     var isComplete: Bool {
-        sourceScanIsComplete &&
-            sourceRecordCount == resolvedCandidateCount &&
-            resolvedCandidateCount == records.count
+        // Rollback ownership changes restoration policy, never writer uniqueness.
+        let durableKeys = records.map { "\($0.vendor.rawValue):\($0.durableResumeID)" }
+            + nonRestoringRecords.map { "\($0.vendor):\($0.durableResumeID)" }
+        return sourceScanIsComplete &&
+            sourceRecordCount == resolvedCandidateCount + nonRestoringRecords.count &&
+            resolvedCandidateCount == records.count &&
+            Set(durableKeys).count == durableKeys.count
+    }
+}
+
+struct RuntimeResumeNonRestoringRecord: Equatable, Codable, Sendable {
+    let sessionID: String
+    let vendor: String
+    let durableResumeID: String
+    let workspaceID: String
+    let panelID: String
+    let tmuxPaneID: String
+    let reason: String
+
+    enum CodingKeys: String, CodingKey {
+        case vendor, reason
+        case sessionID = "session_id"
+        case durableResumeID = "durable_resume_id"
+        case workspaceID = "workspace_id"
+        case panelID = "panel_id"
+        case tmuxPaneID = "tmux_pane_id"
     }
 }
 
@@ -1019,6 +1045,30 @@ final class RuntimeResumeDescriptorPublisher:
     func publishCurrentDescriptors() throws {
         try queue.sync {
             try publishCurrentDescriptorsOnQueue()
+        }
+    }
+
+    /// Explicit preparation never infers permission to revoke a cold/pending
+    /// carrier. It reconciles the same complete inventory as periodic publication.
+    func reconcileForRestart() throws {
+        try queue.sync {
+            let snapshot = try registryReader.readAgentRegistrySnapshot()
+            guard snapshot.isComplete else { throw BridgeInternalError.invalidResponse }
+            let updates = try desiredUpdates(for: snapshot.records.sorted(by: Self.recordPrecedes),
+                                             requiresCompleteInventory: true)
+            let slots = updates.map { RuntimeResumeDescriptorSlot(binding: $0.binding) }
+            guard Set(slots).count == slots.count, let inventoryReconciler else {
+                throw BridgeInternalError.invalidResponse
+            }
+            for update in updates {
+                try publish(canonicalContent: canonicalizer.canonicalize(update.content),
+                            binding: update.binding, force: true)
+            }
+            let stored = try inventoryReconciler.currentAgentDescriptors()
+            guard stored.count == updates.count, updates.allSatisfy({ update in
+                stored.contains { $0.slot == RuntimeResumeDescriptorSlot(binding: update.binding) &&
+                    $0.content == update.content }
+            }) else { throw BridgeInternalError.invalidResponse }
         }
     }
 

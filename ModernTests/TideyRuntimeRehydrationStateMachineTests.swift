@@ -442,7 +442,10 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
         XCTAssertEqual(panelLauncher.directResumeCount, 2)
     }
 
-    func testDirectAgentResumeOverridesNativeReattachSuccessExactlyOnce() {
+    // A GUI-only restart with a surviving iTermServer reattaches the live native session, and
+    // its agent is still running there. Relaunching it started a second writer in a new shell and
+    // orphaned the original (2026-09-25 Big Exam incident), so native success must not relaunch.
+    func testDirectAgentNativeReattachSuccessDoesNotRelaunch() {
         let targetProbe = TideyRuntimeTargetProbeSpy()
         let topologyCreator = TideyRuntimeTopologyCreatorSpy()
         let panelLauncher = TideyRuntimePanelLauncherSpy()
@@ -463,6 +466,57 @@ final class TideyRuntimeRehydrationStateMachineTests: XCTestCase {
             panelID: "panel-direct-native-success",
             descriptor: descriptor,
             nativeReattachOutcome: .succeeded
+        )
+
+        XCTAssertEqual(panelLauncher.directResumeCount, 0)
+        XCTAssertEqual(targetProbe.probeCount, 0)
+        XCTAssertEqual(topologyCreator.createCount, 0)
+        XCTAssertEqual(panelLauncher.resumeCount, 0)
+        XCTAssertEqual(panelLauncher.attachCount, 0)
+    }
+
+    func testReducerRelaunchesDirectAgentOnlyWhenNativeReattachFails() {
+        let reducer = TideyRuntimeRehydrationReducer()
+        let direct = directDescriptor(revision: 1)
+        assertTransition(
+            reducer,
+            from: .awaitingNativeRestore,
+            event: .nativeReattachSucceeded,
+            descriptor: direct,
+            equals: .nativeAttached,
+            effect: .none
+        )
+        assertTransition(
+            reducer,
+            from: .awaitingNativeRestore,
+            event: .nativeReattachFailed,
+            descriptor: direct,
+            equals: .resumingAgent,
+            effect: .resumeDirectAgent
+        )
+    }
+
+    func testDirectAgentResumeAfterNativeReattachFailureExactlyOnce() {
+        let targetProbe = TideyRuntimeTargetProbeSpy()
+        let topologyCreator = TideyRuntimeTopologyCreatorSpy()
+        let panelLauncher = TideyRuntimePanelLauncherSpy()
+        let stateMachine = TideyRuntimeRehydrationStateMachine(
+            reducer: TideyRuntimeRehydrationReducer(),
+            targetProbe: targetProbe,
+            topologyCreator: topologyCreator,
+            panelLauncher: panelLauncher
+        )
+        let descriptor = directDescriptor(revision: 1)
+
+        stateMachine.handle(
+            panelID: "panel-direct-native-failed",
+            descriptor: descriptor,
+            nativeReattachOutcome: .failed
+        )
+        stateMachine.handle(
+            panelID: "panel-direct-native-failed",
+            descriptor: descriptor,
+            nativeReattachOutcome: .failed
         )
 
         XCTAssertEqual(panelLauncher.directResumeCount, 1)

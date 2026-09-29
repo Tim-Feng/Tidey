@@ -1,5 +1,48 @@
 import Foundation
 
+/// Pure validation shared by the native restart API and isolated regressions.
+@objc(TideyRestartCheckpointValidator)
+@objcMembers
+final class TideyRestartCheckpointValidator: NSObject {
+    static func dictionary(forState state: TideyWorkspaceRestorationState) -> [String: Any]? {
+        try? TideyWorkspaceRestorationStateDictionaryCodec().encode(state)
+    }
+
+    static func preflight(expected: [[String: Any]], current: [[String: Any]]) -> [[String: String]] {
+        func byPanel(_ values: [[String: Any]]) -> [String: NSDictionary]? {
+            var result = [String: NSDictionary]()
+            for value in values {
+                guard let binding = value["binding"] as? [String: String],
+                      let panel = binding["panel_id"], !panel.isEmpty,
+                      binding["workspace_id"]?.isEmpty == false,
+                      let revision = value["revision"] as? NSNumber, revision.int64Value > 0,
+                      value["descriptor"] is [String: Any], result[panel] == nil else { return nil }
+                result[panel] = value as NSDictionary
+            }
+            return result
+        }
+        guard let expectedMap = byPanel(expected), let currentMap = byPanel(current),
+              NSDictionary(dictionary: expectedMap).isEqual(to: currentMap) else {
+            return [["code": "descriptor_changed", "detail": "Descriptor inventory changed before native checkpoint."]]
+        }
+        if current.contains(where: { ($0["awaiting_runtime_evidence"] as? Bool) == true || ($0["staged"] as? Bool) == true }) {
+            return [["code": "awaiting_runtime_evidence", "detail": "Publication has not acknowledged every current binding."]]
+        }
+        return []
+    }
+
+    static func savedGraphBlockers(saved: [[String: Any]], expected: [[String: Any]]) -> [[String: String]] {
+        var unmatched = saved.map { $0 as NSDictionary }
+        for graph in expected {
+            guard let index = unmatched.firstIndex(where: { $0.isEqual(to: graph) }) else {
+                return [["code": "saved_graph_mismatch", "detail": "Saved workspace graph differs from the current capture plan."]]
+            }
+            unmatched.remove(at: index)
+        }
+        return unmatched.isEmpty ? [] : [["code": "saved_graph_mismatch", "detail": "Unexpected saved workspace graph."]]
+    }
+}
+
 @objc(TideyRuntimeResumeKind)
 enum TideyRuntimeResumeKind: Int {
     case ordinaryTmux

@@ -2,6 +2,14 @@
 
 改 UI、layout、shell integration、terminal interaction 前，先掃這份。
 
+## 本機 deployment phase 驗證（2026-09-07）
+
+- 部署 helper 必須驗相鄰 phase 的輸入／輸出契約。服務重啟後要採用新 PID；dry-run 證據不可占用 real 的輸出位置；real preflight 即使所有檢查成功，也要確認最終 shell exit status。只測各 helper 的獨立 happy path，無法證明整個部署能連續執行。
+- Tidey GUI 重新 attach 既有 iTermServer 時，不會呼叫 `serverPathCopyingIfNeeded`；support binary 的複製發生在 `launchNewDaemonWithState`。初次 GUI 替換與 checkpointed daemon restart 必須使用各自的 hash／PID 預期，不能在舊 daemon 保留階段就要求新 support hash。
+- 長時間部署的 process 身分不可只用 PID。這次 baseline 的 Claude／暫時 sleep PID 被新 process 重用，造成 retirement 誤擋；只有出生時間嚴格晚於 inventory 完成後的 checkpoint `captured_at` 才可排除。同秒、更早、無法解析或查詢失敗仍阻擋；不可依名稱不同就殺掉重用 PID 的 process。
+- archive wrapper 的 FD 255 會跟著被移動的 inode；先精確結束舊 writer 並證明子樹消失，最後要求所有 retained archive 的 argv、cwd、executable、mapped／open-file holder 為零。過渡中的預期 wrapper 與 pending dialog 的 tccd 必須分開記錄；不能先 unregister 就宣稱修好，也不能用 TCC probe／reset 排除問題。失效 socket 要先確認原 inode、server 與 shell 已消失、socket 無 server 回應，才移除該精確節點。
+- matching DONE 只代表某個協作工作結束。部署驗收仍需由 controller 獨立重查實際 listener／服務 PID、workspace／panel／durable 一對一、SavedState、archive holder 與完整 LaunchServices dump，並保留 checkpoint。跨版本新增的 API 欄位（例如 pinned）需對照原本的持久化資料，不可把舊版未輸出欄位誤認為使用者狀態改變。
+
 ## 審閱 marker
 
 **Last reviewed**: `4842b41e1` · 2026-04-25
@@ -164,6 +172,10 @@
 
 ## Rendering
 
+- Tidey App Icon 的 authority 是 SVG，不要從 repo 裡的舊 PNG 或 Icon Composer bundle 猜目前圖示
+  - 唯一來源是 `images/AppIcon/TideyAppIcon.svg`；執行 `tools/generate-app-icon.sh` 產生 `AppIcon.png`、完整 `AppIcon.iconset`、`AppIcon.icns`、Nightly 相容資產、文件首頁圖示與選單列圖示
+  - 主 app 實際由 `plists/iTerm2.plist` 的 `CFBundleIconFile = AppIcon.icns` 指向 `images/AppIcon.icns`；`iTerm2 App Icon for Beta/Release.icon` 是上游 build configuration 資產，不能拿來判斷 Tidey 目前 logo
+  - 驗收要跑 `tools/build.sh Development`，再以 `cmp`／雜湊確認 build product 的 `Contents/Resources/AppIcon.icns` 與 source output 相同；只看 Xcode build setting 的 `ASSETCATALOG_COMPILER_APPICON_NAME` 會被未進 Resources phase 的舊 `.icon` reference 誤導
 - **Selection Color 的 alpha 被渲染層覆寫為 1.0**
   - profile `Selection Color` 的 alpha 完全不生效
   - AppKit 路徑：`iTermTextDrawingHelper.m:755` 用 `[color colorWithAlphaComponent:alpha]` 覆寫，`alpha` 來自 `_transparencyAlpha` 或硬寫 1.0
@@ -289,6 +301,10 @@
   - 補證：`c581edf6d` `1af812ce2` `6af69e35e` `ac1cfe7cb` `0dea40ece` `547d91ded` `4e6f99fa7`
 - `workspace_id` 缺失的 state update 要 fail closed
   - `report_shell_state` / `set_status` 不能默默落到 broadcast
+- ordinary tmux 的對外 panel ID 不一定有 `ordinary-tmux:` prefix
+  - 單一 window carrier 會保留穩定的 `native-session:` panel ID，同時以 `logical_kind = ordinary_tmux_window` 啟用 tmux stream 與 history；字串 prefix 只描述可重建的 logical ID，不能取代 registry authorization
+  - Bridge handler 要把 `(workspace_id, panel_id)` 交給共用 route resolver 做精確授權，並核對 resolver 回傳的 workspace／panel 身分；未知 native ID 與錯誤 workspace 必須回 `not_found`
+  - regression 必須用實際 `native-session:` outward ID 走過 projector → registry → resolver → handler，不能只用測試方便的 `ordinary-tmux:` fixture
 - broadcast notification 的 unread state 不能用單一共享 bit
   - read/unread 要按 workspace 分開算
 - stream / subscription protocol 要有 completion signal
@@ -601,6 +617,38 @@
   - alternate saved cursor 也可等於 `columns`；tmux 離開 alternate screen 時會自行把 restored cursor 夾回末格，因此 wire contract 應接受原值，renderer 不需另造 saved-cursor pending flag
   - strict Bridge 與 client validator 都要接受 `0...columns`、拒絕 `> columns`；只修一端仍會落回 legacy renderer，表面症狀可能只是 ANSI 顏色消失
   - ANSI CUP 會把 active cursor 夾到 `columns - 1`；bootstrap 全部 feed 完後，renderer 才用 terminal buffer 的公開 seam 恢復 `x == columns`，保留下一字的真正 wrap／overwrite 行為
+- Codex app-server 的 attach／resume 也必須有明確的初始載入上限
+  - `thread/resume` 預設帶回完整 turns 時，大型 thread 會在 iOS 真正取 transcript 前先讓 Bridge 載入整段歷史；不能把這種延遲誤判成網路或 iOS renderer 問題
+  - 訂閱只請求最新一筆 descending summary turn：`excludeTurns=true` 加 `initialTurnsPage(limit: 1, sortDirection: desc, itemsView: summary)`；這一筆仍足以找出既有 `inProgress` turn ID，保留 steer 能力
+  - response parser 要先讀 bounded `initialTurnsPage.data`，並保留舊 `thread.turns` shape 的 compatibility fallback；測試同時固定 request shape 與 active-turn seed，避免為了省載入而破壞 busy session
+- 無縫 agent handoff 的 durable commit 應使用既有 tmux pane identity，不要再造 manifest
+  - B 先以 staging panel identity 啟動；prepare 期間 stable panel 只會解析 A。Codex 要等第一個 prompt 才建立 fresh durable thread，不能把 thread ID 當成 pre-submit readiness
+  - commit 順序固定 B := stable、A := rollback；雙 stable 的窄視窗由 `created_at` 決定性選較新的 B，Bridge 重啟也能從 pane options 重建同一結果
+  - rollback 順序固定 B := rollback、A := stable；雖有短暫 unbound 視窗，但兩步皆冪等，helper 重跑即可修復。不可反轉順序，也不可改寫 wrapper-owned registry JSON
+  - chat／TUI submit 在多步 delivery 前後都要重查 stable panel 的 route token；handoff 中抓到 A 的舊 request 不得在 B 接手後再送 Enter 或送進 app-server A
+  - 「同步重掃」不等於「讀到 live pane option」：`TmuxStateResolver` production 有 pane-identity TTL；submit-time route capture／validation 必須先失效該 cache，測試也要保留非零 TTL，否則 `ttl: 0` 會把真實的 stale-A 空窗藏掉
+  - fresh tmux session 可能繼承 controller shell 的舊 `TIDEY_*` 值，也可能拿不到 pane-scoped socket/bin；啟動 B 前要把 staging workspace/panel 與 A 的 runtime values 明確注入 agent command，並同步投影到 B 的 pane options，不能賭 wrapper 與後設 option 的啟動 race
+  - fresh Codex app-server record 起初沒有 durable thread ID，而且 Codex 0.150 不會持續開著 rollout FD；用 `lsof` 掃 replacement process tree 可能完全找不到 B，也可能誤抓同時存活的其他 rollout。pre-submit gate 只驗 wrapper／socket／app-server／remote TUI；prompt submit 後才進 durable gate
+  - helper 把 UUID token 以一次性 launch value 交給 replacement wrapper，wrapper 立即從 child environment 移除；prompt 建立 thread 後，wrapper 只查該 staging panel 的 SQLite `threads.first_user_message`，以 exact token 取得 thread／rollout，再原子更新同一筆 registry。這條查詢不載入 turns、不讀完整 rollout，也不掃全域 sessions
+  - 無人值守的 replacement 不能停在 Codex startup update chooser；remote TUI 啟動時要明確關閉 startup update check，並由測試固定 argv contract
+  - B 在 prepare 階段不能執行全域 stale-registry cleanup，否則它可能刪掉仍存活的 A record，讓 tmux rollback 看似成功、Remote routing 卻已失去 A。replacement 要帶窄的一次性環境旗標，wrapper 入口立即把它消耗成不 export 的內部 launch state，cleanup 函式本體依此跳過；不能只 gate app-server happy path，因為 startup fallback 到 tracked plain 也會呼叫同一個 cleanup
+  - 一次性 handoff 旗標不能留在 B 的 agent／tool process 或 agent 結束後的 login shell；helper 只對 Codex executable 的單一 command assignment，wrapper 讀完即 unset。測試要同時驗證 child runtime 看不到旗標、post-agent shell 也看不到
+  - background registry monitor 不能只用 `kill -0 owner_pid` 判斷 owner identity；SIGKILL 後 PID 重用可能讓 orphan monitor 復活 ghost registry。parent 先把 monitor 的真 PID 寫進私有 runtime dir，monitor 以 `ps` 驗證自己的 PPID 仍是原 wrapper；正常 cleanup 仍要 `kill`＋`wait`
+  - wrapper 本身在 tmux pane 裡不代表它啟動的 background Remote TUI 仍有 terminal stdin；非 job-control shell 會把背景工作的 fd 0 變成非 TTY。wrapper 要在前景先解析 controlling／pane TTY，再把 Remote TUI 的 stdin 明確接回該裝置；測試也必須用真的 PTY，不能只靠 `TMUX_PANE` 環境字串假裝 terminal
+  - `tmux paste-buffer` 完成不代表 Codex／Claude 的 multiline editor 已完成 ingest；大型 handoff prompt 後立刻送 Enter，Enter 可能只被 editor 吃掉而沒有 submit。paste payload 先去掉尾端換行，保留固定五秒 settle window，再送一次 Enter；transcript token 仍是唯一 commit gate
+  - registry readiness record 是會繼續補欄位的 writer-owned lease，不是 immutable snapshot；Codex 先發布 runtime／socket／PID，收到第一個 prompt 後才補 fresh thread 與 `rollout_path`。transcript detector 等待期間要重讀同一個 exact registry path，以 vendor＋session ID fence，並同時驗 fresh thread、live runtime 與 transcript token；不能接受別的 writer
+  - live wrapper registry 是 writer-owned lease，不是一次性 startup artifact；外部 observer 在 handoff 暫態誤刪 record 時，helper 不得複製 JSON，仍活著的 wrapper guardian 要用原 runtime identity 自動 republish。guardian 必須是 wrapper 的直屬 child，cleanup 先 kill＋wait guardian 再移除自己的 record，避免正常退出後復活 ghost registry
+  - live canary 的 pre-commit failure 驗收不能只看 session 名稱、pane identity 與 process；還要核對 A 的 exact registry、durable ID、socket 與 runtime PID 都仍然有效
+- iOS session 切換的 seamless 不等於跨 session 拼接 scrollback
+  - context change 立即清掉舊 approval、pending submit 與 response model，讓舊卡片不可再提交；已渲染 rows 只作為唯讀視覺快照保留
+  - B 的 bounded snapshot 先進唯一的 canonical `ChatTranscriptState`，不另建 history loader；訂閱回條的 `replay_count` 必須等 event consumer 實際處理完才一次 publish 新 rows
+  - 不使用固定 reveal delay。若 session change 是 recovery refresh 才發現，成功 publish 還要恢復 composer connection，否則畫面雖換到 B，輸入仍會停在 disabled
+- Claude transcript 的 turn 結束不能只依賴 `turn_duration` 或 hook
+  - durable resume 後，最後一筆可能只有 assistant `message.stop_reason = end_turn`／`stop_sequence`，沒有後續 `turn_duration`、Stop hook 或 idle hook；bootstrap replay 與 live tail 都必須把這種 terminal assistant record 收束為 Idle
+  - terminal record 仍要沿 `parentUuid` 找到 owning user turn，並以 expected turn ID fence；舊 turn 延遲寫入的 assistant record 不得結束較新的 active turn，`stop_reason = tool_use` 也必須維持 Working
+- restored tmux agent 的 wrapper 可能早於 pane identity projection 啟動
+  - app-owned Runtime 復原時，Claude wrapper 可能先看到 `TMUX`，但 workspace、panel、socket pane options 尚未全部寫入；若此時直接 passthrough，Claude TUI 雖正常，Remote 仍因沒有 hooks 與 registry 而降級成 terminal
+  - 互動式 wrapper 應在已知 Tidey Runtime socket 上有限等待完整且仍存活的 runtime context，再決定是否 passthrough；`mcp`／`config` 等非互動 subcommand 與外部 tmux 不應承擔等待
 
 ## Testing
 
@@ -671,3 +719,80 @@
 - hosted iTerm2Tests 的 linkage 快取跟著 scheme 走，不只跟著 app host 走
   - 一個只 build 過 `iTerm2` scheme 的 DerivedData，即使 `Tidey Dev.app` host 存在，跑 `iTerm2Tests` 仍可能以第三方 undefined symbols（CoreParse `_OBJC_CLASS_$_CP*`、railroad `_railroad_*`）在 test bundle 連結時失敗——這是 infra red
   - 解法：改用曾成功跑過 `iTerm2Tests` 的 DerivedData（例如 Xcode 預設樹），或在該樹完整重建 `iTerm2Tests` scheme；不要在產品 assertion 上除錯連結錯誤
+
+## Remote 推播與測試時鐘（2026-09-07）
+
+- WebSocket 上的本機通知只在 iOS 還能執行時有效；置頂 workspace 背景通知需要 Bridge 持久 outbox 與 APNs。UI history replay 不能推進通知 checkpoint；checkpoint、去重紀錄與待送項目必須同一筆交易提交。
+- `replay:false` 不代表 producer 剛產生新訊息。bootstrap 與 Codex pending snapshot 也會走 live hub；用 durable occurrence、註冊／pin 時間及通知專用 cursor 判定。Claude permission hook 只更新 lifecycle blocker，不能假設會有對應 chat event。
+- Relay HTTP/2 import 成功不等於環境真的支援 APNs。用本機 TLS HTTP/2 server 驗證 JWT 簽章、標頭與回應，再做外部設定後的實機驗收；不要用帳號憑證或權限彈窗作測試探針。
+- iOS 的 APNs environment 與簽章 entitlement 要來自相同組態；不要以 `DEBUG` 猜測 token 的環境。重生 Xcode project 後須比對 source/resource membership 與橫向設定，避免把先前手工維護的設定覆蓋掉。
+- XCTest case 可能在整套測試開始時就建立。時間基準放在 `setUp`，不要用 stored-property 初始化的 `Date()`；涉及非同步 enqueue／retry 的測試要跨過實際入列時間，否則單獨跑成功、整套跑卻因 stale clock 失敗。
+- SQLite JSON 診斷必須限定外層欄位名稱。`SELECT (SELECT count(*) FROM json_each(value,'$.grants')) FROM push_state` 裡的 `value` 會被內層 `json_each.value` 遮蔽，實際有註冊也可能查成 0；使用 `FROM push_state s` 與 `json_each(s.value,'$.grants')`，並用非空固定資料驗證查詢。2026-09-08 曾因此把 1 台已註冊、實際能收推播的手機誤判為尚未註冊。
+- 推播狀態的歷史錯誤與目前待送狀態要分開判讀。現有 Bridge 成功投遞會移除 pending，卻不清除 `lastError`；`Relay HTTP 429: unavailable` 可能在已恢復投遞、pending／dropped／sourceErrors 都為 0 時仍顯示。沒有保留 APNs reason 時，不能從這個字串反推當時的具體限流條件，也不能直接改資料庫把警告清掉當成修復。
+
+## 置頂推播的回合完成判定（2026-09-09）
+
+- 完整的 assistant 文字區塊不代表回合完成。Codex `commentary` 與 Claude `tool_use` 前的進度文字不能當作結果通知；Codex 用 `final_answer`／有回答的所屬 `task_complete`，Claude 用含文字的 `end_turn`／`stop_sequence`，或具有所屬回答證據的 `turn_duration`。thinking-only、工具結果與中斷都不能產生完成通知。
+- 通知去重採 durable source 加 turn ID；沒有回合識別的舊／截斷來源，只能對明確 final 訊息使用既有 message／位置識別，不得靠等待幾秒推定完成。Claude 的 parentUuid lineage、待確認文字時間與 Codex turn ID 必須和通知 cursor 同筆交易保存，避免重啟後重複通知或把 A 的結束歸給已排隊的 B。
+- Claude 結束紀錄可能沒有 timestamp，應使用已保存且屬於同一回合的文字時間；一般含 XML／HTML 的使用者文字仍能開啟新回合，只有實際的 metadata／local-command envelope 才排除。
+- 升級前的 outbox message 沒有完成證據，不能直接當 final 送出。以 optional `completionVerified` 相容讀取舊資料；未分類項目保留原 TTL 並顯示 `unclassified_pending_message_count`，不阻擋新結果與正式提問。部署前應確認這個舊待送範圍為零，或另行核對來源；不能宣稱所有舊待送訊息都已自動分類。
+
+## 推播部署前的簽章與設定保留（2026-09-09）
+
+- App 的 `codesign --verify --deep --strict` 通過，仍不足以證明 Resources 內的 Bridge 是 Developer ID 簽章；這次 Bridge 只有 linker ad-hoc，卻被 App 當一般 resource 正常封存。維護中的 bundle helper 應在複製 Bridge 後、App 封存前，使用 Xcode 明確提供的 signing identity 簽章；分別驗證 App 與 Bridge。未簽章 build 不新增簽章動作，簽章失敗則 build 失敗，不能部署時臨時補簽。
+- Bridge 開發安裝入口重新產生 plist 時，原本會遺失現用 `TIDEY_PUSH_RELAY_URL`。現在解析原 plist 並保留 operator EnvironmentVariables，再原子寫入套用正常 template 的結果；測試實際 installer 在兩份服務 plist 都保留既有環境值。這項修正尚不代表原生 App installer 的所有重寫路徑都已修改，也不代表 production 替換通過驗收。
+- Runtime resume descriptor 清單必須與全部 live registry 及 native panel 聯集比對。本次 12 份 descriptor 都合法，仍有第 23 個 writer 在非 tmux 原生 panel，只有 durable thread，沒有自動恢復描述。重啟 iTermServer 前需明確決定該對話的退出與恢復方式；不能只以 tmux 上的 22 個 writer 全部可恢復就通過。
+- Codex app-server wrapper 的 registry resume_thread_id 可能仍是啟動時 ID，TUI 已切到另一個 thread。這次 registry 指向 8/7 的 019fdad5…，原 pane 退出時 Reconnect 與實際最新對話則是 01a07f44…；以 TUI /status／退出資訊與 rollout 最後一輪交叉確認實際 thread，再做同 ID resume，不能只因 registry 的 PID／panel 正確就認定其 thread 仍正確。成功建立 tmux descriptor 也不等於 TUI idle；本次 /agents 顯示 Ready、/status 可回應，原畫面卻持續 Working，這項介面狀態問題尚未解決，不得略過部署 idle gate。
+- Tidey 專用 Codex wrapper 會在 TUI /exit 後清除專用 app-server 與臨時 socket，因此 Codex 印出的 `--remote unix://… resume …` Reconnect 指令可能立即失效。舊程序已退出時，從原 tmux pane 用 `codex resume <完整 thread ID>` 重建 runtime；不要重建舊 socket 檔或複製歷史當成修復。tracked plain CLI 分支會另外要求 project trust，不能把這項授權與 remote 模式原本停用 project-local config 的行為混為一談。
+- 01a07f44… 在 Tim 核准 project trust 後，透過現有 `TIDEY_CODEX_APP_SERVER_DISABLE=1` tracked plain 分支恢復，三次 capture 都不再顯示 Working，registry／原 panel／durable ID 保留。這只證明本機模式可避開當次問題，未證明 remote TUI 根因已修。環境覆寫沒有保存到 runtime descriptor，部署重啟不能忽略這個差異。CLI 將信任寫回 Tidey profile 時，還要注意 generator 會重建該檔；只有使用者已核准的 exact project trust 才能移到持久 base config，不能擴大到其他專案。
+- 上述 plain 分支未驗證手機聊天、app-server 專用互動與推播，不能以 Working 消失代替原使用模式的修復驗收。Tim 後續要求恢復 managed app-server；等正在進行的封面回合 task_complete 後才正常退出、移除該次停用環境變數並恢復原 thread。Working 再現，應保留此未解事實，不再擅自以 plain 模式替代。
+- tmux session 改名後，已 attach 的 client 可持續連在相同 session ID，但 client argv 仍保留舊 `attach-session -t =codex`。Tidey 的 ordinary_tmux 解析因此仍回報過期目標；本次 live session 已叫 Automation、pane %25 未變，卻缺少該 panel 的 runtime descriptor。核對 exact native client／tty／shell 後，正常 detach 該 client、在同一 stable panel 重新 attach 到 =Automation，即自動恢復正確 descriptor；Codex writer 不必退出或重建。改名後須分別驗證 live session、原生 panel 的 attach metadata 與 descriptor，不能只看 tmux list-sessions。
+
+### 2026-09-17：direct resume 的 logical panel 與保存 carrier 必須分開
+
+- 已證原因：registry 的 panel_id 可是 native-session logical ID；原生 lookup 能找到 carrier，但 descriptor gate 以 carrier ID 驗證 binding，送 logical ID 會 stale_binding。同步 send throw 也會中止同輪後續 carrier。不能放寬 gate，也不能只修改 socket sender 後留下錯的 desired inventory slot。
+- 修復：AgentSessionRegistryMonitor.runtimeResumeAgentRecord 只在 direct、唯一 live nativeSession 時投影其非空 carrierPanelID；保留 registry 與 chat routing 的 logical ID。缺 carrier／多筆衝突維持 incomplete；legacy direct 與 tmux 原路徑維持。
+- 回歸：production-shaped logical≠carrier + 拒絕 logical binding 的 sender，修前 panel assertion／send 失敗，修後同輪後續 tmux carrier 送出；補 missing／empty carrier、same-carrier conflict、Codex current thread A→B、native 隔離保存讀回／hydration／重開 ack 與其他 descriptor 不變。
+- 邊界：Claude current registry 唯一替換 A→B 可發布；舊、新 alias 並存會 fail closed。這只證明 fixture 行為，不足以判定 9/16 Genesis 根因。TideyCLI session-start 有寫 current registry 的路徑，不能只憑 hook payload mismatch 就說完全沒有 UUID 傳播。手動 API 補存、helper committed、source 修正，均不等於 production 自動保存已驗收。
+
+### 2026-09-17：current UUID 交接由 SessionStart 擁有，monitor 不重建舊 UUID
+
+- 隔離實證：實際 wrapper monitor 與編譯的 TideyCLI，僅注入暫存 registry root。SessionEnd(A) → monitor tick → SessionStart(B) 會使 A 重生並與 B 並存；B 先建立的正常順序原本可接手。缺 SessionEnd 而直接收到 SessionStart(B) 也會留下 A。這證明兩 writer 的缺陷，尚不能證明 9/16 Genesis 的歷史原因。
+- 修復：wrapper 只在啟動時 bootstrap，monitor 之後只認領與清理，不重建、不補寫 metadata。TideyCLI SessionStart 同時寫 tmux 欄位與 transcript_path，成功後依 exact pid + workspace_id + panel_id 清除同 owner 的其他 UUID。沒有明確 current hook 的 monitor 遇多筆候選就等待；不依 created_at 猜新舊，不放寬 Bridge complete-inventory/binding gate。
+- 不同 PID（包含 PID 前綴）、不同 workspace/panel、無法解析 ownership 的檔案均保留；清理會重查 owner，避免已轉給其他 process 的檔案被舊 monitor 刪除。CLI current 檔原子寫入；保留 current 時比較 session_id，不用可能具有不同 representation 的 URL 物件相等判斷（本單初次 green 測試抓到 current 自刪，已修）。
+- 測試：tests/tidey_claude_registry_lifecycle_tests.py 控制實際函式 tick 與實際 CLI events，7 項含三種順序、歧義、scope/PID、metadata、cleanup；ClaudeRegistryUUIDPropagationTests 使用上述 writer 產生的檔案證 B 與其他 carrier 發布，不同存活 process 的真正衝突仍停止整輪。fixture 未改 HOME，未執行 live /clear。
+- 邊界：explicit --resume/--session-id 的 hook journal 仍可能固定為 A，而 registry 已是 B；B lifecycle/epoch 連續性不在此次 registry 修復範圍，plan 保留待辦。source 修好不代表 production 已部署或保存全流程已驗收。
+
+
+### 2026-09-19：重開前準備屬於產品；rollback 必須有明確 ownership 分類
+
+- 實機唯讀 metadata probe 確認 32 個 live registry 中只有 27 個對應 current native graph；其餘 5 個為已有即時 pane-option 證據的 handoff rollback。舊 completeness 把它們當 unresolved，整輪 publisher 無法前進。這是 9/19 可重現的現行阻塞，不能外推成 9/16 唯一歷史根因。
+- 不靠 session 名稱、timestamp 或 registry 自述跳過 record。只有同 socket 的 live tmux pane options 精確對上 workspace/panel、合法 rollback token，且同 workspace/socket 有保留的 stable panel 時才列入 non-restoring inventory；仍計入完整 source accounting，並在重開報告交給 owner 判斷。未知、無 stable carrier、真正 UUID/writer 衝突仍 fail closed。
+- 重開前 CLI 使用 metadata-only registry scan：不載入巨大 history、不啟動 tailer/subscription、不清理或合成 registry。沿用 publisher 更新 descriptor；前後 runtime identity fence 與 native revision fence 必須一致。prepare 不以撤銷未觀測 carrier 補齊 inventory。
+- awaiting_runtime_evidence 是 restore/staged lease；合法同內容 republish 已能清除它。前面的 incomplete inventory 或 direct logical→carrier 綁定錯誤會讓後續永遠沒機會 ack。不能把手動清旗標當修復。
+- native checkpoint 共用 hydration readiness gate，同步 flush 後以唯讀 SQLite quick_check 和獨立 graph decode 比對 capture plan。save 的回傳值只表示受理，不能代替磁碟讀回證據。
+- technical_ready 與 owner intent 分開。pending review、draft、approval、Monitor 邊界與人類輸入活性不由 Tidey 擅自判決。共用 controlled-reboot skill 只呼叫產品契約、重用 resource audit 並協調 owner，不累積人工修 descriptor 的清單。
+- source／測試通過仍不等於 /Applications/Tidey.app 與 installed Bridge 已部署。新 wrapper monitor 也必須在後續受控 runtime 啟動才會載入。
+
+
+### 2026-09-24：移植已覆核修正要逐 hunk；維護版工具要吃 native descriptor
+
+- 隔離 candidate 由舊的 9/7 部署基線重建，同時帶有已撤回的推播 wiring。整檔複製 `ClaudeTranscriptSession.swift`、`main.swift` 或 `PseudoTerminal.m` 會把 `PushSourceReader`、`BridgePushService` 與 pin 推播 policy 帶回 main。移植時逐 hunk 分類，只取 restart 修正；每個保留的 hunk 必須沒有 push 符號，每個排除的 hunk 必須恰好是 push。反方向也成立：candidate 的圖片檔比 main 舊，不可覆蓋 9/20 原圖上傳。
+- 維護版 `deploy_common.identity_sets` 與 `stage_descriptors` 對每個 descriptor 都取 `["target"]["tmux_session"]`。native `direct_resume` descriptor 沒有 target，遇到就 `KeyError: 'target'` 崩潰，而 production 已有 native carrier。改用 `split_descriptors` 分開 native 與 tmux，兩者都驗證、都不丟；staging 只搬 tmux socket，native 在開始前要等於 baseline、結束後不得改變。
+- 放寬比較嚴格的判準前先檢查 fixture。舊 `test_stage` fixture 只有 `target`，沒有產品實際一定會發的 `kind`、`restore_policy`、`topology`；正確做法是把 fixture 補成 production 形狀，不是放寬 `split_descriptors`。
+- 更新邊界：重開本來就會中斷每個 agent，所以「重開」與「更新」可能共用同一條流程，但目前只是提案。Mac 關機時無法安裝、登入後舊 Tidey／Bridge 可能自動啟動並重建 archive holder、只退出 GUI 不會結束 Runtime server 與 wrapper。現行 lineage handoff 仍是唯一可執行路徑。
+
+### 2026-09-24：部署 helper 驗 native agent 要綁 iTermServer 世代
+
+- native panel 由 iTermServer 承載，每次 checkpointed restart 都會 TERM daemon，native shell 與 agent 一起結束，再由產品 `direct_resume` 在原 carrier 接回。所以 native writer 只能比對「目前 daemon 世代」：attach 階段 PID 與 birth 都要等於 baseline；fresh 階段 birth 不得早於目前 daemon，而且 ancestry 要在 daemon 之下。`ps` birth 讀不到時是 typed 問題，不能當成不存在或新世代。
+- native logical panel id `native-session:<carrier>:<session>` 內含 native session，fresh restart 後一定變。跨階段比對改用 workspace＋kind＋carrier＋位置，同時要求 logical id 可拆回自己的 carrier 與 session。
+- registry 兩個 tmux 欄位都是 None 只代表沒有 tmux transport，不能直接當 native；Genesis 曾有缺 tmux 欄位的 record。要由 ancestry 找到恰好一個 native panel shell 才算 native。
+- durable ID 舊寫法 `resume_thread_id or thread_id or session_id` 與產品相反：Codex app-server 換 thread 後會驗成舊對話，Claude 也不該看 thread 欄位。改照 `ClaudeTranscriptSession.restoreSessionID`，並與 descriptor 的 durable／launch 交叉比對。
+- `phase2-pre` 舊預期 durable 只有 B，會把仍存活的 native 當多餘 writer；tmux 分流只數 tmux，durable 覆蓋另加全部 baseline native。
+
+### 2026-09-25：Mac sidebar status 空白與假 Running
+
+- 一次送出成功不等於 receiver 仍保有狀態。觀察到的事實：01:39:49 有第二個 `tidey-remote-bridge` process（PID 76223，argv 與啟動者未知），留下 sidebar owner 狀態與 workspace reset 的 `socketUnavailable` 失敗紀錄。依 source 推論：舊 `start()` 在 bind 之前就啟動 registry monitor，而 syncer 只有在該 workspace 的 reset 回報送出成功後才送 owner，所以部分 reset 當時回報成功；native store 是否實際套用沒有追到。正式 Bridge 的 delivered 快取不會察覺 receiver 端遺失，這是 source 與隔離重現都成立的缺口；7 個空白 workspace 與假 Running 的歷史觸發沒有逐一證實。修法：Bridge 必須 bind listener 成功後才啟動任何有狀態的工作；lifecycle sidebar syncer 在既有 sync 節奏上每 30 秒重新宣告目前 owner 狀態（值相同時 receiver 不動作），不做週期清空或逾時判 Idle。
+- plaintext `report_shell_state` 以空白分隔參數，ordinary-tmux panel id 內含 `Application Support` 的空白，syncer 過去直接不送。owner 狀態改用 JSON。
+- 無 owner 的 `""` cell 由同 workspace 所有 writer 共用，Running 又高於各 session 的 Idle，一個沒收到完成事件的 turn 就會讓整個 workspace 一直 Running。managed app-server Codex（Bridge app-server 路徑與 `TIDEY_CODEX_STATUS_OWNER=lifecycle` 的 hook）改由 session lifecycle 擁有狀態，只保留通知與標題。一般 shell、Claude hook、plain Codex 與 custom status 不變。
+- 隔離重現沒有重現「每個指令一條連線造成順序錯亂」，但這不能證明不可能發生。

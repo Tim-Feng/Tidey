@@ -4,6 +4,216 @@ import XCTest
 @testable import RemoteBridge
 
 final class RuntimeResumeDescriptorPublisherTests: XCTestCase {
+    func testRestartReconciliationUpdatesCurrentUUIDAndNeverRevokesUnobservedCarrier() throws {
+        let binding = RuntimeResumeDescriptorBinding(workspaceID: "workspace", panelID: "carrier", tmuxPaneID: nil)
+        func record(_ id: String) -> RuntimeResumeAgentRegistryRecord {
+            .init(binding: binding, vendor: .codex, durableResumeID: id,
+                  launch: .init(executable: "codex", arguments: ["resume", id], workingDirectory: "/tmp/project"))
+        }
+        let socket = ReconcilingRuntimeResumeSocket(descriptors: [])
+        func publisher(_ records: [RuntimeResumeAgentRegistryRecord]) -> RuntimeResumeDescriptorPublisher {
+            .init(registryReader: StubRuntimeResumeRegistryReader(records: records),
+                  topologyReader: StubRuntimeResumeTopologyReader(snapshotsByBinding: [:]),
+                  inventoryReconciler: socket, socketSender: socket)
+        }
+        try publisher([record("A")]).reconcileForRestart()
+        try publisher([record("B")]).reconcileForRestart()
+        XCTAssertEqual(socket.descriptors.first?.content.agent?.durableResumeID, "B")
+        XCTAssertEqual(socket.descriptors.first?.content.agent?.launch.arguments, ["resume", "B"])
+        // The cold/unobserved descriptor cannot be silently removed to claim readiness.
+        XCTAssertThrowsError(try publisher([]).reconcileForRestart())
+        XCTAssertThrowsError(try publisher([]).reconcileForRestart())
+        XCTAssertEqual(socket.descriptors.count, 1)
+        XCTAssertFalse(socket.events.contains { $0.hasPrefix("remove:") })
+    }
+
+    func testDirectLogicalPanelPublishesNativeCarrierBeforeFollowingTmuxCarrier() throws {
+        let directory = FileManager.default.temporaryDirectory
+            .appendingPathComponent("direct-carrier-\(UUID().uuidString)")
+        defer { try? FileManager.default.removeItem(at: directory) }
+        let paths = BridgePaths(supportDirectory: directory)
+        try paths.ensureSupportDirectoriesExist()
+        let logicalID = "native-session:carrier-learning:native-learning"
+        let record = AgentSessionRegistryRecord(
+            version: 1, vendor: "codex", workspaceID: "workspace-direct",
+            sessionID: "wrapper-direct", panelID: logicalID, pid: getpid(),
+            cwd: "/tmp/direct-project", createdAt: "2026-09-17T00:00:00Z",
+            transcriptPath: nil, tmuxPaneID: nil, tmuxSocketPath: nil,
+            runtime: "codex_app_server", threadID: "thread-A"
+        )
+        let registryURL = paths.agentSessionsDirectory(for: "codex")
+            .appendingPathComponent("wrapper-direct.json")
+        let originalRegistry = try JSONEncoder().encode(record)
+        try originalRegistry.write(to: registryURL)
+        let monitor = AgentSessionRegistryMonitor(paths: paths, hub: AgentEventHub())
+        monitor.replaceLivePanels(workspaceID: "workspace-direct", panels: [
+            AgentPanelProcessSnapshot(
+                workspaceID: "workspace-direct", panelID: logicalID,
+                effectiveShellPID: getpid(), tmuxPaneID: nil, tmuxSocketPath: nil,
+                logicalKind: .nativeSession, carrierPanelID: "carrier-learning",
+                nativeSessionID: "native-learning"
+            )
+        ])
+        monitor.scanRegistryForTesting()
+        let snapshot = monitor.currentRuntimeResumeAgentSnapshot()
+        XCTAssertTrue(snapshot.isComplete)
+        let direct = try XCTUnwrap(snapshot.records.first)
+        XCTAssertEqual(direct.binding.panelID, "carrier-learning")
+        XCTAssertNil(direct.binding.tmuxPaneID)
+
+        let tmuxBinding = RuntimeResumeDescriptorBinding(
+            workspaceID: "workspace-tmux", panelID: "carrier-tmux", tmuxPaneID: "%7"
+        )
+        let tmuxRecord = RuntimeResumeAgentRegistryRecord(
+            binding: tmuxBinding, vendor: .claude, durableResumeID: "claude-A",
+            launch: RuntimeResumeLaunchSpecification(
+                executable: "claude", arguments: ["--resume", "claude-A"],
+                workingDirectory: "/tmp/tmux-project"
+            )
+        )
+        let target = RuntimeResumeTmuxTarget(defaultSocketAndTmuxSession: "work")
+        let topology = RuntimeResumeTmuxTopology(
+            windows: [RuntimeResumeTmuxWindow(
+                index: 0, name: "work", panes: [RuntimeResumeTmuxPane(
+                    index: 0, workingDirectory: "/tmp/tmux-project", launch: tmuxRecord.launch
+                )]
+            )], activeWindowIndex: 0, activePaneIndex: 0
+        )
+        let inventory = ReconcilingRuntimeResumeSocket(descriptors: [])
+        let sender = RejectingLogicalBindingSocketSender(downstream: inventory)
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: StubRuntimeResumeRegistryReader(records: [direct, tmuxRecord]),
+            topologyReader: StubRuntimeResumeTopologyReader(snapshotsByBinding: [:]),
+            carrierPlanner: StubRuntimeResumeCarrierPlanner(plans: [
+                RuntimeResumeTmuxCarrierPublicationPlan(
+                    binding: RuntimeResumeDescriptorBinding(
+                        workspaceID: "workspace-tmux", panelID: "carrier-tmux", tmuxPaneID: nil
+                    ), target: target, topology: topology
+                )
+            ]),
+            inventoryReconciler: inventory,
+            socketSender: sender
+        )
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(sender.updates.map(\.binding.panelID), ["carrier-learning", "carrier-tmux"])
+        let publishedDirect = try XCTUnwrap(sender.updates.first)
+        XCTAssertEqual(publishedDirect.content.restorePolicy, .directResume)
+        XCTAssertNil(publishedDirect.content.target)
+        XCTAssertNil(publishedDirect.content.topology)
+        XCTAssertEqual(publishedDirect.content.agent?.launch.arguments, ["resume", "thread-A"])
+        XCTAssertEqual(try Data(contentsOf: registryURL), originalRegistry)
+        XCTAssertEqual(monitor.activeRecord(sessionID: "wrapper-direct")?.panelID, logicalID)
+        let publishedTmux = try XCTUnwrap(sender.updates.last)
+        XCTAssertEqual(publishedTmux.content.descriptorVersion, 3)
+        XCTAssertEqual(publishedTmux.content.topology?.windows.first?.panes.first?.launch,
+                       tmuxRecord.launch)
+        // Two complete observations must retain the native carrier slot, not revoke it as absent.
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(inventory.descriptors.map(\.slot.panelID), ["carrier-learning", "carrier-tmux"])
+        XCTAssertFalse(inventory.events.contains { $0.hasPrefix("remove:") })
+    }
+
+    func testDirectNativePanelWithoutCarrierMakesSnapshotIncomplete() throws {
+        for carrierID: String? in [nil, ""] {
+            let fixture = try DirectRegistryFixture()
+            defer { fixture.remove() }
+            try fixture.writeCodex(sessionID: "wrapper-A", logicalID: "logical-A", threadID: "thread-A")
+            fixture.monitor.replaceLivePanels(workspaceID: "workspace-direct", panels: [
+                fixture.panel(logicalID: "logical-A", carrierID: carrierID)
+            ])
+            fixture.monitor.scanRegistryForTesting()
+            let snapshot = fixture.monitor.currentRuntimeResumeAgentSnapshot()
+            XCTAssertFalse(snapshot.isComplete)
+            XCTAssertEqual(snapshot.sourceRecordCount, 1)
+            XCTAssertTrue(snapshot.records.isEmpty)
+            let socket = ReconcilingRuntimeResumeSocket(descriptors: [])
+            let publisher = RuntimeResumeDescriptorPublisher(
+                registryReader: AgentSessionRegistryRuntimeResumeReader(monitor: fixture.monitor),
+                topologyReader: StubRuntimeResumeTopologyReader(snapshotsByBinding: [:]),
+                inventoryReconciler: socket, socketSender: socket
+            )
+            XCTAssertThrowsError(try publisher.publishCurrentDescriptors())
+            XCTAssertTrue(socket.events.isEmpty)
+        }
+    }
+
+    func testDifferentDirectLogicalPanelsSharingCarrierFailClosed() throws {
+        let fixture = try DirectRegistryFixture()
+        defer { fixture.remove() }
+        for suffix in ["A", "B"] {
+            try fixture.writeCodex(sessionID: "wrapper-\(suffix)", logicalID: "logical-\(suffix)",
+                                   threadID: "thread-\(suffix)")
+        }
+        fixture.monitor.replaceLivePanels(workspaceID: "workspace-direct", panels: [
+            fixture.panel(logicalID: "logical-A", carrierID: "carrier"),
+            fixture.panel(logicalID: "logical-B", carrierID: "carrier")
+        ])
+        fixture.monitor.scanRegistryForTesting()
+        let snapshot = fixture.monitor.currentRuntimeResumeAgentSnapshot()
+        XCTAssertFalse(snapshot.isComplete)
+        XCTAssertEqual(snapshot.resolvedCandidateCount, 2)
+        XCTAssertTrue(snapshot.records.isEmpty)
+    }
+
+    func testCurrentCodexThreadChangePublishesNewUUIDAtSameNativeCarrier() throws {
+        let fixture = try DirectRegistryFixture()
+        defer { fixture.remove() }
+        try fixture.writeCodex(sessionID: "wrapper-A", logicalID: "logical-A", threadID: "thread-A")
+        fixture.monitor.replaceLivePanels(workspaceID: "workspace-direct", panels: [
+            fixture.panel(logicalID: "logical-A", carrierID: "carrier")
+        ])
+        fixture.monitor.scanRegistryForTesting()
+        let sender = RejectingLogicalBindingSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: AgentSessionRegistryRuntimeResumeReader(monitor: fixture.monitor),
+            topologyReader: StubRuntimeResumeTopologyReader(snapshotsByBinding: [:]), socketSender: sender
+        )
+        try publisher.publishCurrentDescriptors()
+        fixture.monitor.appServerActiveThreadDidChange(sessionID: "wrapper-A", threadID: "thread-B")
+        // The snapshot read synchronizes with the monitor's queued thread update.
+        XCTAssertEqual(fixture.monitor.currentRuntimeResumeAgentSnapshot().records.first?.durableResumeID,
+                       "thread-B")
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(sender.updates.map { $0.content.agent?.launch.arguments },
+                       [["resume", "thread-A"], ["resume", "thread-B"]])
+        XCTAssertEqual(Set(sender.updates.map(\.binding.panelID)), ["carrier"])
+        let diskRecord = try JSONDecoder().decode(AgentSessionRegistryRecord.self,
+            from: Data(contentsOf: fixture.registryURL(vendor: "codex", sessionID: "wrapper-A")))
+        XCTAssertEqual(diskRecord.threadID, "thread-B")
+        XCTAssertEqual(diskRecord.panelID, "logical-A")
+        fixture.monitor.scanRegistryForTesting()
+        XCTAssertEqual(fixture.monitor.currentRuntimeResumeAgentSnapshot().records.first?.durableResumeID,
+                       "thread-B")
+    }
+
+    func testClaudeCurrentRegistryReplacementPublishesNewUUIDButAliasesFailClosed() throws {
+        let fixture = try DirectRegistryFixture()
+        defer { fixture.remove() }
+        fixture.monitor.replaceLivePanels(workspaceID: "workspace-direct", panels: [
+            fixture.panel(logicalID: "logical-A", carrierID: "carrier")
+        ])
+        try fixture.writeClaude(sessionID: "claude-A", logicalID: "logical-A")
+        fixture.monitor.scanRegistryForTesting()
+        let sender = RejectingLogicalBindingSocketSender()
+        let publisher = RuntimeResumeDescriptorPublisher(
+            registryReader: AgentSessionRegistryRuntimeResumeReader(monitor: fixture.monitor),
+            topologyReader: StubRuntimeResumeTopologyReader(snapshotsByBinding: [:]), socketSender: sender
+        )
+        try publisher.publishCurrentDescriptors()
+        // Characterize simultaneous old wrapper/current lifecycle aliases; do not select one arbitrarily.
+        try fixture.writeClaude(sessionID: "claude-B", logicalID: "logical-A")
+        fixture.monitor.scanRegistryForTesting()
+        XCTAssertFalse(fixture.monitor.currentRuntimeResumeAgentSnapshot().isComplete)
+        XCTAssertThrowsError(try publisher.publishCurrentDescriptors())
+        XCTAssertEqual(sender.updates.count, 1)
+        try FileManager.default.removeItem(at: fixture.registryURL(vendor: "claude", sessionID: "claude-A"))
+        fixture.monitor.scanRegistryForTesting()
+        try publisher.publishCurrentDescriptors()
+        XCTAssertEqual(sender.updates.map { $0.content.agent?.launch.arguments },
+                       [["--resume", "claude-A"], ["--resume", "claude-B"]])
+        XCTAssertEqual(Set(sender.updates.map(\.binding.panelID)), ["carrier"])
+    }
+
     func testRevocationRequiresTwoConsecutiveCompleteAbsenceObservations()
         throws {
         let staleSlot = RuntimeResumeDescriptorSlot(
@@ -2813,6 +3023,24 @@ private final class ReconcilingRuntimeResumeSocket:
     }
 }
 
+private final class RejectingLogicalBindingSocketSender:
+    RuntimeResumeDescriptorSocketSending, @unchecked Sendable {
+    private(set) var updates = [RuntimeResumeDescriptorSocketUpdate]()
+    private let downstream: ReconcilingRuntimeResumeSocket?
+
+    init(downstream: ReconcilingRuntimeResumeSocket? = nil) {
+        self.downstream = downstream
+    }
+
+    func send(_ update: RuntimeResumeDescriptorSocketUpdate) throws {
+        guard !update.binding.panelID.hasPrefix("native-session:") else {
+            throw BridgeInternalError.invalidResponse
+        }
+        try downstream?.send(update)
+        updates.append(update)
+    }
+}
+
 private final class RecordingRuntimeResumeSocketSender:
     RuntimeResumeDescriptorSocketSending,
     @unchecked Sendable {
@@ -2877,5 +3105,54 @@ private final class RecordingTideyRequestSender:
             result: [:],
             error: nil
         )
+    }
+}
+
+private final class DirectRegistryFixture {
+    let directory = FileManager.default.temporaryDirectory
+        .appendingPathComponent("direct-registry-\(UUID().uuidString)")
+    let paths: BridgePaths
+    let monitor: AgentSessionRegistryMonitor
+
+    init() throws {
+        paths = BridgePaths(supportDirectory: directory)
+        try paths.ensureSupportDirectoriesExist()
+        monitor = AgentSessionRegistryMonitor(paths: paths, hub: AgentEventHub(),
+                                             codexRolloutBySessionIDLookup: { _ in nil })
+    }
+
+    func remove() { try? FileManager.default.removeItem(at: directory) }
+
+    func registryURL(vendor: String, sessionID: String) -> URL {
+        paths.agentSessionsDirectory(for: vendor).appendingPathComponent("\(vendor)-\(sessionID).json")
+    }
+
+    func panel(logicalID: String, carrierID: String?) -> AgentPanelProcessSnapshot {
+        AgentPanelProcessSnapshot(
+            workspaceID: "workspace-direct", panelID: logicalID, effectiveShellPID: getpid(),
+            tmuxPaneID: nil, tmuxSocketPath: nil, logicalKind: .nativeSession,
+            carrierPanelID: carrierID, nativeSessionID: "native-\(logicalID)"
+        )
+    }
+
+    func writeCodex(sessionID: String, logicalID: String, threadID: String) throws {
+        try write(vendor: "codex", sessionID: sessionID, logicalID: logicalID,
+                  runtime: "codex_app_server", threadID: threadID)
+    }
+
+    func writeClaude(sessionID: String, logicalID: String) throws {
+        try write(vendor: "claude", sessionID: sessionID, logicalID: logicalID,
+                  runtime: nil, threadID: nil)
+    }
+
+    private func write(vendor: String, sessionID: String, logicalID: String,
+                       runtime: String?, threadID: String?) throws {
+        let record = AgentSessionRegistryRecord(
+            version: 1, vendor: vendor, workspaceID: "workspace-direct", sessionID: sessionID,
+            panelID: logicalID, pid: getpid(), cwd: "/tmp/direct-project",
+            createdAt: "2026-09-17T00:00:00Z", transcriptPath: nil, tmuxPaneID: nil,
+            tmuxSocketPath: nil, runtime: runtime, threadID: threadID
+        )
+        try JSONEncoder().encode(record).write(to: registryURL(vendor: vendor, sessionID: sessionID))
     }
 }

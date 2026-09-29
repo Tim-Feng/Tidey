@@ -50,6 +50,7 @@ set -euo pipefail
         printf 'arg=%s\n' "$arg"
     done
     printf 'hooks=%s\n' "${TIDEY_CODEX_HOOKS_ENABLED:-}"
+    printf 'status_owner=%s\n' "${TIDEY_CODEX_STATUS_OWNER-unset}"
     printf 'codex_home=%s\n' "${CODEX_HOME:-}"
 } > "${DEV_WRAPPER_REAL_LOG:?}"
 SH
@@ -104,7 +105,7 @@ for vendor in claude codex; do
     fi
     rm -f "$TMUX_LOG"
     rm -f "$TIDEY_LOG"
-    env -u CODEX_HOME -u TIDEY_CODEX_HOOKS_ENABLED \
+    env -u CODEX_HOME -u TIDEY_CODEX_HOOKS_ENABLED -u TIDEY_CODEX_STATUS_OWNER \
         HOME="$TMP_ROOT/home" \
         PATH="$MOCK_BIN:$REAL_BIN:/usr/bin:/bin" \
         TMUX=/tmp/production-tmux,1,0 \
@@ -131,6 +132,8 @@ done
 
 grep -qx 'codex-hook session-start' "$TIDEY_LOG" ||
     fail "Codex Development passthrough did not report its initial idle edge"
+grep -qx 'status_owner=unset' "$TMP_ROOT/codex.real.log" ||
+    fail "Tidey Dev Codex must keep ordinary hook status (no lifecycle status-owner marker)"
 grep -qx 'hooks=1' "$TMP_ROOT/codex.real.log" ||
     fail "Codex Development passthrough did not enable isolated status hooks"
 grep -qx 'arg=features.hooks=true' "$TMP_ROOT/codex.real.log" ||

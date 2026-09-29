@@ -1,5 +1,15 @@
 import Foundation
 
+// Local product operation, before token stores, runtime subscriptions or servers.
+do {
+    if let options = try RestartPreparationArguments.parse(Array(CommandLine.arguments.dropFirst())) {
+        exit(RestartPreparationCommand.run(inspectOnly: options.inspectOnly, ownerReceiptPath: options.ownerReceiptPath))
+    }
+} catch {
+    exit(RestartPreparationCommand.failure(code: "invalid_restart_arguments",
+        detail: "Choose exactly one restart operation and at most one absolute owner receipt path."))
+}
+
 if CommandLine.arguments.contains("--cloudflared-supervisor") {
     let supervisor = BridgeCloudflaredSupervisor()
     supervisor.run()
@@ -108,15 +118,16 @@ let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      interactivePTYRuntime: interactivePTYRuntime)
 
 do {
-    if runtimeConfiguration.shouldStartBackgroundServices {
+    if !runtimeConfiguration.shouldStartBackgroundServices {
+        BridgeLogger.server.info("bridge dev isolated mode enabled port=\(runtimeConfiguration.port, privacy: .public)")
+    }
+    try server.run(afterBind: {
+        guard runtimeConfiguration.shouldStartBackgroundServices else { return }
         workspaceEventMonitor.start()
         resolverPublicationMonitor.start()
         uploadGarbageCollector.start()
         runtimeResumeDescriptorPublisher.start()
-    } else {
-        BridgeLogger.server.info("bridge dev isolated mode enabled port=\(runtimeConfiguration.port, privacy: .public)")
-    }
-    try server.run()
+    })
 } catch {
     fputs("RemoteBridge failed: \(error)\n", stderr)
     exit(1)

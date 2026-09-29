@@ -153,7 +153,7 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
    ```
 
    helper 會在移動前向 LaunchServices unregister 精確的 production bundle，並在 unregister 失敗、bundle ID 不符、來源或目的地是 symbolic link、目的地已存在時停止。不要用 `Tidey.app-*` 或另一個 `.app` 目錄保存 production bundle；只改副檔名也無法清除已存在的 LaunchServices registration，所以每次都必須走 helper。
-3. 將候選 app 內的 `Contents/Resources/RemoteBridge/tidey-remote-bridge` 部署到 `~/Library/Application Support/Tidey Remote Bridge/tidey-remote-bridge`。部署前後都要驗證 binary，且內建版與實際安裝版的 SHA-256 必須一致。
+3. 將候選 app 內的 `Contents/Resources/RemoteBridge/tidey-remote-bridge` 部署到 `~/Library/Application Support/Tidey Remote Bridge/tidey-remote-bridge`。部署前後都要驗證 binary，且內建版與實際安裝版的 SHA-256 必須一致。用 `tools/production_deploy/install_bundled_bridge.py`：它逐位元組複製已簽章的 bundled binary、驗三次 codesign、以同檔案系統的新 inode 原子替換（舊程序的既有 FD 不受影響），不 build、不重簽、不寫 plist、不重啟服務。不要用 `RemoteBridge/install.sh` 安裝 bundled binary：那是從 source build 的開發用安裝，會刻意以 ad-hoc 重簽，使兩邊 SHA-256 不一致。
 4. 重新載入或 kickstart 這兩個 launchd job，兩個都不可漏：
    - `com.tidey.remote-bridge`
    - `com.tidey.remote-bridge.cloudflared`
@@ -179,6 +179,20 @@ push 觸發 GitHub Pages 部署。**順序不可倒**：appcast 先公開而 ass
 - 使用者在 Mac 前：明確選擇 `Restore` 後再驗 Bridge。
 - 只有 Remote 可用：先確認 saved state 完整且使用者已要求還原，再於 Tidey 未執行時把 `TideyRestorationLastExitWasClean` 設為 true、把 `NoSyncRestoreWindowsCount` 設為 0，然後重新啟動。這只用於受控替換；一般 crash 必須保留詢問使用者是否還原的行為。
 - 不得用 System Events、模擬滑鼠或鍵盤處理 modal。
+
+#### Restart 邊界更新（提案，尚未可執行）
+
+2026-09-24 的設計審查建議：重開本來就會中斷每一個 agent，更新可以與重開共用同一條 `prepare → stop → install → start → accept` 流程，由 rehydration 在原 stable panel 接回每個 durable conversation。**這目前只是提案，不是可執行契約**，上方 lineage handoff 仍是唯一有效的部署路徑。尚未解決的邊界：
+
+- Mac 關機時無法安裝。
+- 重開登入後，舊 Tidey 與 Bridge 可能自動啟動，在安裝前重新建立 archive holder。
+- 只退出 GUI 不會結束 Runtime tmux server 與其中的 agent wrapper。
+
+目前沒有對應的 boot／login agent、installer framework 或隱藏 controller，也不新增。不得把此提案當成可用路徑，也不得要求每次部署都重開 Mac。
+
+同日移除的 task-local live 不中斷部署 runner（external controller 交棒、所有 wrapper 同 UUID refresh、輸入注入及其 inverse）已作廢，不得重建或執行。
+
+維護版 `tools/production_deploy` 自 2026-09-24 起會驗證 native carrier：依 process ancestry 確認 native agent 在目前 iTermServer 之下、durable ID 照產品規則推導、attach／fresh 階段各自比對 process 世代；目前只有 fixture 測試證據，尚未跑過實機 checkpoint。native controller、缺 native 證據的舊 checkpoint，以及第一次實機 preflight 出現的新 typed problem，都要在第一次停止前回報，不得進行到一半才發現。哪些 helper 支援、哪些不支援，以 `/Users/timfeng/GitHub/life-system/.skills/tidey-production-deploy/SKILL.md` 的「Native carrier support in the maintained helpers」段落為準。
 
 ### Remote Bridge fresh-install audit
 

@@ -866,6 +866,7 @@ run_app_server_runtime_launch_test() {
     local remote_tui_registry_ok_file
     local registry_guardian_ok_file
     local child_handoff_env_file
+    local status_owner_file
     local monitor_alive_file
     local remote_tui_tty_ok_file
     local pty_runner
@@ -884,6 +885,7 @@ run_app_server_runtime_launch_test() {
     remote_tui_registry_ok_file="$tmpdir/remote-tui-registry.ok"
     registry_guardian_ok_file="$tmpdir/registry-guardian.ok"
     child_handoff_env_file="$tmpdir/child-handoff-env.log"
+    status_owner_file="$tmpdir/status-owner.log"
     monitor_alive_file="$tmpdir/monitor-alive.txt"
     remote_tui_tty_ok_file="$tmpdir/remote-tui-tty.ok"
     pty_runner="$tmpdir/run-with-pty.py"
@@ -898,6 +900,12 @@ if [[ "${1:-}" == "--help" ]]; then
     printf '%s\n' "Usage: codex --profile <CONFIG_PROFILE_V2>"
     exit 0
 fi
+case " $* " in
+    *" app-server "*) status_owner_role=app-server ;;
+    *"--remote"*) status_owner_role=remote ;;
+    *) status_owner_role=plain ;;
+esac
+printf '%s|%s\n' "$status_owner_role" "${TIDEY_CODEX_STATUS_OWNER-unset}" >> "$FAKE_STATUS_OWNER_FILE"
 if [[ " $* " == *" app-server "* ]]; then
     printf 'app-server|%s|%s\n' "${TIDEY_HANDOFF_REPLACEMENT-unset}" "${TIDEY_HANDOFF_TOKEN-unset}" >> "$FAKE_CHILD_HANDOFF_ENV_FILE"
     if [[ "$FAKE_FORCE_APP_SERVER_FALLBACK" == "1" ]]; then
@@ -1070,7 +1078,8 @@ PY
 {"version":1,"vendor":"codex","workspace_id":"stale-workspace","session_id":"stale-session","panel_id":"stale-panel","pid":99999999,"cwd":"/tmp","created_at":"2026-06-09T00:00:00Z","rollout_path":"","transcript_path":"","runtime":"codex_app_server","app_server_socket":"/tmp/missing-tidey-codex-app-server.sock","app_server_pid":99999998}
 JSON
 
-    HOME="$fake_home" \
+    env -u TIDEY_CODEX_STATUS_OWNER \
+        HOME="$fake_home" \
         PATH="$fake_bin:/usr/bin:/bin:/usr/sbin:/sbin" \
         TIDEY_SOCKET_PATH="$socket" \
         TIDEY_WORKSPACE_ID="workspace-1" \
@@ -1083,6 +1092,7 @@ JSON
         FAKE_REMOTE_TUI_REGISTRY_OK_FILE="$remote_tui_registry_ok_file" \
         FAKE_REGISTRY_GUARDIAN_OK_FILE="$registry_guardian_ok_file" \
         FAKE_CHILD_HANDOFF_ENV_FILE="$child_handoff_env_file" \
+        FAKE_STATUS_OWNER_FILE="$status_owner_file" \
         FAKE_MONITOR_ALIVE_FILE="$monitor_alive_file" \
         FAKE_REMOTE_TUI_TTY_OK_FILE="$remote_tui_tty_ok_file" \
         FAKE_FORCE_APP_SERVER_FALLBACK="$force_app_server_fallback" \
@@ -1116,6 +1126,24 @@ JSON
     grep -q "app-server" "$codex_log" || fail "app-server was not launched"
     if grep -Evq '^(app-server|remote)\|unset\|unset$' "$child_handoff_env_file"; then
         fail "one-shot handoff environment leaked into a Codex child runtime: $(tr '\n' ';' < "$child_handoff_env_file")"
+    fi
+    # Managed app-server Codex: the session lifecycle owns sidebar state, so both children carry
+    # the marker that makes their hooks skip the shared owner-less shell_state cell. A plain
+    # fallback stays ordinary.
+    grep -qx 'app-server|lifecycle' "$status_owner_file" ||
+        fail "app-server child did not receive the lifecycle status-owner marker: $(tr '\n' ';' < "$status_owner_file")"
+    if grep -Eq '^(app-server|remote)\|unset$' "$status_owner_file"; then
+        fail "a managed Codex child ran without the lifecycle status-owner marker: $(tr '\n' ';' < "$status_owner_file")"
+    fi
+    if [[ "$force_app_server_fallback" == "1" ]]; then
+        grep -qx 'plain|unset' "$status_owner_file" ||
+            fail "plain fallback Codex did not run as ordinary Codex: $(tr '\n' ';' < "$status_owner_file")"
+        if grep -qx 'plain|lifecycle' "$status_owner_file"; then
+            fail "plain fallback Codex inherited the lifecycle status-owner marker"
+        fi
+    else
+        grep -qx 'remote|lifecycle' "$status_owner_file" ||
+            fail "remote TUI did not receive the lifecycle status-owner marker: $(tr '\n' ';' < "$status_owner_file")"
     fi
     if [[ "$force_app_server_fallback" == "1" ]]; then
         if grep -q -- "--remote" "$codex_log"; then
@@ -2057,8 +2085,9 @@ if [[ "${1:-}" == "--help" ]]; then
     printf '%s\n' 'Usage: codex --profile <CONFIG_PROFILE>'
     exit 0
 fi
-printf 'hooks=%s|workspace=%s|panel=%s|args=%s\n' \
+printf 'hooks=%s|owner=%s|workspace=%s|panel=%s|args=%s\n' \
     "${TIDEY_CODEX_HOOKS_ENABLED:-}" \
+    "${TIDEY_CODEX_STATUS_OWNER-unset}" \
     "${TIDEY_WORKSPACE_ID:-}" \
     "${TIDEY_PANEL_ID:-}" \
     "$*" > "${FAKE_CODEX_LOG:?}"
@@ -2073,7 +2102,7 @@ FAKE_CODEX
     done
     [[ -S "$socket" ]] || fail "late tmux socket fixture did not start"
 
-    env -u TIDEY_SOCKET_PATH -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID -u TIDEY_BIN_DIR \
+    env -u TIDEY_SOCKET_PATH -u TIDEY_WORKSPACE_ID -u TIDEY_PANEL_ID -u TIDEY_BIN_DIR -u TIDEY_CODEX_STATUS_OWNER \
         HOME="$fake_home" \
         PATH="$mock_bin:$real_bin:/usr/bin:/bin" \
         TMUX=/tmp/tmux-test,1,0 \
@@ -2084,7 +2113,7 @@ FAKE_CODEX
         TIDEY_CODEX_APP_SERVER_DISABLE=1 \
         "$CODEX_UNDER_TEST"
 
-    grep -q 'hooks=1|workspace=workspace-late|panel=panel-late|' "$codex_log" ||
+    grep -q 'hooks=1|owner=unset|workspace=workspace-late|panel=panel-late|' "$codex_log" ||
         fail "absolute wrapper did not hydrate late tmux pane context"
     grep -q -- '--profile tidey-codex-video-process' "$codex_log" ||
         fail "late tmux invocation fell through to plain Codex"

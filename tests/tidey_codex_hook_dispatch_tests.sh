@@ -101,6 +101,76 @@ FAKE_AFPLAY
     trap - RETURN
 }
 
+# Real hook path: codex-hook-dispatch -> TideyCLI compiled from the current sources -> an
+# isolated capture socket. Managed app-server Codex (TIDEY_CODEX_STATUS_OWNER=lifecycle) keeps
+# notifications but writes no owner-less shell_state; plain Codex still reports Running/Idle.
+run_status_owner_hook_messages_test() {
+    local tmpdir
+    local bin_dir
+    local repo_dir="$SCRIPT_DIR/.."
+    local mode
+    local capture
+
+    tmpdir="$(mktemp -d "/private/tmp/tidey-codex-hook-owner.XXXXXX")"
+    trap 'rm -rf "$tmpdir"' RETURN
+    bin_dir="$tmpdir/bin"
+    mkdir -p "$bin_dir"
+    cp "$DISPATCH_UNDER_TEST" "$bin_dir/codex-hook-dispatch"
+    printf 'tidey_hydrate_tmux_pane_identity() { :; }\n' > "$bin_dir/tidey-tmux-pane-identity"
+    xcrun swiftc "$repo_dir/sources/TideyCLI/main.swift" "$repo_dir/sources/TideyCLICommandFormatter.swift" \
+        -o "$bin_dir/tidey" >"$tmpdir/swiftc.log" 2>&1 ||
+        fail "could not compile TideyCLI from current sources: $(tail -5 "$tmpdir/swiftc.log")"
+
+    for mode in plain managed; do
+        capture="$tmpdir/$mode.capture"
+        python3 - "$tmpdir/$mode.sock" "$capture" "$bin_dir/codex-hook-dispatch" "$mode" "$tmpdir" <<'PY'
+import os, socket, subprocess, sys, threading
+path, capture, dispatch, mode, home = sys.argv[1:]
+server = socket.socket(socket.AF_UNIX)
+server.bind(path)
+server.listen(16)
+server.settimeout(2)
+lines = []
+def accept():
+    try:
+        while True:
+            connection, _ = server.accept()
+            data = b""
+            while chunk := connection.recv(65536):
+                data += chunk
+            lines.extend(line for line in data.decode().splitlines() if line)
+    except socket.timeout:
+        pass
+thread = threading.Thread(target=accept)
+thread.start()
+env = {k: v for k, v in os.environ.items() if k != "TIDEY_CODEX_STATUS_OWNER"}
+env.update(HOME=home, TMPDIR=home, TIDEY_CODEX_HOOKS_ENABLED="1", TIDEY_SOCKET_PATH=path,
+           TIDEY_WORKSPACE_ID="workspace-1", TIDEY_PANEL_ID="panel-1",
+           TIDEY_COMPLETION_SOUND_PLAYER=os.path.join(home, "no-player"))
+if mode == "managed":
+    env["TIDEY_CODEX_STATUS_OWNER"] = "lifecycle"
+for event in ("user-prompt-submit", "stop"):
+    subprocess.run([dispatch, event, '{"last-assistant-message":"Done"}'], env=env, check=True)
+thread.join()
+server.close()
+open(capture, "w").write("\n".join(lines) + "\n")
+PY
+    done
+
+    grep -qx 'report_shell_state running --workspace_id=workspace-1' "$tmpdir/plain.capture" ||
+        fail "plain Codex hook no longer reports Running: $(tr '\n' ';' < "$tmpdir/plain.capture")"
+    grep -qx 'report_shell_state prompt --workspace_id=workspace-1' "$tmpdir/plain.capture" ||
+        fail "plain Codex hook no longer reports Idle"
+    grep -q '"action":"notification.create"' "$tmpdir/plain.capture" ||
+        fail "plain Codex Stop lost its notification"
+    if grep -q 'report_shell_state' "$tmpdir/managed.capture"; then
+        fail "managed Codex hook wrote owner-less shell_state: $(tr '\n' ';' < "$tmpdir/managed.capture")"
+    fi
+    grep -q '"action":"notification.create"' "$tmpdir/managed.capture" ||
+        fail "managed Codex Stop lost its notification"
+}
+
 run_stop_plays_user_job_done_sound_test
+run_status_owner_hook_messages_test
 
 echo "PASS"

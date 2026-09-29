@@ -89,14 +89,22 @@ private func handleClaudeRegistryLifecycle(event: String, workspaceID: String, s
             ?? ProcessInfo.processInfo.environment["TIDEY_CLAUDE_WRAPPER_CWD"]
             ?? FileManager.default.currentDirectoryPath
         let createdAt = ISO8601DateFormatter().string(from: Date())
-        try? TideyCLICommandFormatter.writeClaudeRegistryFile(registryRoot: claudeRegistryRoot,
-                                                              workspaceID: workspaceID,
-                                                              sessionID: sessionID,
-                                                              panelID: panelID,
-                                                              pid: wrapperPID,
-                                                              cwd: cwd,
-                                                              createdAt: createdAt,
-                                                              transcriptPath: inputContext.transcriptPath)
+        do {
+            _ = try TideyCLICommandFormatter.writeClaudeRegistryFile(
+                registryRoot: claudeRegistryRoot, workspaceID: workspaceID,
+                sessionID: sessionID, panelID: panelID, pid: wrapperPID,
+                cwd: cwd, createdAt: createdAt, transcriptPath: inputContext.transcriptPath,
+                tmuxPaneID: ProcessInfo.processInfo.environment["TMUX_PANE"],
+                tmuxSocketPath: ProcessInfo.processInfo.environment["TMUX"]?
+                    .components(separatedBy: ",").first
+            )
+            _ = try TideyCLICommandFormatter.supersedeClaudeRegistryFiles(
+                registryRoot: claudeRegistryRoot, currentSessionID: sessionID,
+                wrapperPID: wrapperPID, workspaceID: workspaceID, panelID: panelID
+            )
+        } catch {
+            // Preserve prior registry evidence if the current write fails.
+        }
 
     case "session-end":
         guard let inputContext = TideyCLICommandFormatter.claudeHookInputContext(stdinData: stdinData),
@@ -135,9 +143,11 @@ private func handleClaudeHook(event: String, socketPath: String, workspaceID: St
 
 private func handleCodexHook(event: String, socketPath: String, workspaceID: String, payloadJSON: String?) {
     guard !workspaceID.isEmpty else { return }
+    let lifecycleOwnsState = ProcessInfo.processInfo.environment["TIDEY_CODEX_STATUS_OWNER"] == "lifecycle"
     let messages = TideyCLICommandFormatter.messages(forCodexHookEvent: event,
                                                      workspaceID: workspaceID,
-                                                     payloadJSON: payloadJSON)
+                                                     payloadJSON: payloadJSON,
+                                                     lifecycleOwnsState: lifecycleOwnsState)
     for message in messages {
         sendToSocket(path: socketPath, message: message)
     }

@@ -919,7 +919,12 @@ final class CodexAppServerRegistryRuntimeSyncer: AgentSessionRuntimeSyncing, Cod
     }
 
     private func sendSidebarOnQueue(messages: [String], sessionID: String) {
-        for message in messages {
+        // Managed app-server Codex state is owned by its session lifecycle (CodexLifecycleFeed ->
+        // AgentLifecycleSidebarSyncer, owner = this record's session). The owner-less
+        // `report_shell_state` lines would share one workspace cell with every other Codex
+        // session and outlive a turn whose completion never arrives, so only notifications and
+        // titles are sent from here.
+        for message in messages where !message.hasPrefix("report_shell_state ") {
             do {
                 try sidebarMessageSender(message)
             } catch {

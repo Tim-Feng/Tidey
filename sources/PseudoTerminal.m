@@ -119,6 +119,9 @@
 #import "iTermSecureKeyboardEntryController.h"
 #import "iTermSelection.h"
 #import "iTermSessionFactory.h"
+#import "iTermMultiServerConnection.h"
+#import "iTermFileDescriptorMultiClientChild.h"
+#import "iTermThreadSafety.h"
 #import "iTermSessionLauncher.h"
 #import "iTermSessionRestorationStatusProtocol.h"
 #import "iTermVariables.h"
@@ -4174,6 +4177,10 @@ ITERM_WEAKLY_REFERENCEABLE
         response[@"error_code"] = result.errorCode;
     }
     return response;
+}
+
+- (NSDictionary *)tideyRestartGraphExpectation {
+    return [TideyRestartCheckpointValidator dictionaryForState:[self tideyWorkspaceRestorationCapturePlan].state];
 }
 
 - (NSArray<NSDictionary *> *)tideyRuntimeAgentDescriptorSnapshots {
@@ -19670,6 +19677,316 @@ backgroundColor:(NSColor *)backgroundColor {
     if (_sessionRestorationCount == 0) {
         [[NSNotificationCenter defaultCenter] postNotificationName:iTermSessionRestorationDidCompleteNotification object:self];
     }
+}
+
+@end
+
+
+#pragma mark - Exact native orphan adoption (2026-09-25 recovery)
+
+// Live environment for TideyNativeOrphanAdoption. Uses only existing owner paths: the session
+// factory, a split in the carrier tab, an attach request with a multiserver connection,
+// -[PTYSession setGuid:] and -[PTYSession close]. It never terminates the original job.
+@interface TideyPseudoTerminalOrphanAdoptionEnvironment : NSObject <TideyNativeOrphanAdoptionEnvironment>
+- (instancetype)initWithTerminal:(PseudoTerminal *)terminal;
+@end
+
+@implementation TideyPseudoTerminalOrphanAdoptionEnvironment {
+    PseudoTerminal *_terminal;  // retained for the duration of one adoption
+}
+
+- (instancetype)initWithTerminal:(PseudoTerminal *)terminal {
+    self = [super init];
+    if (self) {
+        _terminal = [terminal retain];
+    }
+    return self;
+}
+
+- (void)dealloc {
+    [_terminal release];
+    [super dealloc];
+}
+
+// Carriers are searched in every window: the startup orphan adopter may have created the
+// source carrier in a different window from the target.
+- (PTYTab *)carrierTab:(NSString *)carrierPanelID owner:(PseudoTerminal **)ownerOut {
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        for (PTYTab *tab in [term tabs]) {
+            if ([[term tideyPanelIdentifierForPanel:tab] isEqualToString:carrierPanelID]) {
+                if (ownerOut) {
+                    *ownerOut = term;
+                }
+                return tab;
+            }
+        }
+    }
+    return nil;
+}
+
+- (PTYTab *)carrierTab:(NSString *)carrierPanelID {
+    return [self carrierTab:carrierPanelID owner:nil];
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)carrierSessionsWithWorkspaceID:(NSString *)workspaceID
+                                                              carrierPanelID:(NSString *)carrierPanelID {
+    PseudoTerminal *owner = nil;
+    PTYTab *tab = [self carrierTab:carrierPanelID owner:&owner];
+    if (!tab) {
+        return nil;
+    }
+    NSMutableArray<NSDictionary<NSString *, id> *> *sessions = [NSMutableArray array];
+    NSString *workspaceOfTab = nil;
+    for (PTYSession *session in tab.sessions) {
+        if (session.guid.length == 0) {
+            return nil;
+        }
+        NSString *logical = [NSString stringWithFormat:@"native-session:%@:%@", carrierPanelID, session.guid];
+        NSString *workspace = [owner tideySocketPanelSummaryForPanelIdentifier:logical][@"workspace_id"];
+        if (workspace.length > 0) {
+            workspaceOfTab = workspace;
+        }
+        [sessions addObject:@{ @"session_guid": session.guid, @"shell_pid": @(session.shell.pid) }];
+    }
+    if (![workspaceOfTab isEqualToString:workspaceID]) {
+        return nil;
+    }
+    return sessions;
+}
+
+- (int32_t)shellPIDForSessionGUID:(NSString *)guid {
+    PTYSession *session = [[PTYSession sessionMap] objectForKey:guid];
+    return session ? session.shell.pid : 0;
+}
+
+- (NSArray<NSDictionary<NSString *, id> *> *)liveRegistryRecords {
+    return [TideyNativeOrphanRegistryReader liveRecords];
+}
+
+- (TideyRuntimeResumeDescriptor *)descriptorWithCarrierPanelID:(NSString *)carrierPanelID {
+    PseudoTerminal *owner = nil;
+    if (![self carrierTab:carrierPanelID owner:&owner]) {
+        return [[_terminal tideyRuntimeResumeDescriptorUpdateGate] descriptorForPanelID:carrierPanelID];
+    }
+    return [[owner tideyRuntimeResumeDescriptorUpdateGate] descriptorForPanelID:carrierPanelID];
+}
+
+- (NSInteger)workspacePanelCount:(NSString *)workspaceID {
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        Workspace *workspace = [term tideyWorkspaceWithIdentifier:workspaceID index:nil];
+        if (workspace) {
+            return (NSInteger)workspace.panels.count;
+        }
+    }
+    return -1;
+}
+
+- (int64_t)listedDescriptorRevisionWithCarrierPanelID:(NSString *)carrierPanelID {
+    // Owners list (and persist) descriptors only for panels that currently exist.
+    for (PseudoTerminal *term in [[iTermController sharedInstance] terminals]) {
+        for (NSDictionary *snapshot in [term tideyRuntimeAgentDescriptorSnapshots]) {
+            if ([snapshot[@"binding"][@"panel_id"] isEqual:carrierPanelID]) {
+                return [snapshot[@"revision"] longLongValue];
+            }
+        }
+    }
+    return 0;
+}
+
+// The ordinary move-pane owner sequence (MovePaneController reallyDropInSession:): retain the
+// session and its view, remove it from its tab, close that tab only if now empty, then split it
+// into the destination tab next to the target session with performSetup:NO (no new job).
+- (NSObject *)moveAttachedSessionWithSourceCarrierPanelID:(NSString *)sourceCarrierPanelID
+                                              sessionGUID:(NSString *)sessionGUID
+                                     targetCarrierPanelID:(NSString *)targetCarrierPanelID {
+    PseudoTerminal *sourceOwner = nil;
+    PseudoTerminal *targetOwner = nil;
+    PTYTab *sourceTab = [self carrierTab:sourceCarrierPanelID owner:&sourceOwner];
+    PTYTab *targetTab = [self carrierTab:targetCarrierPanelID owner:&targetOwner];
+    PTYSession *moving = nil;
+    for (PTYSession *session in sourceTab.sessions) {
+        if ([session.guid isEqualToString:sessionGUID]) {
+            moving = session;
+        }
+    }
+    PTYSession *target = targetTab.activeSession;
+    if (!moving || !target || sourceTab.sessions.count != 1 || targetTab.sessions.count != 1 ||
+        ![targetOwner canSplitPaneVertically:NO withBookmark:[moving profile]] ||
+        ![moving isCompatibleWith:target]) {
+        return nil;
+    }
+    [[[moving view] retain] autorelease];
+    [[moving retain] autorelease];
+    [sourceTab removeSession:moving];
+    if (sourceTab.sessions.count == 0) {
+        [[sourceTab realParentWindow] closeTab:sourceTab];
+    }
+    [targetOwner splitVertically:NO before:NO addingSession:moving targetSession:target performSetup:NO];
+    [targetTab fitSessionToCurrentViewSize:moving];
+    [targetTab updateSessionOrdinals];
+    [[NSNotificationCenter defaultCenter] postNotificationName:iTermSessionDidChangeTabNotification object:moving];
+    return moving;
+}
+
+- (NSString *)processBirth:(int32_t)pid {
+    return [TideyNativeOrphanProcessInfo birth:pid];
+}
+
+- (int32_t)parentPID:(int32_t)pid {
+    return [TideyNativeOrphanProcessInfo parent:pid];
+}
+
+- (NSArray<NSNumber *> *)childPIDs:(int32_t)pid {
+    return [TideyNativeOrphanProcessInfo children:pid];  // nil = inventory unavailable
+}
+
+- (void)unattachedChildrenWithSocketNumber:(int32_t)socketNumber
+                                completion:(void (^)(NSArray<NSNumber *> *))completion {
+    void (^copied)(NSArray<NSNumber *> *) = [[completion copy] autorelease];
+    [iTermMultiServerConnection getConnectionForSocketNumber:socketNumber
+                                            createIfPossible:NO
+                                                    callback:[iTermThread.main newCallbackWithBlock:^(iTermMainThreadState *state,
+                                                                                                     iTermResult<iTermMultiServerConnection *> *result) {
+        [result handleObject:^(iTermMultiServerConnection * _Nonnull connection) {
+            NSMutableArray<NSNumber *> *pids = [NSMutableArray array];
+            for (iTermFileDescriptorMultiClientChild *child in connection.unattachedChildren) {
+                [pids addObject:@(child.pid)];
+            }
+            copied(pids);
+        } error:^(NSError * _Nonnull error) {
+            copied(nil);
+        }];
+    }]];
+}
+
+- (void)attachSplitWithCarrierPanelID:(NSString *)carrierPanelID
+                         socketNumber:(int32_t)socketNumber
+                             childPID:(int32_t)childPID
+                           completion:(void (^)(NSObject *, int32_t))completion {
+    PTYTab *tab = [self carrierTab:carrierPanelID];
+    PTYSession *target = tab.activeSession;
+    if (!tab || !target || ![iTermAdvancedSettingsModel runJobsInServers]) {
+        completion(nil, 0);
+        return;
+    }
+    Profile *profile = target.profile;
+    PTYSession *newSession = [[_terminal.sessionFactory newSessionWithProfile:profile parent:target] autorelease];
+    [_terminal splitVertically:NO before:NO addingSession:newSession targetSession:target performSetup:YES];
+    iTermGeneralServerConnection connection = {
+        .type = iTermGeneralServerConnectionTypeMulti,
+        .multi = { .pid = childPID, .number = socketNumber }
+    };
+    void (^copied)(NSObject *, int32_t) = [[completion copy] autorelease];
+    __block BOOL reported = NO;
+    void (^report)(int32_t) = [[^(int32_t acquired) {
+        if (!reported) {
+            reported = YES;
+            copied(newSession, acquired);
+        }
+    } copy] autorelease];
+    iTermSessionAttachOrLaunchRequest *request =
+    [iTermSessionAttachOrLaunchRequest launchRequestWithSession:newSession
+                                                      canPrompt:NO
+                                                     objectType:iTermPaneObject
+                                            hasServerConnection:YES
+                                               serverConnection:connection
+                                                      urlString:nil
+                                                   allowURLSubs:NO
+                                                    environment:@{}
+                                                    customShell:[ITAddressBookMgr customShellForProfile:profile]
+                                                         oldCWD:nil
+                                                 forceUseOldCWD:NO
+                                                        command:nil
+                                                         isUTF8:nil
+                                                  substitutions:nil
+                                               windowController:_terminal
+                                                          ready:^(BOOL ok) {
+        // `ready` fires when the attach STARTS. Only a failed realization (nothing attached)
+        // reports here; success waits for `completion`, which runs after attachToServer finished.
+        if (!ok) {
+            report(0);
+        }
+    }
+                                                     completion:^(PTYSession *session, BOOL ok) {
+        // The attach path reports YES even on failure; the task's actual pid is the proof.
+        report(newSession.shell.pid > 0 ? newSession.shell.pid : 0);
+    }];
+    [_terminal.sessionFactory attachOrLaunchWithRequest:request];
+}
+
+- (void)discardUnattached:(NSObject *)session {
+    PTYSession *ptySession = [session isKindOfClass:[PTYSession class]] ? (PTYSession *)session : nil;
+    if (ptySession && ptySession.shell.pid <= 0) {
+        [ptySession close];
+    }
+}
+
+- (NSString *)retireReplacedSessionWithCarrierPanelID:(NSString *)carrierPanelID
+                                     expectedShellPID:(int32_t)expectedShellPID
+                                              adopted:(NSObject *)adopted
+                                                 guid:(NSString *)guid {
+    PTYTab *tab = [self carrierTab:carrierPanelID];
+    PTYSession *adoptedSession = [adopted isKindOfClass:[PTYSession class]] ? (PTYSession *)adopted : nil;
+    if (!tab || !adoptedSession || ![tab.sessions containsObject:adoptedSession]) {
+        return @"adopted_session_not_in_carrier";
+    }
+    PTYSession *replaced = nil;
+    for (PTYSession *session in tab.sessions) {
+        if (session != adoptedSession && [session.guid isEqualToString:guid]) {
+            replaced = session;
+        }
+    }
+    if (!replaced || tab.sessions.count != 2) {
+        return @"replaced_session_not_found";
+    }
+    NSArray<NSNumber *> *children = [TideyNativeOrphanProcessInfo children:expectedShellPID];
+    if (!children) {
+        return @"process_inventory_unavailable";
+    }
+    if (replaced.shell.pid != expectedShellPID || children.count > 0) {
+        return @"replaced_session_not_exact_empty_shell";
+    }
+    // Release the native GUID from the retiring object first, so its close cannot remove the
+    // mapping the adopted session is about to own; only -setGuid: edits PTYSession.sessionMap.
+    [replaced setGuid:[[NSUUID UUID] UUIDString]];
+    [replaced close];
+    [adoptedSession setGuid:guid];
+    [tab setActiveSession:adoptedSession];
+    return nil;
+}
+
+- (void)saveRestorableState {
+    // The owner's normal path: window invalidation + _restorableStateInvalid + Tidey dirty tracker.
+    [_terminal invalidateRestorableState];
+}
+
+@end
+
+@implementation PseudoTerminal (TideyNativeOrphanAdoption)
+
+- (void)tideyAdoptNativeOrphanWithParameters:(NSDictionary *)parameters
+                                  completion:(void (^)(NSDictionary *result))completion {
+    static BOOL inProgress;
+    TideyNativeOrphanAdoptionRequest *request =
+        [[[TideyNativeOrphanAdoptionRequest alloc] initWithDictionary:parameters] autorelease];
+    if (!request) {
+        completion(@{ @"status": @"refused", @"phase": @"parameters", @"problems": @[ @"invalid_parameters" ] });
+        return;
+    }
+    if (inProgress) {
+        completion(@{ @"status": @"refused", @"phase": @"preflight", @"problems": @[ @"adoption_already_in_progress" ] });
+        return;
+    }
+    inProgress = YES;
+    TideyPseudoTerminalOrphanAdoptionEnvironment *environment =
+        [[[TideyPseudoTerminalOrphanAdoptionEnvironment alloc] initWithTerminal:self] autorelease];
+    TideyNativeOrphanAdoption *operation = [[TideyNativeOrphanAdoption alloc] initWithEnvironment:environment];
+    void (^copied)(NSDictionary *) = [[completion copy] autorelease];
+    [operation adopt:request completion:^(NSDictionary<NSString *, id> *result) {
+        inProgress = NO;
+        copied(result);
+        [operation release];
+    }];
 }
 
 @end

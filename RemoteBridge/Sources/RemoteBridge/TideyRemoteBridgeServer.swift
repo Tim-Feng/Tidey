@@ -84,18 +84,15 @@ final class TideyRemoteBridgeServer {
         self.terminalObserver = terminalObserver
     }
 
-    func run() throws {
-        let handle = try start()
+    func run(afterBind: () throws -> Void = {}) throws {
+        let handle = try start(afterBind: afterBind)
         try handle.waitUntilClosed()
     }
 
-    func start() throws -> TideyRemoteBridgeServerHandle {
-        if startRegistryMonitor {
-            try registryMonitor.start()
-        }
-        if startCloudflaredSupervisor {
-            cloudflaredManager.ensureSupervisorRunning()
-        }
+    /// Binding the configured listener is the process ownership gate: stateful work (registry
+    /// scans and sidebar sync, the cloudflared supervisor, `afterBind` services) starts only
+    /// after a successful bind, so a second Bridge process that cannot bind changes nothing.
+    func start(afterBind: () throws -> Void = {}) throws -> TideyRemoteBridgeServerHandle {
         let upgrader = NIOWebSocketServerUpgrader(
             maxFrameSize: Self.maximumWebSocketFrameSizeBytes,
             shouldUpgrade: { [authenticator] channel, head in
@@ -157,6 +154,18 @@ final class TideyRemoteBridgeServer {
             .childChannelOption(ChannelOptions.socketOption(.so_reuseaddr), value: 1)
 
         let channel = try bootstrap.bind(host: host, port: port).wait()
+        do {
+            if startRegistryMonitor {
+                try registryMonitor.start()
+            }
+            if startCloudflaredSupervisor {
+                cloudflaredManager.ensureSupervisorRunning()
+            }
+            try afterBind()
+        } catch {
+            try? channel.close().wait()
+            throw error
+        }
         BridgeLogger.server.info("bridge listening ws_url=ws://\(self.host, privacy: .public):\(self.port) admin_url=http://\(self.host, privacy: .public):\(self.port)/admin/status")
         BridgeLogger.server.info("pair token hash=\(self.token, privacy: .private(mask: .hash))")
         return TideyRemoteBridgeServerHandle(channel: channel)
@@ -1360,6 +1369,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
     }
 
     func channelInactive(context: ChannelHandlerContext) {
+        imageUploadHandler.close()
         videoPreviewLeaseTracker?.retire()
         let interactivePTYOutputPumpsToStop =
             interactivePTYPumps.values.map(\.outputPump)
@@ -1572,6 +1582,7 @@ final class WebSocketFrameHandler: ChannelInboundHandler {
             let tunnelEndpoint = cloudflaredManager.currentStatus().endpoint
             let connectionCapabilities: [JSONValue] = [
                 .string("image_read_v1"),
+                .string(BridgeOriginalImageUploadHandler.capability),
                 .string(BridgeProtocolCapability.terminalStreamSubscriptionOwnership),
                 .string(BridgeProtocolCapability.videoPreview),
                 .string(BridgeProtocolCapability.nativeSplitSessions),

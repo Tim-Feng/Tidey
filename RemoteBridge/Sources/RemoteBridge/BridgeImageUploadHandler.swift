@@ -24,17 +24,23 @@ struct BridgeImageUploadHandler {
 
     private let destinationResolver: BridgeImageUploadDestinationResolving
     private let filenameGenerator: BridgeImageUploadFilenameGenerating
+    private let originals: BridgeOriginalImageUploadHandler
     private let fileManager: FileManager
 
     init(destinationResolver: BridgeImageUploadDestinationResolving,
          filenameGenerator: BridgeImageUploadFilenameGenerating,
-         fileManager: FileManager = .default) {
+         fileManager: FileManager = .default,
+         originalValidationHook: @escaping () -> Void = {}) {
         self.destinationResolver = destinationResolver
         self.filenameGenerator = filenameGenerator
         self.fileManager = fileManager
+        self.originals = BridgeOriginalImageUploadHandler(directory: { try destinationResolver.uploadDirectory() }, beforeValidation: originalValidationHook)
     }
 
+    func close() { originals.close() }
+
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
+        if let response = try originals.handle(request) { return response }
         guard request.action == "image_upload" else {
             return nil
         }
