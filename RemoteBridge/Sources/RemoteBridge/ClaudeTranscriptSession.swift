@@ -4945,6 +4945,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             if consumeLocalCommandEnvelope(trimmed, uuid: uuid, timestamp: timestamp, lineOffset: lineOffset) {
                 return
             }
+            // Meta records (e.g. the image-read note "[Image: original …]")
+            // are model context, never the user's message.
+            if (object["isMeta"] as? Bool) == true {
+                return
+            }
             if shouldPublishUserMessage(trimmed) {
                 // Only a GENUINE user prompt begins a turn: local commands,
                 // continuation summaries, system-reminder-only strings,
@@ -5095,7 +5100,9 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                             lineOffset: lineOffset,
                                             timestamp: timestamp)
                 }
-                guard shouldPublishUserMessage(text) else { continue }
+                // Meta text blocks are model context, never the user's message.
+                guard (object["isMeta"] as? Bool) != true,
+                      shouldPublishUserMessage(text) else { continue }
                 // A genuine array-form user prompt (text + attachments)
                 // begins Working exactly like the string form; interrupt
                 // markers never do.

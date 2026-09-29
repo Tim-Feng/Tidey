@@ -75,18 +75,19 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
     }
 
     // Starts the session and proves the LIVE tail is active: an append can
-    // race the tailer's bootstrap/seek window, so meta probe lines are
-    // appended until one is observed (meta lines have no lifecycle effect).
+    // race the tailer's bootstrap/seek window, so probe lines are appended
+    // until one is observed. A lone tool_result never opens or ends a turn,
+    // so the probe has no lifecycle effect (meta lines publish nothing).
     private func startSessionAndWaitForTail(file: StaticString = #filePath,
                                             line: UInt = #line) throws {
         session.start()
         for attempt in 1...10 {
-            try appendTranscript([userLine(uuid: "tail-probe-\(attempt)",
-                                           text: "tail probe \(attempt)",
-                                           isMeta: true)])
+            try appendTranscript([userArrayLine(uuid: "tail-probe-\(attempt)", blocks: [
+                #"{"type":"tool_result","tool_use_id":"tail-probe-\#(attempt)","content":"probe"}"#,
+            ])])
             let observed = waitUntil(timeout: 0.5) {
                 self.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
-                    .events.contains { ($0.text ?? "") == "tail probe \(attempt)" }
+                    .events.contains { $0.toolCallID == "tail-probe-\(attempt)" }
             }
             if observed {
                 return
@@ -378,6 +379,25 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
         ])
         waitForState(.idle)
         XCTAssertTrue(waitUntil { self.finals().count == 1 })
+    }
+
+    // Claude Code's image-read note ("[Image: original …]") is an isMeta user
+    // record: it is model context, never the user's message.
+    func testMetaUserStringPublishesNoUserMessage() throws {
+        try startSessionAndWaitForTail()
+        try appendTranscript([
+            userLine(uuid: "meta-1",
+                     text: "[Image: original 1125x2436, displayed at 924x2000. Multiply coordinates by 1.22 to map to original image.]",
+                     isMeta: true),
+            userLine(uuid: "real-1", text: "a real prompt"),
+        ])
+        XCTAssertTrue(waitUntil {
+            self.hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
+                .events.contains { $0.type == .userMessage && $0.text == "a real prompt" }
+        })
+        let userTexts = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
+            .events.filter { $0.type == .userMessage }.compactMap(\.text)
+        XCTAssertFalse(userTexts.contains { $0.hasPrefix("[Image: original") }, "\(userTexts)")
     }
 
     // MARK: - D8: Ask blocker + Stop-not-terminal

@@ -796,3 +796,11 @@
 - plaintext `report_shell_state` 以空白分隔參數，ordinary-tmux panel id 內含 `Application Support` 的空白，syncer 過去直接不送。owner 狀態改用 JSON。
 - 無 owner 的 `""` cell 由同 workspace 所有 writer 共用，Running 又高於各 session 的 Idle，一個沒收到完成事件的 turn 就會讓整個 workspace 一直 Running。managed app-server Codex（Bridge app-server 路徑與 `TIDEY_CODEX_STATUS_OWNER=lifecycle` 的 hook）改由 session lifecycle 擁有狀態，只保留通知與標題。一般 shell、Claude hook、plain Codex 與 custom status 不變。
 - 隔離重現沒有重現「每個指令一條連線造成順序錯亂」，但這不能證明不可能發生。
+
+## Claude 回合結束標記與 isMeta 使用者記錄（2026-09-29）
+
+- Remote 手機只能從 `assistantMessage` 推測 Claude 回合結束，重連 snapshot 證明不了 pending 時「工作中」會一直轉。`ClaudeTranscriptSession` 現在在 transcript 的回合結束（`turn_duration`、end_turn／stop_sequence 的 text、字串或陣列形式的 `[Request interrupted`）真正結束進行中的回合時，另發一筆空文字 `assistant_final`，eventID `<結束列 uuid>:turn-end`，ordinal 用該行保留的最後一個（4095），排在同行其他事件之後。
+- 只有 `lifecycleEndTurn` 回傳 true（非回填、owning turn 相符、確實有進行中的回合）才發；舊回合遲到的結束、已結束回合的第二個結束（例如 end_turn text 之後的 turn_duration）、回填歷史都不發。hook 觸發的結束（idle 通知）不發，因為沒有 transcript 行可定位。
+- Claude Code 讀圖後寫入的「[Image: original …]」是 `isMeta: true` 的 user 記錄，屬於給模型的說明。`consumeUser` 的字串與陣列文字兩種形式都不再把 isMeta 發成 `userMessage`。測試的 tail probe 原本靠 isMeta 列被發出來判斷 tailer 已啟動，已改用單獨的 tool_result 列（不影響生命週期）。
+- 回歸測試：`ClaudeLifecycleFeedTests` 的 `testTurnDurationPublishesOneEmptyAssistantFinal`、`testEndTurnTextPublishesMarkerOnceAndLaterTurnDurationDoesNotRepeatIt`、`testInterruptPublishesMarker`、`testLateTerminalForOlderTurnPublishesNoMarker`、`testMetaUserStringPublishesNoUserMessage`。
+- 證據：/Users/timfeng/GitHub/Tidey-Remote/tmp/agent-coordination/tidey-remote-stuck-working-fix2-20260929-01/result.md
