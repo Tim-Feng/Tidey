@@ -2924,10 +2924,11 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
     // `expectedTurnID` fences CROSS-STREAM terminals: the terminal acts only
     // when the turn it was bound to is still the active one. Transcript
     // terminals pass nil (the stream itself is linear).
-    private func lifecycleEndTurn(expectedTurnID: String? = nil) {
-        guard !isBackfillingHistory else { return }
+    @discardableResult
+    private func lifecycleEndTurn(expectedTurnID: String? = nil) -> Bool {
+        guard !isBackfillingHistory else { return false }
         if let expectedTurnID, lifecycleActiveTurnID != expectedTurnID {
-            return  // stale terminal for an older turn
+            return false  // stale terminal for an older turn
         }
         // The store's turn terminal resolves every blocker; the local
         // tracking must not survive it.
@@ -2954,6 +2955,33 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                vendor: record.vendor,
                                generation: lifecycleGeneration,
                                turnID: turnID)
+        return turnID != nil
+    }
+
+    // Remote's explicit turn-end marker: an EMPTY assistant_final, published
+    // only when a transcript terminal actually ended the ACTIVE turn (live
+    // tail, owning turn). A stale terminal for an older turn, a repeated
+    // terminal for an already-ended turn, and backfill publish nothing. The
+    // reserved last ordinal keeps it after every other event of its line.
+    private func endTurnPublishingMarker(expectedTurnID: String?,
+                                         terminalUUID: String,
+                                         lineOffset: Int,
+                                         timestamp: String) {
+        guard lifecycleEndTurn(expectedTurnID: expectedTurnID) else {
+            return
+        }
+        publishFileBacked(kind: .assistantFinal,
+                          lineOffset: lineOffset,
+                          ordinal: transcriptLineSequenceMultiplier - 1,
+                          eventID: "\(terminalUUID):turn-end",
+                          timestamp: timestamp,
+                          role: "assistant",
+                          text: "",
+                          name: nil,
+                          input: nil,
+                          output: nil,
+                          toolCallID: nil,
+                          metadata: nil)
     }
 
     // Closes the current hook-turn token and returns the transcript turn it
@@ -4672,8 +4700,16 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 // own parentUuid lineage — never unconditional — so a
                 // late-arriving turn_duration for an already-superseded
                 // turn A cannot terminate a newer turn B.
-                let owningTurnID = (object["uuid"] as? String).flatMap(lifecycleOwningTurnID(for:))
-                lifecycleEndTurn(expectedTurnID: owningTurnID)
+                let terminalUUID = object["uuid"] as? String
+                let owningTurnID = terminalUUID.flatMap(lifecycleOwningTurnID(for:))
+                if let terminalUUID {
+                    endTurnPublishingMarker(expectedTurnID: owningTurnID,
+                                            terminalUUID: terminalUUID,
+                                            lineOffset: lineOffset,
+                                            timestamp: timestamp)
+                } else {
+                    lifecycleEndTurn(expectedTurnID: owningTurnID)
+                }
             }
         default:
             break
@@ -4819,7 +4855,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             // without appending turn_duration or firing a hook. Attribute
             // the terminal through this line's parentUuid chain so a late
             // turn A response cannot end a newer active turn B.
-            lifecycleEndTurn(expectedTurnID: lifecycleOwningTurnID(for: uuid))
+            endTurnPublishingMarker(expectedTurnID: lifecycleOwningTurnID(for: uuid),
+                                    terminalUUID: uuid,
+                                    lineOffset: lineOffset,
+                                    timestamp: timestamp)
         }
     }
 
@@ -4898,7 +4937,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                 // ends — fenced via lineage, not unconditional, so a late
                 // interrupt line for an already-superseded turn cannot
                 // terminate a newer one.
-                lifecycleEndTurn(expectedTurnID: lifecycleOwningTurnID(for: uuid))
+                endTurnPublishingMarker(expectedTurnID: lifecycleOwningTurnID(for: uuid),
+                                        terminalUUID: uuid,
+                                        lineOffset: lineOffset,
+                                        timestamp: timestamp)
             }
             if consumeLocalCommandEnvelope(trimmed, uuid: uuid, timestamp: timestamp, lineOffset: lineOffset) {
                 return
@@ -5048,7 +5090,10 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     // Array-form interrupt (e.g. with attachments) ends the
                     // OWNING turn exactly like the string form — fenced via
                     // lineage, not unconditional.
-                    lifecycleEndTurn(expectedTurnID: lifecycleOwningTurnID(for: uuid))
+                    endTurnPublishingMarker(expectedTurnID: lifecycleOwningTurnID(for: uuid),
+                                            terminalUUID: uuid,
+                                            lineOffset: lineOffset,
+                                            timestamp: timestamp)
                 }
                 guard shouldPublishUserMessage(text) else { continue }
                 // A genuine array-form user prompt (text + attachments)

@@ -310,6 +310,76 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
                        "array tool_result must not open a turn")
     }
 
+    // MARK: - Turn-end marker for Remote (2026-09-29 stuck "working" row)
+
+    private func finals() -> [AgentEvent] {
+        hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
+            .events.filter { $0.type == .assistantFinal }
+    }
+
+    func testTurnDurationPublishesOneEmptyAssistantFinal() throws {
+        try startSessionAndWaitForTail()
+        try appendTranscript([
+            userLine(uuid: "turn-a", text: "run the tool"),
+            assistantToolUseLine(uuid: "tool-a", toolCallID: "tu-a", name: "Bash", parentUuid: "turn-a"),
+            userArrayLine(uuid: "result-a", blocks: [#"{"type":"tool_result","tool_use_id":"tu-a","content":"ok"}"#],
+                          parentUuid: "tool-a"),
+            turnDurationLine(uuid: "duration-a", parentUuid: "result-a"),
+        ])
+        waitForState(.idle)
+        XCTAssertTrue(waitUntil { self.finals().count == 1 }, "turn_duration must publish the turn-end marker")
+        let events = hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500).events
+        let final = try XCTUnwrap(finals().first)
+        XCTAssertEqual(final.text, "")
+        XCTAssertEqual(final.eventID, "duration-a:turn-end")
+        XCTAssertEqual(events.last?.eventID, final.eventID, "the marker is the last event of the turn")
+    }
+
+    func testEndTurnTextPublishesMarkerOnceAndLaterTurnDurationDoesNotRepeatIt() throws {
+        try startSessionAndWaitForTail()
+        try appendTranscript([userLine(uuid: "turn-a", text: "answer me")])
+        waitForState(.working)
+        try appendTranscript([
+            assistantTextLine(uuid: "text-a", text: "Done.", stopReason: "end_turn", parentUuid: "turn-a"),
+            turnDurationLine(uuid: "duration-a", parentUuid: "text-a"),
+        ])
+        waitForState(.idle)
+        XCTAssertTrue(waitUntil { self.finals().count == 1 })
+        XCTAssertFalse(waitUntil(timeout: 0.5) { self.finals().count > 1 },
+                       "the already-ended turn's turn_duration must not publish a second marker")
+        let text = try XCTUnwrap(hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
+            .events.first { $0.type == .assistantMessage && $0.text == "Done." })
+        XCTAssertGreaterThan(try XCTUnwrap(finals().first).seq, text.seq)
+    }
+
+    func testInterruptPublishesMarker() throws {
+        try startSessionAndWaitForTail()
+        try appendTranscript([userLine(uuid: "turn-a", text: "long task")])
+        waitForState(.working)
+        try appendTranscript([userLine(uuid: "interrupt-a", text: "[Request interrupted by user]", parentUuid: "turn-a")])
+        waitForState(.idle)
+        XCTAssertTrue(waitUntil { self.finals().count == 1 }, "an interrupt ends the turn with the marker")
+    }
+
+    func testLateTerminalForOlderTurnPublishesNoMarker() throws {
+        try startSessionAndWaitForTail()
+        try appendTranscript([userLine(uuid: "turn-a", text: "task A")])
+        waitForState(.working)
+        try appendTranscript([userLine(uuid: "turn-b", text: "task B")])
+        waitForState(.working)
+        try appendTranscript([
+            assistantTextLine(uuid: "assistant-a", text: "A completed late", stopReason: "end_turn", parentUuid: "turn-a"),
+            turnDurationLine(uuid: "duration-a", parentUuid: "assistant-a"),
+        ])
+        XCTAssertFalse(waitUntil(timeout: 0.5) { self.finals().isEmpty == false },
+                       "turn A's late terminal must not publish a marker while turn B runs")
+        try appendTranscript([
+            assistantTextLine(uuid: "assistant-b", text: "B completed", stopReason: "end_turn", parentUuid: "turn-b"),
+        ])
+        waitForState(.idle)
+        XCTAssertTrue(waitUntil { self.finals().count == 1 })
+    }
+
     // MARK: - D8: Ask blocker + Stop-not-terminal
 
     func testAskUserQuestionBlocksAndToolResultResolvesEvenForMultiSelect() throws {
