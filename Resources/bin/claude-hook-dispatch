@@ -37,6 +37,27 @@ if [[ -z "$EVENT" ]]; then
     exit 0
 fi
 
+# Temporary diagnostics (remove after the hook-termination investigation):
+# one `start` line before anything else, one `journal` line after the journal
+# write, one `end` line after forwarding. A pid with `start` and no `end` was
+# terminated mid-hook, whatever the signal (SIGKILL included). Single O_APPEND
+# writes well under PIPE_BUF, so concurrent hooks never interleave; no lock.
+DIAG_LOG=""
+if [[ -n "$JOURNAL" ]]; then
+    DIAG_LOG="${JOURNAL%/*}/claude-hook-diagnostics.log"
+elif [[ -n "$REGISTRY_ROOT" ]]; then
+    DIAG_LOG="$REGISTRY_ROOT/claude-hook-diagnostics.log"
+fi
+DIAG_START_TS="$(date -u +"%Y-%m-%dT%H:%M:%SZ")"
+diag_line() {
+    [[ -n "$DIAG_LOG" ]] || return 0
+    printf '%s %s %s %s %s%s\n' "$(date -u +"%Y-%m-%dT%H:%M:%SZ")" "$1" "${EVENT:-?}" "$$" "$PPID" "${2:+ $2}" \
+        >> "$DIAG_LOG" 2>/dev/null || true
+}
+if [[ -n "$DIAG_LOG" ]]; then
+    printf '%s start %s %s %s\n' "$DIAG_START_TS" "${EVENT:-?}" "$$" "$PPID" >> "$DIAG_LOG" 2>/dev/null || true
+fi
+
 PAYLOAD="$(cat 2>/dev/null || true)"
 
 extract_json_string_field() {
@@ -57,30 +78,67 @@ json_escape_field() {
     printf '%s' "$s"
 }
 
+_hook_test_pause() {
+    # Test-only pause point (inert unless the test env names this point).
+    # Waits with the builtin `read -t` on a caller-provided FIFO, so no child
+    # process inherits the lock fd while the test kills or probes the writer.
+    [[ -n "${TIDEY_HOOK_TEST_PAUSE_AT:-}" && "$TIDEY_HOOK_TEST_PAUSE_AT" == "$1" ]] || return 0
+    [[ -n "${TIDEY_HOOK_TEST_PAUSE_MARKER:-}" ]] && : > "$TIDEY_HOOK_TEST_PAUSE_MARKER"
+    [[ -p "${TIDEY_HOOK_TEST_PAUSE_FIFO:-}" ]] || return 0
+    exec 8<> "$TIDEY_HOOK_TEST_PAUSE_FIFO"
+    read -r -t "${TIDEY_HOOK_TEST_PAUSE_SECONDS:-5}" -u 8 _ || true
+    exec 8<&-
+}
+
+JOURNAL_RESULT="no_journal"
+
 append_journal_line() {
     # Allocates the next seq and appends the envelope in ONE critical
-    # section (lock directory as mutex): seq order == append order,
-    # always, for every writer. On lock starvation (60 * 5ms ~= 300ms) the
-    # write is skipped rather than risking an out-of-order/torn append —
-    # SessionEnd's hook timeout budget must not be exhausted by a stall.
+    # section, so seq order == append order for every writer. The mutex is a
+    # kernel flock on fd 9 (lockf(1) locks the open file that fd 9 names and
+    # the lock outlives the short-lived lockf process): the kernel releases it
+    # when the holder dies, so a killed hook can never leave a stale lock.
+    # Rules that keep the lock from leaking:
+    #   - fd 9 is fixed (bash 3.2 has no `{fd}` allocation);
+    #   - every return path closes fd 9 first;
+    #   - inside the critical section only builtins run, plus `mv`/`rm`,
+    #     which get `9>&-` so no child inherits the lock.
+    # The seq file is replaced BEFORE the line is appended: a writer killed
+    # between the two leaves a seq gap (the Bridge tolerates gaps) instead of
+    # a reused seq (the Bridge drops the later duplicate).
+    # On lock starvation (2 s; lockf -t takes whole seconds) the write is
+    # skipped rather than risking an out-of-order append. 1 s proved too tight
+    # under a 50-process burst; SessionEnd's 1 s hook timeout may cut the wait
+    # short, which is safe because the kernel drops the killed waiter's fd.
     local journal="$1" line="$2"
     local seq_file="$journal.seq"
-    local lock_dir="$journal.seqlock"
-    local attempt seq
-    for attempt in $(seq 1 60); do
-        if mkdir "$lock_dir" 2>/dev/null; then
-            seq="$(cat "$seq_file" 2>/dev/null || echo 0)"
-            case "$seq" in (*[!0-9]*|'') seq=0 ;; esac
-            seq=$((seq + 1))
-            printf '%s\n' "${line/__SEQ__/$seq}" >> "$journal" 2>/dev/null || true
-            printf '%s' "$seq" > "$seq_file" 2>/dev/null || true
-            rmdir "$lock_dir" 2>/dev/null || true
-            return 0
-        fi
-        sleep 0.005
-    done
-    return 1
+    local lock_file="$journal.lock"
+    local seq tmp
+    exec 9>> "$lock_file" || { JOURNAL_RESULT="lock_open_failed"; return 1; }
+    if ! /usr/bin/lockf -s -t 2 9; then
+        exec 9>&-
+        JOURNAL_RESULT="lock_timeout"
+        return 1
+    fi
+    _hook_test_pause in_lock
+    seq=0
+    IFS= read -r seq 2>/dev/null < "$seq_file" || true
+    case "$seq" in (*[!0-9]*|'') seq=0 ;; esac
+    seq=$((seq + 1))
+    tmp="$seq_file.tmp.$$"
+    if ! { printf '%s' "$seq" > "$tmp" && /bin/mv -f "$tmp" "$seq_file" 9>&-; } 2>/dev/null; then
+        /bin/rm -f "$tmp" 9>&- 2>/dev/null
+        exec 9>&-
+        JOURNAL_RESULT="seq_write_failed"
+        return 1
+    fi
+    _hook_test_pause after_seq
+    printf '%s\n' "${line/__SEQ__/$seq}" >> "$journal" 2>/dev/null || true
+    exec 9>&-
+    JOURNAL_RESULT="ok"
+    return 0
 }
+
 
 # Implicit-resume lazy discovery: derive the journal path (and, if this is
 # the first time the id is seen, the registry file) from THIS payload's
@@ -123,9 +181,12 @@ if [[ -n "$JOURNAL" ]]; then
     template="{\"v\":3,\"event\":\"$EVENT\",\"ts\":\"$ts\",\"epoch\":\"${EPOCH:-unknown}\",\"event_id\":\"$event_id\",\"seq\":__SEQ__,\"payload_b64\":\"$payload_b64\"}"
     append_journal_line "$JOURNAL" "$template" || true
 fi
+diag_line journal "result=$JOURNAL_RESULT"
 
+cli_status=0
 if [[ -x "$TIDEY_BIN" ]]; then
     printf '%s' "$PAYLOAD" | "$TIDEY_BIN" claude-hook "$EVENT"
-    exit $?
+    cli_status=$?
 fi
-exit 0
+diag_line end "cli=$cli_status"
+exit "$cli_status"

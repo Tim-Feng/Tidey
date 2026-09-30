@@ -10,7 +10,7 @@
 # give two wrappers an ambiguous ordering. Claim and cleanup serialize on a
 # marker-specific lock and claims never move the marker backwards — an old
 # wrapper whose session outlives a newer one's start can therefore never
-# delete the newer wrapper's journal, counter, or seqlock directory.
+# delete the newer wrapper's journal, counter, or lock file.
 
 _CLAUDE_HOOK_LOCK_TOKEN=""
 
@@ -175,7 +175,9 @@ claude_hook_journal_cleanup() {
     _claude_hook_lock_acquire "$lock_dir" || return 1
     current_marker="$(cat "$marker_path" 2>/dev/null || true)"
     if [[ -z "$current_marker" || "$current_marker" == "$epoch" ]]; then
-        rm -f "$journal_path" "$journal_path.seq" "$marker_path"
+        rm -f "$journal_path" "$journal_path.seq" "$journal_path.lock" "$marker_path"
+        rm -f "$journal_path.seq.tmp."* 2>/dev/null || true
+        # Legacy mkdir-lock directory from dispatchers before the flock change.
         rmdir "$journal_path.seqlock" 2>/dev/null || true
         status=0
     fi
