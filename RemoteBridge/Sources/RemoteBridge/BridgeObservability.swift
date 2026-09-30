@@ -231,6 +231,7 @@ enum BridgeLogger {
     static let input = Logger(subsystem: "com.tidey.remote-bridge", category: "input")
     static let payload = Logger(subsystem: "com.tidey.remote-bridge", category: "payload")
     static let connection = Logger(subsystem: "com.tidey.remote-bridge", category: "connection")
+    static let hookJournal = Logger(subsystem: "com.tidey.remote-bridge", category: "hook-journal")
 }
 
 private struct BridgePayloadStatsAccumulator {

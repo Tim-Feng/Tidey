@@ -99,6 +99,7 @@ let resolverPublisher = BridgeResolverPublisher(resolverBaseURL: BridgeResolverC
 let resolverPublicationMonitor = BridgeResolverPublicationMonitor(statusReader: cloudflaredStatusStore,
                                                                   publisher: resolverPublisher)
 let uploadGarbageCollector = BridgeUploadGarbageCollector(uploadDirectory: bridgePaths.uploadsDirectory)
+let claudeHookSeqlockReaper = ClaudeHookSeqlockReaper(directory: bridgePaths.claudeAgentSessionsDirectory)
 let runtimeConfiguration = BridgeProcessRuntimeConfiguration.from()
 let server = TideyRemoteBridgeServer(host: runtimeConfiguration.host,
                                      port: runtimeConfiguration.port,
@@ -126,6 +127,7 @@ do {
         workspaceEventMonitor.start()
         resolverPublicationMonitor.start()
         uploadGarbageCollector.start()
+        claudeHookSeqlockReaper.start()
         runtimeResumeDescriptorPublisher.start()
     })
 } catch {
