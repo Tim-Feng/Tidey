@@ -41,6 +41,34 @@ final class AgentInteractivePromptSidebarMessagesTests: XCTestCase {
                        ["report_shell_state running --workspace_id=workspace-1"])
     }
 
+    func testSessionOwnedCallersGetOnlyTheNotification() {
+        let prompt = Self.promptEvent(vendor: "claude", title: "Choose", body: "Pick one.")
+        let promptMessages = AgentInteractivePromptSidebarMessages.messages(for: prompt,
+                                                                            workspaceID: "workspace-1",
+                                                                            includeShellState: false)
+        XCTAssertEqual(promptMessages.count, 1)
+        XCTAssertTrue(promptMessages[0].contains(#""action":"notification.create""#))
+
+        let resolved = AgentEvent(eventID: "resolved-prompt-1",
+                                  seq: 2,
+                                  vendor: "claude",
+                                  workspaceID: "workspace-1",
+                                  sessionID: "session-1",
+                                  timestamp: "2026-09-30T00:00:00.000Z",
+                                  type: .interactivePromptResolved,
+                                  role: nil,
+                                  text: nil,
+                                  name: nil,
+                                  input: nil,
+                                  output: nil,
+                                  toolCallID: nil,
+                                  metadata: ["prompt_id": "prompt-1"])
+        XCTAssertEqual(AgentInteractivePromptSidebarMessages.messages(for: resolved,
+                                                                      workspaceID: "workspace-1",
+                                                                      includeShellState: false),
+                       [])
+    }
+
     func testPromptIDCanComeFromMetadataOrPayload() {
         let metadataEvent = Self.promptEvent(promptID: "metadata-prompt")
         XCTAssertEqual(AgentInteractivePromptSidebarMessages.promptID(from: metadataEvent),

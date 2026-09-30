@@ -1,15 +1,30 @@
 import Foundation
 
 enum AgentInteractivePromptSidebarMessages {
-    static func messages(for event: AgentEvent, workspaceID: String) -> [String] {
+    /// `includeShellState` writes the workspace's OWNER-LESS shell_state
+    /// cell. Only callers whose state has no session owner may use it (Codex
+    /// sidebar state is owner-less end to end). Claude's state is owned by its
+    /// session (lifecycle sidebar syncer + hook CLI): an owner-less "Running"
+    /// left by a resolved prompt outranks that session's later Idle in
+    /// Tidey's aggregate and stays "Running" after the turn ends.
+    static func messages(for event: AgentEvent,
+                         workspaceID: String,
+                         includeShellState: Bool = true) -> [String] {
         switch event.type {
         case .interactivePrompt:
+            let notification = notificationMessage(for: event, workspaceID: workspaceID)
+            guard includeShellState else {
+                return [notification]
+            }
             return [
-                notificationMessage(for: event, workspaceID: workspaceID),
+                notification,
                 "report_shell_state needs_input --workspace_id=\(workspaceID)",
             ]
 
         case .interactivePromptResolved:
+            guard includeShellState else {
+                return []
+            }
             return [
                 "report_shell_state running --workspace_id=\(workspaceID)",
             ]

@@ -5629,7 +5629,8 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
 
         let messages = AgentInteractivePromptSidebarMessages.messages(for: event,
-                                                                      workspaceID: event.workspaceID)
+                                                                      workspaceID: event.workspaceID,
+                                                                      includeShellState: false)
         guard let socketClient,
               !messages.isEmpty else {
             return

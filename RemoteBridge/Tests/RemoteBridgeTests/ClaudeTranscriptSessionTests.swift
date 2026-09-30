@@ -1407,9 +1407,11 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertEqual(options[0].objectValue?["label"]?.stringValue, "Use current file")
         XCTAssertEqual(options[0].objectValue?["description"]?.stringValue, "Open the current file.")
         XCTAssertEqual(options[1].objectValue?["input_sequence"]?.stringValue, "\u{1b}[B\r")
-        XCTAssertEqual(commandSender.commands.count, 2)
+        // Claude's shell_state is session-owned (lifecycle syncer + hook CLI):
+        // the prompt path sends only the notification, never an owner-less
+        // shell_state that would outrank the session's later Idle.
+        XCTAssertEqual(commandSender.commands.count, 1)
         XCTAssertTrue(commandSender.commands[0].contains(#""action":"notification.create""#))
-        XCTAssertEqual(commandSender.commands[1], "report_shell_state needs_input --workspace_id=workspace")
 
         try handle.write(contentsOf: Data(makeClaudeToolResultLine(uuid: "u1",
                                                                    toolCallID: "toolu_question_1",
@@ -1430,7 +1432,9 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         XCTAssertNil(hub.activeInteractivePrompt(workspaceID: "workspace",
                                                  sessionID: "session",
                                                  promptID: "toolu_question_1"))
-        XCTAssertEqual(commandSender.commands.last, "report_shell_state running --workspace_id=workspace")
+        XCTAssertEqual(commandSender.commands.count, 1,
+                       "resolving the prompt must not write an owner-less shell_state")
+        XCTAssertFalse(commandSender.commands.contains { $0.contains("report_shell_state") })
     }
 
     func testClaudeAskUserQuestionMultiSelectIsLeftForFutureSupport() throws {
@@ -2735,8 +2739,8 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         func notificationCount() -> Int {
             sender.commands().filter { $0.contains("notification.create") }.count
         }
-        func runningCount() -> Int {
-            sender.commands().filter { $0.contains("report_shell_state running") }.count
+        func shellStateCount() -> Int {
+            sender.commands().filter { $0.contains("report_shell_state") }.count
         }
 
         session.publishInteractivePromptSidebarIfNeeded(event("prompt-a", type: .interactivePrompt))
@@ -2746,10 +2750,10 @@ final class ClaudeTranscriptSessionTests: XCTestCase {
         session.publishInteractivePromptSidebarIfNeeded(event("unknown-terminal",
                                                                type: .interactivePromptResolved,
                                                                promptID: "other-prompt"))
-        XCTAssertEqual(runningCount(), 0)
+        XCTAssertEqual(shellStateCount(), 0)
         session.publishInteractivePromptSidebarIfNeeded(event("matching-terminal", type: .interactivePromptResolved))
         session.publishInteractivePromptSidebarIfNeeded(event("duplicate-terminal", type: .interactivePromptResolved))
-        XCTAssertEqual(runningCount(), 1)
+        XCTAssertEqual(shellStateCount(), 0, "Claude prompts never write the owner-less shell_state cell")
 
         session.publishInteractivePromptSidebarIfNeeded(event("prompt-redelivery", type: .interactivePrompt))
         XCTAssertEqual(notificationCount(), 2)
