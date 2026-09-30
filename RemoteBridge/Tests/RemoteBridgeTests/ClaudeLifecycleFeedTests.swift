@@ -400,6 +400,52 @@ final class ClaudeLifecycleFeedTests: XCTestCase {
         XCTAssertFalse(userTexts.contains { $0.hasPrefix("[Image: original") }, "\(userTexts)")
     }
 
+    // MARK: - Claude Code pasted_content wrapper (2026-09-29 duplicate bubble)
+
+    private func userMessages() -> [AgentEvent] {
+        hub.fetch(workspaceID: "workspace", sessionID: "session", limit: 500)
+            .events.filter { $0.type == .userMessage && $0.toolCallID == nil }
+    }
+
+    // Real transcript shape: Claude Code stores a pasted multi-line prompt as
+    // "\n\n<pasted_content id=\"fe07\">\n…\n</pasted_content id=\"fe07\">\n".
+    func testPastedContentWrappedPromptPublishesOriginalTextWithClientRequestID() throws {
+        let registry = ChatSubmitEchoRegistry()
+        session = ClaudeTranscriptSession(record: makeRecord(), fileManager: .default, hub: hub,
+                                          chatSubmitEchoRegistry: registry)
+        session.lifecycleStoreForTesting = store
+        session.hookJournalURLOverrideForTesting = hookJournalURL
+        try startSessionAndWaitForTail()
+        let original = "@/Users/timfeng/uploads/a.jpg\n@/Users/timfeng/uploads/b.jpg\n\n我剛好出來倒垃圾，這邊比較暗"
+        registry.register(workspaceID: "workspace", panelID: "panel", sessionID: "session",
+                          vendor: "claude", text: original, clientRequestID: "client-1")
+
+        try appendTranscript([userLine(uuid: "pasted-1",
+                                       text: "\n\n<pasted_content id=\"fe07\">\n\(original)\n</pasted_content id=\"fe07\">\n")])
+
+        XCTAssertTrue(waitUntil { self.userMessages().isEmpty == false })
+        let echo = try XCTUnwrap(userMessages().first)
+        XCTAssertEqual(echo.text, original, "the wrapper and its extra newlines are removed")
+        XCTAssertEqual(echo.metadata?["client_request_id"], "client-1",
+                       "the unwrapped echo matches the phone's submission exactly")
+        waitForState(.working)
+    }
+
+    func testOnlyAnExactPastedContentWrapperIsRemoved() throws {
+        try startSessionAndWaitForTail()
+        let unclosed = "<pasted_content id=\"fe07\">\nno closing tag"
+        let mismatched = "<pasted_content id=\"fe07\">\nbody\n</pasted_content id=\"ab12\">"
+        let quoted = "please explain <pasted_content id=\"fe07\">\nx\n</pasted_content id=\"fe07\"> in the docs"
+        try appendTranscript([
+            userLine(uuid: "u-unclosed", text: unclosed),
+            userLine(uuid: "u-mismatched", text: mismatched),
+            userLine(uuid: "u-quoted", text: quoted),
+        ])
+
+        XCTAssertTrue(waitUntil { self.userMessages().count == 3 })
+        XCTAssertEqual(userMessages().compactMap(\.text), [unclosed, mismatched, quoted])
+    }
+
     // MARK: - D8: Ask blocker + Stop-not-terminal
 
     func testAskUserQuestionBlocksAndToolResultResolvesEvenForMultiSelect() throws {

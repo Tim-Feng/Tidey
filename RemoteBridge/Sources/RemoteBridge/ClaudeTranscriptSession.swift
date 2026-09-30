@@ -4950,12 +4950,13 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
             if (object["isMeta"] as? Bool) == true {
                 return
             }
-            if shouldPublishUserMessage(trimmed) {
+            let prompt = Self.unwrappingClaudePastedContent(trimmed)
+            if shouldPublishUserMessage(prompt) {
                 // Only a GENUINE user prompt begins a turn: local commands,
                 // continuation summaries, system-reminder-only strings,
                 // meta records AND interrupt markers never open Working.
                 if (object["isMeta"] as? Bool) != true,
-                   !trimmed.hasPrefix("[Request interrupted") {
+                   !prompt.hasPrefix("[Request interrupted") {
                     lifecycleBeginTurn(turnID: uuid, adoptNewTurn: true)
                 }
                 publishFileBacked(kind: .userMessage,
@@ -4964,7 +4965,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                                   eventID: "\(uuid):user-text:0",
                                   timestamp: timestamp,
                                   role: "user",
-                                  text: trimmed,
+                                  text: prompt,
                                   name: nil,
                                   input: nil,
                                   output: nil,
@@ -5089,7 +5090,7 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
                     }
                 }
             } else if blockType == "text" {
-                let text = Self.compactString(block["text"])
+                let text = Self.unwrappingClaudePastedContent(Self.compactString(block["text"]))
                 if (object["isMeta"] as? Bool) != true,
                    text.hasPrefix("[Request interrupted") {
                     // Array-form interrupt (e.g. with attachments) ends the
@@ -5262,6 +5263,26 @@ final class ClaudeTranscriptSession: AgentTranscriptSession {
         }
         return true
     }
+
+    // Claude Code stores a pasted multi-line prompt (Tidey submits chat text
+    // by paste) as "<pasted_content id=\"…\">\n…\n</pasted_content id=\"…\">".
+    // Published as-is, the echo neither matched the phone's submission (no
+    // client_request_id) nor its text, so the phone showed the message twice.
+    // Only an exact OUTER wrapper with the same id on both tags is removed;
+    // anything else, including similar text inside a prompt, is untouched.
+    static func unwrappingClaudePastedContent(_ text: String) -> String {
+        let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)
+        let range = NSRange(trimmed.startIndex..<trimmed.endIndex, in: trimmed)
+        guard let match = pastedContentWrapper.firstMatch(in: trimmed, options: [], range: range),
+              let body = Range(match.range(at: 2), in: trimmed) else {
+            return text
+        }
+        return String(trimmed[body])
+    }
+
+    private static let pastedContentWrapper = try! NSRegularExpression(
+        pattern: #"\A<pasted_content id="([^"\n]+)">\n([\s\S]*)\n</pasted_content id="\1">\z"#
+    )
 
     private func shouldPublishUserMessage(_ text: String) -> Bool {
         let trimmed = text.trimmingCharacters(in: .whitespacesAndNewlines)

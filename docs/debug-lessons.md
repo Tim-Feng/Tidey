@@ -804,3 +804,10 @@
 - Claude Code 讀圖後寫入的「[Image: original …]」是 `isMeta: true` 的 user 記錄，屬於給模型的說明。`consumeUser` 的字串與陣列文字兩種形式都不再把 isMeta 發成 `userMessage`。測試的 tail probe 原本靠 isMeta 列被發出來判斷 tailer 已啟動，已改用單獨的 tool_result 列（不影響生命週期）。
 - 回歸測試：`ClaudeLifecycleFeedTests` 的 `testTurnDurationPublishesOneEmptyAssistantFinal`、`testEndTurnTextPublishesMarkerOnceAndLaterTurnDurationDoesNotRepeatIt`、`testInterruptPublishesMarker`、`testLateTerminalForOlderTurnPublishesNoMarker`、`testMetaUserStringPublishesNoUserMessage`。
 - 證據：/Users/timfeng/GitHub/Tidey-Remote/tmp/agent-coordination/tidey-remote-stuck-working-fix2-20260929-01/result.md
+
+## Claude Code 的 pasted_content 包裝讓手機訊息變兩則（2026-09-29）
+
+- Tidey 以貼上方式把手機訊息送進 Claude Code，多行訊息在 transcript 會被存成 `\n\n<pasted_content id="fe07">\n原文\n</pasted_content id="fe07">\n`。Bridge 照原樣發出 userMessage：`ChatSubmitEchoRegistry` 以文字比對登記的送出內容，對不上就不帶 `client_request_id`（log 只有 echo registered、沒有 consumed）；手機的文字比對也對不上，本機 pending 留著，於是同一則訊息顯示兩次，且 snapshot 收尾規則因「送出沒有 echo」而不清轉圈。
+- 修法：`ClaudeTranscriptSession.unwrappingClaudePastedContent` 在字串與陣列文字兩種 user 記錄中，只剝「頭尾同 id、完全符合」的外層包裝與前後換行，再做 echo 比對與發佈；沒有結尾標籤、id 不同、或出現在內文中的類似字串都不動。
+- 回歸測試：`ClaudeLifecycleFeedTests` 的 `testPastedContentWrappedPromptPublishesOriginalTextWithClientRequestID`、`testOnlyAnExactPastedContentWrapperIsRemoved`（真實格式、經 transcript tailer）。
+- 證據：/Users/timfeng/GitHub/Tidey-Remote/tmp/agent-coordination/tidey-remote-pasted-content-echo-20260929-01/result.md
