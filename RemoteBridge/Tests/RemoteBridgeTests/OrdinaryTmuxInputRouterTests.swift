@@ -372,6 +372,61 @@ final class OrdinaryTmuxInputRouterTests: XCTestCase {
         XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 1)
     }
 
+    // Post-submit composer check: capture and retry both target the LIVE
+    // active pane, and the retry Enter is refused while another submission
+    // owns the route (its paste/Enter must not be interleaved).
+    func testComposerCaptureAndRetryEnterUseTheLiveActivePaneAndTheSubmissionReservation() throws {
+        let registry = OrdinaryTmuxPanelRegistry()
+        let route = ordinaryRoute()  // registry pane %16 is stale; live pane is %21
+        registry.replaceRoutes(workspaceID: route.workspaceID, routes: [route])
+        let paneInventory = "%21\t1\t1021\t/Users/timfeng/GitHub/mother_nature\tclaude\n"
+        let listPanes = RunnerState.key(socket: route.socket, arguments: listPanesArguments(windowID: route.windowID))
+        let state = RunnerState(scriptedResponses: [
+            listPanes: Array(repeating: .success(paneInventory), count: 8),
+            RunnerState.key(socket: route.socket, arguments: ["capture-pane", "-e", "-p", "-t", "%21"]):
+                [.success("screen-with-escapes")],
+            RunnerState.key(socket: route.socket, arguments: ["load-buffer", "-b", "ignored", "-"], stdin: "next"):
+                [.success("")],
+            RunnerState.key(socket: route.socket,
+                            arguments: ["paste-buffer", "-d", "-p", "-r", "-b", "ignored", "-t", "%21"]):
+                [.success("")],
+            RunnerState.key(socket: route.socket, arguments: ["send-keys", "-t", "%21", "Enter"]):
+                [.success(""), .success("")],
+        ])
+        state.failOnUnscripted = ["capture-pane", "load-buffer", "paste-buffer", "send-keys"]
+        let router = OrdinaryTmuxInputRouter(registry: registry, adapter: adapter(state: state))
+
+        let capture = try XCTUnwrap(try router.captureComposerScreen(toPanelID: route.panelID))
+        XCTAssertEqual(capture, OrdinaryTmuxComposerScreen(paneID: "%21", screen: "screen-with-escapes"))
+
+        XCTAssertEqual(try router.sendComposerRetryEnter(toPanelID: route.panelID, expectedPaneID: "%16"),
+                       .paneChanged, "the stale registry pane is not the pane that was checked")
+
+        // The next message has pasted and still owns the route until its Enter.
+        XCTAssertTrue(try router.sendInput("next", toPanelID: route.panelID, mode: .literalChatText,
+                                           allowAmbiguousPasteTimeout: true, submissionID: "next-message"))
+        XCTAssertEqual(try router.sendComposerRetryEnter(toPanelID: route.panelID, expectedPaneID: "%21"), .busy)
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "send-keys" }.count, 0)
+
+        XCTAssertTrue(try router.sendInput("\r", toPanelID: route.panelID, mode: .rawTerminalInput,
+                                           allowAmbiguousPasteTimeout: true, submissionID: "next-message"))
+        XCTAssertEqual(try router.sendComposerRetryEnter(toPanelID: route.panelID, expectedPaneID: "%21"), .sent)
+        XCTAssertEqual(state.calls.filter { $0.arguments == ["send-keys", "-t", "%21", "Enter"] }.count, 2)
+
+        // The retry released its own reservation: later input is admitted
+        // (it reaches tmux instead of failing with a conflict).
+        let loadBuffersBefore = state.calls.filter { $0.arguments.first == "load-buffer" }.count
+        do {
+            _ = try router.sendInput("\u{1b}", toPanelID: route.panelID, mode: .rawTerminalInput,
+                                     allowAmbiguousPasteTimeout: false)
+        } catch BridgeInternalError.conflict(let message) {
+            XCTFail("retry Enter leaked its reservation: \(message)")
+        } catch {
+            // Unscripted tmux command in this fixture: admission already happened.
+        }
+        XCTAssertEqual(state.calls.filter { $0.arguments.first == "load-buffer" }.count, loadBuffersBefore + 1)
+    }
+
     func testPastePresentationDecisionRequiresExpectedTextOnCurrentCursorRow() {
         XCTAssertFalse(
             OrdinaryTmuxPastePresentationDecision.isReady(

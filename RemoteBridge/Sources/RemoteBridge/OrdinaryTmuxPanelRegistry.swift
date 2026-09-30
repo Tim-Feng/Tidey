@@ -624,9 +624,39 @@ protocol OrdinaryTmuxInputRouting: Sendable {
                                       submissionID: String) throws -> Bool
     func cancelInputSubmission(toPanelID panelID: String,
                                submissionID: String)
+    /// Visible screen (with SGR escapes) of the panel's active pane, for the
+    /// post-submit composer check. nil when the panel has no tmux route.
+    func captureComposerScreen(toPanelID panelID: String) throws -> OrdinaryTmuxComposerScreen?
+    /// One Enter into `expectedPaneID`, only while that pane is still the
+    /// panel's active pane and no other submission owns the panel.
+    func sendComposerRetryEnter(toPanelID panelID: String,
+                                expectedPaneID: String) throws -> OrdinaryTmuxComposerRetryOutcome
+}
+
+struct OrdinaryTmuxComposerScreen: Equatable, Sendable {
+    let paneID: String
+    let screen: String
+}
+
+enum OrdinaryTmuxComposerRetryOutcome: String, Equatable, Sendable {
+    case sent
+    /// Another submission currently owns the panel (its paste/Enter must
+    /// not be interleaved with a retry Enter).
+    case busy
+    /// The panel's active pane is no longer the pane that was checked.
+    case paneChanged
 }
 
 extension OrdinaryTmuxInputRouting {
+    func captureComposerScreen(toPanelID panelID: String) throws -> OrdinaryTmuxComposerScreen? {
+        nil
+    }
+
+    func sendComposerRetryEnter(toPanelID panelID: String,
+                                expectedPaneID: String) throws -> OrdinaryTmuxComposerRetryOutcome {
+        .paneChanged
+    }
+
     func waitForLastPastePresentation(toPanelID panelID: String) throws -> Bool {
         false
     }
@@ -876,6 +906,36 @@ final class OrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting {
     func cancelInputSubmission(toPanelID panelID: String,
                                submissionID: String) {
         inputSubmissionStore.release(submissionID: submissionID)
+    }
+
+    func captureComposerScreen(toPanelID panelID: String) throws -> OrdinaryTmuxComposerScreen? {
+        guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil),
+              let paneID = try adapter.liveActivePaneID(route: route) else {
+            return nil
+        }
+        return OrdinaryTmuxComposerScreen(paneID: paneID,
+                                          screen: try adapter.captureVisibleScreen(paneID: paneID,
+                                                                                   socket: route.socket))
+    }
+
+    func sendComposerRetryEnter(toPanelID panelID: String,
+                                expectedPaneID: String) throws -> OrdinaryTmuxComposerRetryOutcome {
+        guard let route = try routeResolver.route(forPanelID: panelID, workspaceID: nil),
+              try adapter.liveActivePaneID(route: route) == expectedPaneID else {
+            return .paneChanged
+        }
+        let routeKey = Self.lastPastePaneKey(for: route)
+        let submissionID = "composer-retry-\(UUID().uuidString)"
+        guard inputSubmissionStore.reserve(submissionID: submissionID,
+                                           routeKey: routeKey,
+                                           sessionKey: Self.sessionKey(for: route)) else {
+            return .busy
+        }
+        defer {
+            inputSubmissionStore.release(submissionID: submissionID, routeKey: routeKey)
+        }
+        try adapter.sendEnter(toPaneID: expectedPaneID, socket: route.socket)
+        return .sent
     }
 
     private static func lastPastePaneKey(for route: OrdinaryTmuxPanelRoute) -> String {

@@ -965,6 +965,206 @@ final class BridgeInputActionHandlerTests: XCTestCase {
         }
         XCTAssertTrue(sender.sentRequests.isEmpty)
     }
+
+    // MARK: - Post-submit composer check (swallowed Enter safety net)
+
+    private struct ComposerHarness {
+        let handler: BridgeInputActionHandler
+        let router: MockOrdinaryTmuxInputRouter
+        let sender: MockTideyRequestSender
+        let executor: DeferredComposerCheckExecutor
+        let checkDelays: DelayRecorder
+    }
+
+    private func makeComposerHarness(vendor: String = "claude",
+                                     screens: [OrdinaryTmuxComposerScreen?],
+                                     routed: Bool = true,
+                                     pastePresentationResults: [Bool] = []) -> ComposerHarness {
+        let sender = MockTideyRequestSender()
+        let resolver = MockSessionResolver(session: ActiveAgentSessionSnapshot(vendor: vendor,
+                                                                              workspaceID: "workspace-1",
+                                                                              sessionID: "session-1",
+                                                                              panelID: "ordinary-panel"))
+        let router = MockOrdinaryTmuxInputRouter(routedPanelIDs: routed ? ["ordinary-panel"] : [],
+                                                 pastePresentationResults: pastePresentationResults)
+        router.composerScreens = screens.map { .success($0) }
+        let executor = DeferredComposerCheckExecutor()
+        let checkDelays = DelayRecorder()
+        let composerRetry = ChatSubmitComposerRetry(router: router,
+                                                    sleep: { checkDelays.record($0) },
+                                                    executor: executor.executor)
+        let handler = BridgeInputActionHandler(socketSender: sender,
+                                               sessionResolver: resolver,
+                                               ordinaryTmuxInputRouter: router,
+                                               composerRetry: composerRetry,
+                                               sleep: { _ in })
+        return ComposerHarness(handler: handler, router: router, sender: sender,
+                               executor: executor, checkDelays: checkDelays)
+    }
+
+    @discardableResult
+    private func submit(_ harness: ComposerHarness,
+                        message: String,
+                        vendor: String = "claude",
+                        id: String = "request-1",
+                        action: String = "chat_submit") throws -> BridgeResponse? {
+        var params: [String: JSONValue] = [
+            "workspace_id": .string("workspace-1"),
+            "panel_id": .string("ordinary-panel"),
+            "session_id": .string("session-1"),
+            "vendor": .string(vendor),
+        ]
+        params[action == "chat_submit" ? "message" : "command"] = .string(message)
+        return try harness.handler.handle(BridgeRequest(id: id, action: action, params: params))
+    }
+
+    private func claudeScreen(_ box: String, pane: String = "%7") -> OrdinaryTmuxComposerScreen {
+        OrdinaryTmuxComposerScreen(paneID: pane, screen: ComposerScreenBuilder.claude(box: [box]))
+    }
+
+    private func enterCount(_ router: MockOrdinaryTmuxInputRouter) -> Int {
+        router.sentInputs.filter { $0.input == "\r" }.count
+    }
+
+    func testComposerCheckRunsAfterTheChatSubmitResponse() throws {
+        let harness = makeComposerHarness(screens: [claudeScreen("❯\u{a0}")])
+        let response = try submit(harness, message: "hello")
+
+        XCTAssertEqual(response?.ok, true)
+        XCTAssertEqual(harness.executor.pendingCount, 1, "the check is queued, not run inline")
+        XCTAssertTrue(harness.router.composerCapturePanelIDs.isEmpty,
+                      "no capture may happen before the response is returned")
+        harness.executor.runAll()
+        XCTAssertEqual(harness.router.composerCapturePanelIDs, ["ordinary-panel"])
+        XCTAssertEqual(harness.checkDelays.recordedDelays, [ChatSubmitComposerRetry.checkDelayNanoseconds])
+    }
+
+    func testEmptyComposerNeedsNoRetry() throws {
+        let harness = makeComposerHarness(screens: [claudeScreen("❯\u{a0}")])
+        try submit(harness, message: "hello")
+        harness.executor.runAll()
+        XCTAssertTrue(harness.router.retryEnters.isEmpty)
+        XCTAssertEqual(enterCount(harness.router), 1)
+    }
+
+    func testMessageStillInTheComposerTwiceGetsExactlyOneRetryEnterIntoTheCheckedPane() throws {
+        let stuck = claudeScreen("❯\u{a0}這是測試訊息第三行", pane: "%7")
+        let harness = makeComposerHarness(screens: [stuck, stuck, claudeScreen("❯\u{a0}", pane: "%7")])
+        try submit(harness, message: "這是測試訊息第一行\n這是測試訊息第三行")
+        harness.executor.runAll()
+
+        XCTAssertEqual(harness.router.retryEnters.map(\.paneID), ["%7"])
+        XCTAssertEqual(harness.router.composerCapturePanelIDs.count, 3, "two checks, one confirmation")
+        XCTAssertEqual(harness.checkDelays.recordedDelays.count, 3)
+    }
+
+    func testComposerThatClearsOnTheSecondCheckIsNotRetried() throws {
+        // Busy Claude: Enter queued the message; the redraw lagged one check.
+        let harness = makeComposerHarness(screens: [claudeScreen("❯\u{a0}hello"), claudeScreen("❯\u{a0}")])
+        try submit(harness, message: "hello")
+        harness.executor.runAll()
+        XCTAssertTrue(harness.router.retryEnters.isEmpty)
+    }
+
+    func testStillStuckAfterTheRetryIsNeverRetriedAgain() throws {
+        let stuck = claudeScreen("❯\u{a0}hello")
+        let harness = makeComposerHarness(screens: [stuck, stuck, stuck, stuck])
+        try submit(harness, message: "hello")
+        harness.executor.runAll()
+        XCTAssertEqual(harness.router.retryEnters.count, 1)
+        XCTAssertEqual(harness.router.composerCapturePanelIDs.count, 3)
+    }
+
+    func testDialogUnknownAndOtherTextAreNeverRetried() throws {
+        let cases: [(String, OrdinaryTmuxComposerScreen?)] = [
+            ("dialog", claudeScreen("❯\u{a0}1. Yes")),
+            ("unknown", OrdinaryTmuxComposerScreen(paneID: "%7", screen: "plain shell output")),
+            ("no route", nil),
+            ("other text", claudeScreen("❯\u{a0}好了我再看")),
+        ]
+        for (label, screen) in cases {
+            let harness = makeComposerHarness(screens: [screen, screen])
+            try submit(harness, message: "好")
+            harness.executor.runAll()
+            XCTAssertTrue(harness.router.retryEnters.isEmpty, label)
+            XCTAssertEqual(harness.router.composerCapturePanelIDs.count, 1, label)
+        }
+    }
+
+    func testCaptureErrorIsNeverRetried() throws {
+        let harness = makeComposerHarness(screens: [])
+        harness.router.composerScreens = [.failure(tmuxTimeoutError())]
+        try submit(harness, message: "hello")
+        harness.executor.runAll()
+        XCTAssertTrue(harness.router.retryEnters.isEmpty)
+    }
+
+    func testQuestionInTheConversationDoesNotDisableTheCheck() throws {
+        let stuck = OrdinaryTmuxComposerScreen(paneID: "%7",
+                                               screen: ComposerScreenBuilder.claude(history: ["⏺ Do you want to deploy?"],
+                                                                                    box: ["❯\u{a0}好"]))
+        let harness = makeComposerHarness(screens: [stuck, stuck, claudeScreen("❯\u{a0}")])
+        try submit(harness, message: "好")
+        harness.executor.runAll()
+        XCTAssertEqual(harness.router.retryEnters.count, 1)
+    }
+
+    func testRetryIsSkippedWhileAnotherSubmissionOwnsThePanelOrThePaneChanged() throws {
+        for outcome in [OrdinaryTmuxComposerRetryOutcome.busy, .paneChanged] {
+            let stuck = claudeScreen("❯\u{a0}hello")
+            let harness = makeComposerHarness(screens: [stuck, stuck, stuck])
+            harness.router.retryOutcomes = [outcome]
+            try submit(harness, message: "hello")
+            harness.executor.runAll()
+            XCTAssertEqual(harness.router.retryEnters.count, 1, outcome.rawValue)
+            XCTAssertEqual(harness.router.composerCapturePanelIDs.count, 2,
+                           "\(outcome.rawValue): no confirmation check after a skipped retry")
+        }
+        // The pane moved between the two checks: no retry is attempted at all.
+        let harness = makeComposerHarness(screens: [claudeScreen("❯\u{a0}hello", pane: "%7"),
+                                                    claudeScreen("❯\u{a0}hello", pane: "%8")])
+        try submit(harness, message: "hello")
+        harness.executor.runAll()
+        XCTAssertTrue(harness.router.retryEnters.isEmpty)
+    }
+
+    func testANewChatSubmitOnThePanelCancelsThePendingCheck() throws {
+        let stuck = claudeScreen("❯\u{a0}second")
+        let harness = makeComposerHarness(screens: [stuck, stuck, claudeScreen("❯\u{a0}")])
+        try submit(harness, message: "first", id: "request-1")
+        try submit(harness, message: "second", id: "request-2")
+        XCTAssertEqual(harness.executor.pendingCount, 2)
+        harness.executor.runAll()
+
+        // The first check is stale: it sleeps once and stops without capturing.
+        XCTAssertEqual(harness.router.composerCapturePanelIDs.count, 3,
+                       "only the second submission's check (2 checks + confirmation) captures")
+        XCTAssertEqual(harness.router.retryEnters.count, 1)
+        XCTAssertEqual(enterCount(harness.router), 2, "one Enter per chat_submit")
+    }
+
+    func testCodexChatSubmitIsCheckedWithTheCodexComposerRules() throws {
+        let stuck = OrdinaryTmuxComposerScreen(paneID: "%24",
+                                               screen: ComposerScreenBuilder.codex(composer: ["› hello codex"]))
+        let empty = OrdinaryTmuxComposerScreen(paneID: "%24", screen: RealComposerScreens.codexIdle)
+        let harness = makeComposerHarness(vendor: "codex", screens: [stuck, stuck, empty])
+        try submit(harness, message: "hello codex", vendor: "codex")
+        harness.executor.runAll()
+        XCTAssertEqual(harness.router.retryEnters.map(\.paneID), ["%24"])
+    }
+
+    func testTUICommandsAndMacSocketFallbackAreNotChecked() throws {
+        let stuck = claudeScreen("❯\u{a0}/status")
+        let tui = makeComposerHarness(vendor: "codex", screens: [stuck, stuck], pastePresentationResults: [true])
+        XCTAssertEqual(try submit(tui, message: "/status", vendor: "codex", action: "tui_command_submit")?.ok, true)
+        XCTAssertEqual(enterCount(tui.router), 1)
+        XCTAssertEqual(tui.executor.pendingCount, 0)
+
+        let fallback = makeComposerHarness(screens: [stuck, stuck], routed: false)
+        try submit(fallback, message: "hello")
+        XCTAssertEqual(fallback.sender.sentRequests.map(\.action), ["send_input", "send_key"])
+        XCTAssertEqual(fallback.executor.pendingCount, 0)
+    }
 }
 
 private final class MockSessionResolver: ActiveAgentSessionResolving {
@@ -1130,6 +1330,43 @@ private final class MockOrdinaryTmuxInputRouter: OrdinaryTmuxInputRouting, @unch
         presentationWaitSubmissionIDs.append(submissionID)
         guard pastePresentationResults.isEmpty == false else { return false }
         return pastePresentationResults.removeFirst()
+    }
+
+    // Post-submit composer check: screens are served in order; an exhausted
+    // queue means "no route" (nil).
+    var composerScreens = [Result<OrdinaryTmuxComposerScreen?, Error>]()
+    private(set) var composerCapturePanelIDs = [String]()
+    var retryOutcomes = [OrdinaryTmuxComposerRetryOutcome]()
+    private(set) var retryEnters = [(panelID: String, paneID: String)]()
+
+    func captureComposerScreen(toPanelID panelID: String) throws -> OrdinaryTmuxComposerScreen? {
+        composerCapturePanelIDs.append(panelID)
+        guard composerScreens.isEmpty == false else { return nil }
+        return try composerScreens.removeFirst().get()
+    }
+
+    func sendComposerRetryEnter(toPanelID panelID: String,
+                                expectedPaneID: String) throws -> OrdinaryTmuxComposerRetryOutcome {
+        retryEnters.append((panelID, expectedPaneID))
+        return retryOutcomes.isEmpty ? .sent : retryOutcomes.removeFirst()
+    }
+}
+
+/// Holds the background composer check until the test releases it, so a
+/// test can assert on the chat_submit response BEFORE the check runs.
+private final class DeferredComposerCheckExecutor: @unchecked Sendable {
+    private var pending = [() -> Void]()
+
+    var executor: ChatSubmitComposerRetry.Executor {
+        { [self] work in pending.append(work) }
+    }
+
+    var pendingCount: Int { pending.count }
+
+    func runAll() {
+        while pending.isEmpty == false {
+            pending.removeFirst()()
+        }
     }
 }
 

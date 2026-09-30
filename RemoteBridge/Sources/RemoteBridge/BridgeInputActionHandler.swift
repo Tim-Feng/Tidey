@@ -101,12 +101,14 @@ struct BridgeInputActionHandler {
     private let ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting?
     private let chatSubmitEchoRegistry: ChatSubmitEchoRegistry?
     private let sleep: @Sendable (UInt64) throws -> Void
+    private let composerRetry: ChatSubmitComposerRetry?
 
     init(socketSender: TideyRequestSending,
          sessionResolver: ActiveAgentSessionResolving,
          codexAppServerChatSubmitter: CodexAppServerChatSubmitting? = nil,
          ordinaryTmuxInputRouter: OrdinaryTmuxInputRouting? = nil,
          chatSubmitEchoRegistry: ChatSubmitEchoRegistry? = nil,
+         composerRetry: ChatSubmitComposerRetry? = nil,
          sleep: @escaping @Sendable (UInt64) throws -> Void = { delayNanoseconds in
              guard delayNanoseconds > 0 else {
                  return
@@ -119,6 +121,7 @@ struct BridgeInputActionHandler {
         self.ordinaryTmuxInputRouter = ordinaryTmuxInputRouter
         self.chatSubmitEchoRegistry = chatSubmitEchoRegistry
         self.sleep = sleep
+        self.composerRetry = composerRetry ?? ordinaryTmuxInputRouter.map { ChatSubmitComposerRetry(router: $0) }
     }
 
     func handle(_ request: BridgeRequest) throws -> BridgeResponse? {
@@ -372,6 +375,10 @@ struct BridgeInputActionHandler {
             }
         }
 
+        // A pending composer check of this panel's PREVIOUS message must not
+        // retry an Enter into this submission's paste.
+        composerRetry?.cancel(panelID: panelID)
+        var submitEnterUsedOrdinaryTmux = false
         if let failure = try deliverTerminalSubmission(message,
                                                        vendor: vendor,
                                                        panelID: panelID,
@@ -380,6 +387,9 @@ struct BridgeInputActionHandler {
                                                        routeToken: activeRoute?.token,
                                                        stepDidDispatch: {
                                                            finalSubmissionState = .indeterminate
+                                                       },
+                                                       submitEnterDidRouteViaOrdinaryTmux: {
+                                                           submitEnterUsedOrdinaryTmux = true
                                                        }) {
             return failure
         }
@@ -394,6 +404,13 @@ struct BridgeInputActionHandler {
                                              clientRequestID: clientRequestID)
         }
         finalSubmissionState = .delivered
+        if submitEnterUsedOrdinaryTmux {
+            // Runs after this response, off the request path.
+            composerRetry?.schedule(panelID: panelID,
+                                    vendorID: vendor.id,
+                                    message: message,
+                                    requestID: request.id)
+        }
 
         return Self.submittedResponse(for: request,
                                       vendorID: vendor.id,
@@ -407,7 +424,8 @@ struct BridgeInputActionHandler {
                                            request: BridgeRequest,
                                            action: String,
                                            routeToken: ActiveAgentSessionRouteToken? = nil,
-                                           stepDidDispatch: () -> Void = {}) throws -> BridgeResponse? {
+                                           stepDidDispatch: () -> Void = {},
+                                           submitEnterDidRouteViaOrdinaryTmux: () -> Void = {}) throws -> BridgeResponse? {
         let inputSubmissionID = UUID().uuidString
         defer {
             ordinaryTmuxInputRouter?.cancelInputSubmission(
@@ -463,6 +481,9 @@ struct BridgeInputActionHandler {
             }
             if routeDecision == .routed {
                 stepDidDispatch()
+                if step.role == .submitEnter {
+                    submitEnterDidRouteViaOrdinaryTmux()
+                }
                 previousStepUsedOrdinaryTmux = true
                 BridgeLogger.input.info("route action=\(action, privacy: .public) request_id=\(request.id, privacy: .public) panel_id=\(panelID, privacy: .public) transport=ordinary_tmux step_index=\(index)")
             } else {

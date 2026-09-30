@@ -866,6 +866,26 @@ final class OrdinaryTmuxCLIAdapter {
         )
     }
 
+    /// The window's CURRENT active pane — the same live lookup `sendInput`
+    /// uses for the paste and Enter (a registry route's pane can be stale).
+    func liveActivePaneID(route: OrdinaryTmuxPanelRoute) throws -> String? {
+        guard let pane = try activePane(forWindowID: route.windowID, socket: route.socket),
+              !pane.id.isEmpty else {
+            return nil
+        }
+        return pane.id
+    }
+
+    /// Visible screen of one pane, SGR escapes included (the composer check
+    /// tells dimmed placeholders from typed text).
+    func captureVisibleScreen(paneID: String, socket: OrdinaryTmuxSocketSelector) throws -> String {
+        try commandRunner(socket, ["capture-pane", "-e", "-p", "-t", paneID], nil)
+    }
+
+    func sendEnter(toPaneID paneID: String, socket: OrdinaryTmuxSocketSelector) throws {
+        _ = try commandRunner(socket, ["send-keys", "-t", paneID, "Enter"], nil)
+    }
+
     private func captureOutput(refreshedRoute: OrdinaryTmuxPanelRoute,
                                maxLines: Int,
                                includeEscapeSequences: Bool) throws -> OrdinaryTmuxCapturedOutput {
